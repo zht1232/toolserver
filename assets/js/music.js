@@ -155,6 +155,11 @@
   var toolbar = document.getElementById('music-toolbar');
   var stats = document.getElementById('music-stats');
   var logBox = document.getElementById('music-log');
+  var decryptToggle = document.getElementById('music-enable-decrypt');
+  var lyricsToggle = document.getElementById('music-enable-lyrics');
+  var decryptPanel = document.getElementById('music-decrypt-panel');
+  var lyricsPanel = document.getElementById('music-lyrics-panel');
+  var nameOrder = document.getElementById('music-name-order');
   var results = [];
 
   notifyFn = function (msg) {
@@ -164,6 +169,54 @@
   function getExt(name) {
     var m = /\.([a-z0-9]+)$/i.exec(name);
     return m ? m[1].toLowerCase() : '';
+  }
+
+  function lyricsEnabled() {
+    return !lyricsToggle || lyricsToggle.checked;
+  }
+
+  function defaultOutputName(title, artist) {
+    var mode = nameOrder ? nameOrder.value : 'title-artist';
+    if (mode === 'title') return title;
+    if (mode === 'artist-title') return artist ? artist + ' - ' + title : title;
+    return title + (artist ? ' - ' + artist : '');
+  }
+
+  function outputFilename(item) {
+    var r = item.result;
+    var title = r.name || item.fileName.replace(/\.[^.]+$/, '');
+    var base = TB.safeName(item.outputName || defaultOutputName(title, r.artists || ''));
+    var ext = String(r.format || 'mp3').toLowerCase();
+    if (base.toLowerCase().slice(-(ext.length + 1)) === '.' + ext) base = base.slice(0, -(ext.length + 1));
+    return base + '.' + ext;
+  }
+
+  function refreshOutputNames() {
+    results.forEach(function (item) {
+      if (!item.ok || item.nameCustomized) return;
+      var title = item.result.name || item.fileName.replace(/\.[^.]+$/, '');
+      item.outputName = defaultOutputName(title, item.result.artists || '');
+      var inputEl = item.row && item.row.querySelector('.music-output-name');
+      if (inputEl) inputEl.value = item.outputName;
+    });
+  }
+
+  function updateFeaturePanels() {
+    if (decryptPanel && decryptToggle) decryptPanel.classList.toggle('hidden', !decryptToggle.checked);
+    var enabled = lyricsEnabled();
+    if (lyricsPanel) lyricsPanel.classList.toggle('hidden', !enabled);
+    document.querySelectorAll('.music-lyric-box').forEach(function (box) {
+      box.classList.toggle('hidden', !enabled);
+      if (!enabled) box.innerHTML = '';
+    });
+    if (!enabled) return;
+    results.forEach(function (item) {
+      var meta = item.ok ? item.result : item.musicMeta;
+      var box = item.row && item.row.querySelector('.music-lyric-box');
+      if (meta && box && !box.textContent.trim()) {
+        autoFetchLyric(box, meta.name || '', meta.artists || '');
+      }
+    });
   }
 
   function updateToolbar() {
@@ -176,14 +229,20 @@
     var div = document.createElement('div');
     div.className = 'filerow';
     if (!item.ok) {
+      var meta = item.musicMeta;
       div.innerHTML =
         '<div class="filerow-main"><div class="filerow-name">' + escapeHtml(item.fileName) + '</div>' +
-        '<div class="filerow-sub err">' + escapeHtml(item.error) + '</div></div>';
+        '<div class="filerow-sub err">' + escapeHtml(item.error) + '</div>' +
+        (meta && meta.name ? '<div class="filerow-sub">已读取：' + escapeHtml(meta.name) +
+          (meta.artists ? ' · ' + escapeHtml(meta.artists) : '') + '</div><div class="music-lyric-box"></div>' : '') +
+        '</div>';
+      item.row = div;
+      if (meta && meta.name) autoFetchLyric(div.querySelector('.music-lyric-box'), meta.name, meta.artists || '');
       return div;
     }
     var r = item.result;
     var title = r.name || item.fileName.replace(/\.[^.]+$/, '');
-    var fname = TB.safeName(title + (r.artists ? ' - ' + r.artists : '')) + '.' + r.format;
+    if (!item.outputName) item.outputName = defaultOutputName(title, r.artists || '');
     var cover = r.coverBlob
       ? '<img class="filerow-cover" src="' + URL.createObjectURL(r.coverBlob) + '" alt="">'
       : '<div class="filerow-cover empty"></div>';
@@ -195,12 +254,19 @@
       '<span class="tag">' + escapeHtml(r.format.toUpperCase()) + '</span>' +
       '<span class="tag tag-dim">' + escapeHtml(r.source) + '</span></div>' +
       '<div class="filerow-sub">' + escapeHtml(sub) + (sub ? ' · ' : '') + TB.formatSize(r.audioBlob.size) + '</div>' +
+      '<div class="music-rename"><span class="mono muted">导出文件名</span>' +
+      '<input type="text" class="input music-output-name" value="' + escapeHtml(item.outputName) + '" aria-label="导出文件名（不含扩展名）"></div>' +
       '<audio controls preload="none" src="' + URL.createObjectURL(r.audioBlob) + '"></audio>' +
       '<div class="music-lyric-box" style="margin-top:8px"></div>' +
       '</div>' +
       '<div class="filerow-actions"><button class="btn btn-primary" type="button">下载</button></div>';
+    item.row = div;
+    div.querySelector('.music-output-name').addEventListener('input', function (e) {
+      item.outputName = e.currentTarget.value;
+      item.nameCustomized = true;
+    });
     div.querySelector('button').addEventListener('click', function () {
-      TB.download(r.audioBlob, fname);
+      TB.download(r.audioBlob, outputFilename(item));
     });
     autoFetchLyric(div.querySelector('.music-lyric-box'), title, r.artists);
     return div;
@@ -208,9 +274,10 @@
 
   /* 解密完成后自动用识别到的歌名/歌手去匹配歌词，省去手动跳转歌词页再输入一遍 */
   function autoFetchLyric(box, title, artist) {
-    if (!box || !title || !window.LyricsTool) return;
+    if (!box || !title || !window.LyricsTool || !lyricsEnabled()) return;
     box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配中…</div>';
     window.LyricsTool.search(title, artist || '').then(function (list) {
+      if (!lyricsEnabled()) { box.innerHTML = ''; return; }
       if (!list || !list.length) {
         box.innerHTML = '<div class="muted mono" style="font-size:11.5px">未找到匹配歌词</div>';
         return;
@@ -246,7 +313,8 @@
         btn.disabled = false;
       });
     }).catch(function () {
-      box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配失败（可在"歌词自动匹配"页重试）</div>';
+      if (!lyricsEnabled()) { box.innerHTML = ''; return; }
+      box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配失败，可在本页歌词区域手动重试</div>';
     });
   }
 
@@ -272,6 +340,7 @@
         item.ok = true;
       } catch (e) {
         item.error = (e && e.message) || '解密失败';
+        item.musicMeta = e && e.musicMeta ? e.musicMeta : null;
       }
       results.push(item);
       list.appendChild(renderItem(item));
@@ -296,9 +365,7 @@
   document.getElementById('music-download-all').addEventListener('click', function () {
     results.forEach(function (item) {
       if (!item.ok) return;
-      var r = item.result;
-      var title = r.name || item.fileName.replace(/\.[^.]+$/, '');
-      TB.download(r.audioBlob, TB.safeName(title + (r.artists ? ' - ' + r.artists : '')) + '.' + r.format);
+      TB.download(item.result.audioBlob, outputFilename(item));
     });
   });
 
@@ -310,11 +377,9 @@
     notifyFn('正在打包 ' + ok.length + ' 个文件…');
     try {
       var entries = ok.map(function (item) {
-        var r = item.result;
-        var title = r.name || item.fileName.replace(/\.[^.]+$/, '');
         return {
-          name: TB.safeName(title + (r.artists ? ' - ' + r.artists : '')) + '.' + r.format,
-          blob: r.audioBlob
+          name: outputFilename(item),
+          blob: item.result.audioBlob
         };
       });
       var zip = await TB.zip(entries);
@@ -325,4 +390,9 @@
     }
     btn.disabled = false;
   });
+
+  if (decryptToggle) decryptToggle.addEventListener('change', updateFeaturePanels);
+  if (lyricsToggle) lyricsToggle.addEventListener('change', updateFeaturePanels);
+  if (nameOrder) nameOrder.addEventListener('change', refreshOutputNames);
+  updateFeaturePanels();
 })();

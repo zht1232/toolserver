@@ -142,6 +142,11 @@ a { color: var(--accent); }
   -webkit-background-clip: text; background-clip: text; color: var(--ink);
 }
 .lede { color: var(--ink-2); margin-top: 6px; max-width: 92ch; }
+.music-options-panel { margin-bottom: 18px; }
+.music-option-row { gap: 18px; }
+.music-section-head { margin: 26px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.music-section-head h2 { font-size: 16px; font-weight: 600; }
+.music-section-head p { color: var(--ink-2); margin-top: 5px; font-size: 12.5px; }
 
 /* ---------- 栅格 ---------- */
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -256,6 +261,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .filerow-sub { color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
 .filerow-main audio { height: 30px; max-width: 260px; margin-top: 6px; filter: invert(1) hue-rotate(180deg); }
 .filerow-actions { flex: none; }
+.music-rename { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.music-output-name { flex: 1; max-width: 420px; }
 .tag {
   display: inline-block; margin-left: 6px; padding: 1px 6px;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;

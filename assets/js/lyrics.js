@@ -230,16 +230,23 @@
   songInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') searchBtn.click(); });
   artistInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') searchBtn.click(); });
 
-  // 从文件名识别 "歌手 - 歌名" / "歌名 - 歌手"
+  // 使用音乐页选定的文件名顺序填入歌名与歌手。
   fileInput.addEventListener('change', function () {
     var f = fileInput.files[0];
     if (!f) return;
     var base = f.name.replace(/\.[^.]+$/, '');
     fileNameSpan.textContent = f.name;
-    var parts = base.split(/\s*-\s*/);
-    if (parts.length >= 2) {
-      songInput.value = parts.slice(1).join(' - ').trim();
-      artistInput.value = parts[0].trim();
+    var orderInput = document.getElementById('lyrics-file-order');
+    var order = orderInput ? orderInput.value : 'artist-title';
+    var splitAt = order === 'artist-title' ? base.indexOf(' - ') : base.lastIndexOf(' - ');
+    if (order !== 'title' && splitAt >= 0) {
+      if (order === 'artist-title') {
+        artistInput.value = base.slice(0, splitAt).trim();
+        songInput.value = base.slice(splitAt + 3).trim();
+      } else {
+        songInput.value = base.slice(0, splitAt).trim();
+        artistInput.value = base.slice(splitAt + 3).trim();
+      }
     } else {
       songInput.value = base.trim();
       artistInput.value = '';

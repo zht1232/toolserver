@@ -1,7 +1,7 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-纯前端静态工具箱，21 个工具页面，全部原生 JS（ES5 风格，IIFE 模块，无框架无第三方库）。
+纯前端静态工具箱，20 个页面，全部原生 JS（ES5 风格，IIFE 模块，无框架无第三方库）。音乐解密与歌词匹配合并在同一页，并可分别开关。
 `server.py` 是可选的本地托管 + 两个中转接口（酷狗密钥分片、网易云歌词搜索代理），
 纯静态部署（无 Python 后端）时这两个增强功能自动降级，其余全部可用。
 
@@ -12,7 +12,7 @@ python3 server.py 8000
 ```
 
 ## 目录结构
-- `index.html` — 单页应用外壳，侧边栏导航 + 21 个 `<section class="page">`，hash 路由切页
+- `index.html` — 单页应用外壳，侧边栏导航 + 20 个 `<section class="page">`，hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
 - `server.py` — 仅 Python 标准库，静态托管 + `/api/kgm/*`（酷狗密钥分片）+ `/api/nc/*`（网易云中转）
@@ -20,8 +20,8 @@ python3 server.py 8000
 ## 工具清单与对应 JS
 | 分组 | 页面 | JS 文件 |
 |---|---|---|
-| 音乐 | 音乐解密转换 | music.js（框架）+ ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
-| 音乐 | 歌词自动匹配 / LRC 时间轴 | lyrics.js |
+| 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
+| 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
 | 格式 | JSON 格式化 / 编解码 | tools.js |

@@ -2,11 +2,11 @@
 (function () {
   'use strict';
 
-  var ROUTES = ['music', 'lyrics', 'syncer', 'lrc', 'image', 'json', 'encode', 'csvjson', 'markdown',
+  var ROUTES = ['music', 'syncer', 'lrc', 'image', 'json', 'encode', 'csvjson', 'markdown',
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about'];
   var TITLES = {
-    music: 'MUSIC / DECRYPT', lyrics: 'MUSIC / LYRICS', syncer: 'MUSIC / SYNC EDITOR',
+    music: 'MUSIC / DECRYPT + LYRICS', syncer: 'MUSIC / SYNC EDITOR',
     lrc: 'MUSIC / LRC SHIFT', image: 'FORMAT / IMAGE', json: 'FORMAT / JSON',
     encode: 'FORMAT / CODEC', csvjson: 'FORMAT / CSV-JSON', markdown: 'FORMAT / MARKDOWN',
     regex: 'DEV / REGEX', jwt: 'DEV / JWT', cron: 'DEV / CRON', radix: 'DEV / RADIX',
@@ -16,6 +16,8 @@
   };
 
   function showPage(route) {
+    var lyricsAlias = route === 'lyrics';
+    if (lyricsAlias) route = 'music';
     if (ROUTES.indexOf(route) === -1) route = 'music';
     ROUTES.forEach(function (r) {
       var page = document.getElementById('page-' + r);
@@ -26,6 +28,11 @@
     });
     var t = document.getElementById('top-title');
     if (t) t.textContent = TITLES[route] || '';
+    if (lyricsAlias) {
+      if (location.hash === '#lyrics' && window.history && history.replaceState) history.replaceState(null, '', '#music');
+      var lyricsPanel = document.getElementById('music-lyrics-panel');
+      if (lyricsPanel) setTimeout(function () { lyricsPanel.scrollIntoView(); }, 0);
+    }
     window.scrollTo(0, 0);
   }
 

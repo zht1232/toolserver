@@ -9,7 +9,7 @@
 (function () {
   'use strict';
 
-  var CORE_KEY = 'hzHRAmso5kInFaxW';
+  var CORE_KEY = 'hzHRAmso5kInbaxW'; // 687a4852416d736f356b496e62617857
   var META_KEY = "#14ljk_!\\]&0U<'(";
   var MAGIC = [0x43, 0x54, 0x45, 0x4e, 0x46, 0x44, 0x41, 0x4d]; // CTENFDAM
   var te = new TextEncoder();
@@ -85,25 +85,59 @@
 
     // 密钥区
     var keyLen = dv.getUint32(offset, true); offset += 4;
-    if (keyLen <= 0 || keyLen > buf.byteLength) throw new Error('密钥区长度异常');
+    if (keyLen <= 0 || offset + keyLen > buf.byteLength) throw new Error('密钥区长度异常');
     var keyData = u8.slice(offset, offset + keyLen); offset += keyLen;
     for (i = 0; i < keyData.length; i++) keyData[i] ^= 0x64;
-    var decKey = await aesEcbDecrypt(keyData, CORE_KEY);
-    if (td.decode(decKey).indexOf('neteasecloudmusic') !== 0) throw new Error('密钥解析失败');
-    var box = buildKeyBox(decKey.slice(17));
+    var decKey = null;
+    var keyError = null;
+    try {
+      decKey = await aesEcbDecrypt(keyData, CORE_KEY);
+      if (td.decode(decKey).indexOf('neteasecloudmusic') !== 0 || decKey.length <= 17) {
+        throw new Error('标准 NCM 密钥前缀校验未通过');
+      }
+    } catch (e) {
+      keyError = e;
+    }
 
     // 元数据区
     var metaLen = dv.getUint32(offset, true); offset += 4;
     var meta = {};
     if (metaLen > 0) {
+      if (offset + metaLen > buf.byteLength) throw new Error('元数据区长度异常');
       var metaData = u8.slice(offset, offset + metaLen); offset += metaLen;
-      for (i = 0; i < metaData.length; i++) metaData[i] ^= 0x63;
-      var metaB64 = td.decode(metaData).slice(22);
-      var decMeta = await aesEcbDecrypt(b64ToBytes(metaB64), META_KEY);
-      try { meta = JSON.parse(td.decode(decMeta).slice(6)); } catch (e) { meta = {}; }
+      try {
+        for (i = 0; i < metaData.length; i++) metaData[i] ^= 0x63;
+        var metaB64 = td.decode(metaData).slice(22);
+        var decMeta = await aesEcbDecrypt(b64ToBytes(metaB64), META_KEY);
+        meta = JSON.parse(td.decode(decMeta).slice(6));
+      } catch (e) { meta = {}; }
     }
 
-    offset += 9; // CRC(4) + 间隙(5)
+    var artists = '';
+    if (Array.isArray(meta.artist)) {
+      artists = meta.artist.map(function (a) { return Array.isArray(a) ? a[0] : a; }).join('/');
+    }
+
+    if (keyError) {
+      var keyMessage = 'NCM 音频密钥解析失败：密钥区不符合当前支持的标准格式，文件可能已损坏或使用了暂不兼容的版本。';
+      if (meta.musicName) keyMessage += ' 已读取歌曲信息，可继续匹配歌词。';
+      var parseError = new Error(keyMessage);
+      parseError.musicMeta = {
+        name: meta.musicName || '',
+        artists: artists,
+        album: meta.album || '',
+        format: (meta.format || '').toLowerCase(),
+        source: 'NCM'
+      };
+      throw parseError;
+    }
+
+    var box = buildKeyBox(decKey.slice(17));
+
+    // CRC32 与版本字节后是封面帧长度，再跟第一张封面长度。
+    // 旧格式的封面帧长度为 0；NCM 3.x 还可能带有额外的封面帧数据。
+    offset += 5;
+    var coverFrameLen = dv.getUint32(offset, true); offset += 4;
 
     // 封面
     var imgSize = dv.getUint32(offset, true); offset += 4;
@@ -111,6 +145,13 @@
     if (imgSize > 0 && offset + imgSize <= buf.byteLength) {
       coverBlob = new Blob([u8.slice(offset, offset + imgSize)], { type: 'image/jpeg' });
       offset += imgSize;
+    } else if (imgSize > 0) {
+      throw new Error('封面数据长度异常');
+    }
+    if (coverFrameLen > imgSize) {
+      var extraCoverLen = coverFrameLen - imgSize;
+      if (offset + extraCoverLen > buf.byteLength) throw new Error('封面帧长度异常');
+      offset += extraCoverLen;
     }
 
     // 音频流
@@ -124,11 +165,6 @@
     var sniffed = MusicDecrypt.sniffFormat(audio);
     if (sniffed) format = sniffed;
     if (['mp3', 'flac', 'm4a', 'ogg'].indexOf(format) === -1) format = 'mp3';
-
-    var artists = '';
-    if (Array.isArray(meta.artist)) {
-      artists = meta.artist.map(function (a) { return Array.isArray(a) ? a[0] : a; }).join('/');
-    }
 
     var mime = { mp3: 'audio/mpeg', flac: 'audio/flac', m4a: 'audio/mp4', ogg: 'audio/ogg' }[format];
     return {
