@@ -14,14 +14,17 @@
     text: 'TEXT / PROCESS', hash: 'TEXT / HASH',
     timestamp: 'TEXT / TIMESTAMP', color: 'TEXT / COLOR', about: 'INFO / PRIVACY', feedback: 'INFO / FEEDBACK'
   };
+  TITLES.watermark = 'FORMAT / FULL-IMAGE WATERMARK';
 
   function showPage(route) {
+    var watermarkAlias = route === 'watermark';
+    var pageRoute = watermarkAlias ? 'image' : route;
     var lyricsAlias = route === 'lyrics';
-    if (lyricsAlias) route = 'music';
-    if (ROUTES.indexOf(route) === -1) route = 'music';
+    if (lyricsAlias) { route = 'music'; pageRoute = 'music'; }
+    if (ROUTES.indexOf(pageRoute) === -1) { route = 'music'; pageRoute = 'music'; watermarkAlias = false; }
     ROUTES.forEach(function (r) {
       var page = document.getElementById('page-' + r);
-      if (page) page.classList.toggle('hidden', r !== route);
+      if (page) page.classList.toggle('hidden', r !== pageRoute);
     });
     document.querySelectorAll('.nav-item').forEach(function (a) {
       a.classList.toggle('active', a.getAttribute('data-route') === route);
@@ -34,6 +37,15 @@
       if (lyricsPanel) setTimeout(function () { lyricsPanel.scrollIntoView(); }, 0);
     }
     window.scrollTo(0, 0);
+    if (watermarkAlias) setTimeout(function () {
+      if (window.openWatermarkTool) window.openWatermarkTool();
+      else {
+        var panel = document.getElementById('img-watermark-panel');
+        if (panel) panel.classList.remove('hidden');
+        var drop = document.getElementById('img-drop');
+        if (drop) drop.scrollIntoView();
+      }
+    }, 0);
   }
 
   window.addEventListener('hashchange', function () {
