@@ -126,7 +126,8 @@
       ctx.fillStyle = 'hsl(' + deg + ', 100%, 50%)';
       ctx.fill();
     }
-    var a = (hue - 90) * Math.PI / 180;
+    // Hue zero is the red point at three o'clock; canvas angles increase clockwise.
+    var a = hue * Math.PI / 180;
     var mx = cx + Math.cos(a) * ((outer + inner) / 2), my = cy + Math.sin(a) * ((outer + inner) / 2);
     ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
     ctx.beginPath(); ctx.arc(mx, my, 9, 0, Math.PI * 2); ctx.strokeStyle = '#0A0C10'; ctx.lineWidth = 1; ctx.stroke();
@@ -245,7 +246,7 @@
       var dx = p.x - cx, dy = p.y - cy, distance = Math.sqrt(dx * dx + dy * dy);
       var outer = Math.min(cx, cy) - 8, inner = outer - 28;
       if (distance < inner || distance > outer) return;
-      var h = Math.round((Math.atan2(dy, dx) * 180 / Math.PI + 90 + 360) % 360);
+      var h = Math.round((Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360);
       var hsv = rgbToHsv(hexToRgb(hexEl.value) || { r: 0, g: 0, b: 0 });
       applyRgb(hsvToRgb(h, hsv.s, hsv.v));
     });
