@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOCALTOOLS — 本地优先工具箱</title>
+<meta name="description" content="纯前端本地工具箱：音乐解密、歌词工具、格式转换、正则/JWT/Cron/二维码/进制转换/Diff/Markdown 等开发者常用工具。所有处理在浏览器本地完成，文件不上传。">
+<link rel="stylesheet" href="assets/style.css?v=20261002">
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ 侧栏 ============ -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-mark mono">LT</div>
+      <div>
+        <div class="logo-name mono">LOCALTOOLS</div>
+        <div class="logo-sub mono">local-first utility suite</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-cap">音乐 / MUSIC</div>
+      <a class="nav-item" data-route="music" href="#music"><i>01</i><span>音乐解密转换</span></a>
+      <a class="nav-item" data-route="lyrics" href="#lyrics"><i>02</i><span>歌词自动匹配</span></a>
+      <a class="nav-item" data-route="syncer" href="#syncer"><i>03</i><span>歌词打轴器</span></a>
+      <a class="nav-item" data-route="lrc" href="#lrc"><i>04</i><span>LRC 时间轴</span></a>
+      <div class="nav-cap">格式 / FORMAT</div>
+      <a class="nav-item" data-route="image" href="#image"><i>05</i><span>图片转换压缩</span></a>
+      <a class="nav-item" data-route="json" href="#json"><i>06</i><span>JSON 格式化</span></a>
+      <a class="nav-item" data-route="encode" href="#encode"><i>07</i><span>编解码</span></a>
+      <a class="nav-item" data-route="csvjson" href="#csvjson"><i>08</i><span>CSV / JSON 互转</span></a>
+      <a class="nav-item" data-route="markdown" href="#markdown"><i>09</i><span>Markdown 预览</span></a>
+      <div class="nav-cap">开发 / DEV</div>
+      <a class="nav-item" data-route="regex" href="#regex"><i>10</i><span>正则表达式测试</span></a>
+      <a class="nav-item" data-route="jwt" href="#jwt"><i>11</i><span>JWT 解析器</span></a>
+      <a class="nav-item" data-route="cron" href="#cron"><i>12</i><span>Cron 表达式</span></a>
+      <a class="nav-item" data-route="radix" href="#radix"><i>13</i><span>进制转换 / 位运算</span></a>
+      <a class="nav-item" data-route="generator" href="#generator"><i>14</i><span>UUID / 密码生成</span></a>
+      <a class="nav-item" data-route="diff" href="#diff"><i>15</i><span>文本 Diff 对比</span></a>
+      <a class="nav-item" data-route="reference" href="#reference"><i>16</i><span>速查表</span></a>
+      <div class="nav-cap">文本 / TEXT</div>
+      <a class="nav-item" data-route="text" href="#text"><i>17</i><span>文本处理</span></a>
+      <a class="nav-item" data-route="hash" href="#hash"><i>18</i><span>哈希校验</span></a>
+      <a class="nav-item" data-route="timestamp" href="#timestamp"><i>19</i><span>时间戳</span></a>
+      <a class="nav-item" data-route="color" href="#color"><i>20</i><span>颜色转换</span></a>
+      <div class="nav-cap">信息 / INFO</div>
+      <a class="nav-item" data-route="about" href="#about"><i>21</i><span>隐私与部署</span></a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="kv"><span>运行位置</span><b id="env-mode">检测中</b></div>
+      <div class="kv"><span>酷狗密钥表</span><b id="env-key">检测中</b></div>
+      <div class="kv"><span>上传数据</span><b>0 B</b></div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="dot"></span>
+        <span class="mono" id="top-title">MUSIC / DECRYPT</span>
+      </div>
+      <div class="topbar-right mono">
+        <span>ALL PROCESSING LOCAL</span>
+        <span class="sep">|</span>
+        <span id="top-format-count">—</span>
+        <span class="sep">|</span>
+        <span class="status-ok">NO UPLOAD</span>
+      </div>
+    </header>
+
+    <div class="stage">
+
+      <!-- ===== 01 音乐解密 ===== -->
+      <section class="page" id="page-music">
+        <div class="page-head">
+          <h1>音乐解密转换</h1>
+          <p class="lede">解开各平台下载的加密音频，输出标准 mp3 / flac / ogg / m4a。解密在浏览器内存中完成，文件不离开本机。</p>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <div class="dropzone" id="music-drop">
+              <div class="dz-title">拖入加密音乐文件</div>
+              <div class="dz-sub">或 <label class="link">选择文件<input type="file" id="music-input" multiple hidden></label> · 支持批量</div>
+              <div class="dz-meta mono" id="music-formats">格式表加载中</div>
+            </div>
+            <div class="row hidden" id="music-toolbar">
+              <button class="btn btn-primary" id="music-download-all" type="button">全部下载</button>
+              <button class="btn" id="music-zip" type="button">打包为 ZIP</button>
+              <button class="btn" id="music-clear" type="button">清空</button>
+              <span class="mono muted" id="music-stats"></span>
+            </div>
+            <div class="logline mono" id="music-log"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-cap">支持格式与密钥来源</div>
+            <table class="ftable mono">
+              <thead><tr><th>来源</th><th>扩展名</th><th>密钥来源</th></tr></thead>
+              <tbody>
+                <tr><td>网易云</td><td>ncm</td><td>文件内嵌</td></tr>
+                <tr><td>酷狗</td><td>kgm kgma vpr</td><td>4 MiB 掩码 / 70 MiB 全表分片</td></tr>
+                <tr><td>QQ音乐</td><td>qmc0 qmc2 qmc3 qmcflac qmcogg bkcmp3 bkcflac tkm</td><td>内置默认掩码</td></tr>
+                <tr><td>QQ音乐</td><td>mflac mgg</td><td>本地识别（实验性）</td></tr>
+                <tr><td>酷我</td><td>kwm</td><td>文件内嵌 32 字节掩码</td></tr>
+                <tr><td>虾米</td><td>xm</td><td>文件头单字节密钥</td></tr>
+              </tbody>
+            </table>
+            <div class="note">
+              酷狗新版(v4)文件音频超过 64 MiB 时需要完整密钥表：由服务器按需分片下发，浏览器不下载整表；纯静态托管时改为按需加载 12 MB 压缩密钥并本地解压。
+            </div>
+          </div>
+        </div>
+
+        <div class="filerow-wrap" id="music-list"></div>
+      </section>
+
+      <!-- ===== 02 歌词匹配 ===== -->
+      <section class="page hidden" id="page-lyrics">
+        <div class="page-head">
+          <h1>歌词自动匹配</h1>
+          <p class="lede">按歌名 / 歌手检索同步歌词（LRC）。歌词源：网易云音乐（经本站服务器中转）→ 失败时回退 LRCLIB 公共库。支持双语歌词合并。</p>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <div class="row">
+              <input type="text" id="lyrics-song" class="input grow" placeholder="歌曲名（必填）">
+              <input type="text" id="lyrics-artist" class="input grow" placeholder="歌手（可选）">
+              <button class="btn btn-primary" id="lyrics-search" type="button">检索</button>
+            </div>
+            <div class="row">
+              <label class="link">从文件名自动填表<input type="file" id="lyrics-file" accept="audio/*,.ncm,.kgm,.kgma,.vpr,.kwm,.xm" hidden></label>
+              <span class="mono muted" id="lyrics-file-name"></span>
+            </div>
+            <div class="logline mono" id="lyrics-status"></div>
+            <div id="lyrics-results"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">使用说明</div>
+            <ul class="bullets">
+              <li>仅发送歌名与歌手名用于检索，不上传任何本地文件。</li>
+              <li>用自带 <code>server.py</code> 启动网站时启用网易云源；纯静态托管自动走 LRCLIB。</li>
+              <li>下载的 LRC 带 BOM，Windows 与手机播放器均可正确识别中文。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 03 歌词打轴器 ===== -->
+      <section class="page hidden" id="page-syncer">
+        <div class="page-head">
+          <h1>歌词打轴器</h1>
+          <p class="lede">导入音频与歌词文本，边听边敲空格为每行打时间戳，导出标准 LRC。适合自制歌词或修正错位歌词。</p>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <div class="panel">
+              <div class="panel-cap">1 · 载入素材</div>
+              <div class="row">
+                <label class="btn" for="sy-audio">选择音频</label>
+                <input type="file" id="sy-audio" accept="audio/*" hidden>
+                <label class="btn" for="sy-text-file">导入歌词文本</label>
+                <input type="file" id="sy-text-file" accept=".txt,.lrc,text/plain" hidden>
+                <span class="mono muted" id="sy-audio-name">未载入音频</span>
+              </div>
+              <textarea id="sy-input" class="ta mono" rows="5" placeholder="粘贴歌词文本，每行一句（已有 [mm:ss.xx] 标签会被保留）"></textarea>
+              <div class="row">
+                <button class="btn" id="sy-load-text" type="button">载入歌词行</button>
+                <span class="mono muted" id="sy-line-count">0 行</span>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-cap">2 · 播放与打轴</div>
+              <audio id="sy-audio-el" controls style="width:100%"></audio>
+              <div class="row">
+                <button class="btn btn-primary" id="sy-stamp" type="button">为当前行打轴</button>
+                <button class="btn" id="sy-undo" type="button">撤销上一行</button>
+                <span class="mono" id="sy-time">00:00.00</span>
+              </div>
+              <div class="note">播放音频，听到某行开口的瞬间按 <kbd>空格</kbd>（或点按钮），自动写入当前时间并跳到下一行。</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-cap">3 · 行列表与导出</div>
+            <div class="row">
+              <label class="mono muted" for="sy-shift-val">整轴平移</label>
+              <input type="number" id="sy-shift-val" class="input" style="width:110px" value="0" step="50">
+              <span class="mono muted">ms</span>
+              <button class="btn" id="sy-shift" type="button">应用</button>
+              <button class="btn btn-primary" id="sy-export" type="button">导出 LRC</button>
+            </div>
+            <div class="lines" id="sy-lines"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 04 LRC 时间轴 ===== -->
+      <section class="page hidden" id="page-lrc">
+        <div class="page-head">
+          <h1>LRC 时间轴</h1>
+          <p class="lede">对现有 LRC 做整体偏移、去时间轴或提取纯文本，用于修正"歌词快了半秒"这类问题。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">输入</div>
+            <div class="row">
+              <label class="btn" for="lrc-file">导入 .lrc</label>
+              <input type="file" id="lrc-file" accept=".lrc,.txt" hidden>
+              <input type="number" id="lrc-offset" class="input" style="width:130px" placeholder="偏移 ms">
+              <button class="btn btn-primary" id="lrc-apply" type="button">应用偏移</button>
+              <button class="btn" id="lrc-strip" type="button">去时间轴</button>
+            </div>
+            <textarea id="lrc-input" class="ta mono" rows="14" placeholder="在此粘贴 LRC 内容"></textarea>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">输出</div>
+            <div class="row">
+              <button class="btn btn-primary" id="lrc-download" type="button">下载结果</button>
+              <button class="btn" id="lrc-copy" type="button">复制</button>
+            </div>
+            <textarea id="lrc-output" class="ta mono" rows="14" readonly placeholder="处理结果"></textarea>
+            <div class="note">正数 = 歌词整体延后；负数 = 整体提前。例如歌词比音乐快 0.5 秒，填 <b>500</b>。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 05 图片 ===== -->
+      <section class="page hidden" id="page-image">
+        <div class="page-head">
+          <h1>图片转换压缩</h1>
+          <p class="lede">PNG / JPEG / WebP 互转，可调质量与尺寸。基于浏览器 Canvas，图片不上传。</p>
+        </div>
+        <div class="dropzone" id="img-drop">
+          <div class="dz-title">拖入图片</div>
+          <div class="dz-sub">或 <label class="link">选择图片<input type="file" id="img-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden></label></div>
+          <div class="dz-meta mono">转换在本地完成，可反复调整参数对比体积</div>
+        </div>
+        <div class="row">
+          <label class="field">目标格式
+            <select id="img-format" class="input">
+              <option value="image/png">PNG 无损</option>
+              <option value="image/jpeg">JPEG 有损</option>
+              <option value="image/webp">WebP</option>
+            </select>
+          </label>
+          <label class="field">质量 <span class="mono" id="img-quality-val">90</span>%
+            <input type="range" id="img-quality" min="10" max="100" value="90">
+          </label>
+          <label class="field">缩放 <span class="mono" id="img-scale-val">100</span>%
+            <input type="range" id="img-scale" min="10" max="100" value="100">
+          </label>
+          <button class="btn btn-primary" id="img-convert" type="button">转换并下载</button>
+        </div>
+        <div class="panel hidden" id="img-panel">
+          <div class="img-compare">
+            <div>
+              <div class="panel-cap">原图 <span class="mono" id="img-src-info"></span></div>
+              <img id="img-src" alt="原图">
+            </div>
+            <div>
+              <div class="panel-cap">输出 <span class="mono" id="img-out-info"></span></div>
+              <img id="img-out" alt="输出">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 06 JSON ===== -->
+      <section class="page hidden" id="page-json">
+        <div class="page-head">
+          <h1>JSON 格式化</h1>
+          <p class="lede">格式化、压缩与校验 JSON，错误原因直接回显。</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="json-format" type="button">缩进 2</button>
+          <button class="btn" id="json-format4" type="button">缩进 4</button>
+          <button class="btn" id="json-minify" type="button">压缩单行</button>
+          <button class="btn" id="json-validate" type="button">校验</button>
+          <button class="btn" id="json-copy" type="button">复制</button>
+        </div>
+        <div class="logline mono" id="json-status"></div>
+        <textarea id="json-input" class="ta mono" rows="18" placeholder='{"hello":"world"}'></textarea>
+      </section>
+
+      <!-- ===== 07 编解码 ===== -->
+      <section class="page hidden" id="page-encode">
+        <div class="page-head">
+          <h1>编解码</h1>
+          <p class="lede">Base64 / URL / Unicode / HTML 实体，支持中文与多字节字符。</p>
+        </div>
+        <div class="tabs" id="encode-tabs">
+          <button class="tab active" data-tab="base64" type="button">Base64</button>
+          <button class="tab" data-tab="url" type="button">URL</button>
+          <button class="tab" data-tab="unicode" type="button">Unicode</button>
+          <button class="tab" data-tab="html" type="button">HTML 实体</button>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="enc-encode" type="button">编码</button>
+          <button class="btn" id="enc-decode" type="button">解码</button>
+          <button class="btn" id="enc-swap" type="button">交换上下</button>
+          <button class="btn" id="enc-copy" type="button">复制结果</button>
+        </div>
+        <div class="grid-2">
+          <textarea id="enc-input" class="ta mono" rows="12" placeholder="输入内容"></textarea>
+          <textarea id="enc-output" class="ta mono" rows="12" readonly placeholder="输出结果"></textarea>
+        </div>
+        <div class="logline mono" id="enc-status"></div>
+      </section>
+
+      <!-- ===== 08 CSV/JSON 互转 ===== -->
+      <section class="page hidden" id="page-csvjson">
+        <div class="page-head">
+          <h1>CSV / JSON / 表格互转</h1>
+          <p class="lede">CSV、JSON 数组、Markdown 表格三者互转，自动识别分隔符与表头。</p>
+        </div>
+        <div class="row">
+          <label class="field">输入格式
+            <select id="cj-from" class="input">
+              <option value="csv">CSV</option>
+              <option value="json">JSON</option>
+              <option value="md">Markdown 表格</option>
+            </select>
+          </label>
+          <label class="field">输出格式
+            <select id="cj-to" class="input">
+              <option value="json">JSON</option>
+              <option value="csv">CSV</option>
+              <option value="md">Markdown 表格</option>
+            </select>
+          </label>
+          <label class="check mono"><input type="checkbox" id="cj-header" checked> 首行为表头</label>
+          <button class="btn btn-primary" id="cj-convert" type="button">转换</button>
+          <button class="btn" id="cj-copy" type="button">复制结果</button>
+        </div>
+        <div class="logline mono" id="cj-status"></div>
+        <div class="grid-2">
+          <textarea id="cj-input" class="ta mono" rows="16" placeholder="name,age&#10;Alice,20&#10;Bob,21"></textarea>
+          <textarea id="cj-output" class="ta mono" rows="16" readonly placeholder="输出结果"></textarea>
+        </div>
+      </section>
+
+      <!-- ===== 09 Markdown 预览 ===== -->
+      <section class="page hidden" id="page-markdown">
+        <div class="page-head">
+          <h1>Markdown 实时预览</h1>
+          <p class="lede">左侧输入 Markdown，右侧实时渲染。支持标题、列表、代码块、表格、链接、图片。</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="md-export-html" type="button">导出 HTML</button>
+          <button class="btn" id="md-copy" type="button">复制 Markdown</button>
+        </div>
+        <div class="grid-2">
+          <textarea id="md-input" class="ta mono" rows="24" placeholder="# 标题&#10;&#10;正文 **粗体** *斜体* `代码`"></textarea>
+          <div class="md-preview" id="md-preview"></div>
+        </div>
+      </section>
+
+      <!-- ===== 10 正则测试 ===== -->
+      <section class="page hidden" id="page-regex">
+        <div class="page-head">
+          <h1>正则表达式测试</h1>
+          <p class="lede">实时测试正则表达式，高亮匹配结果，展示分组与常用模式。</p>
+        </div>
+        <div class="row">
+          <span class="mono muted">/</span>
+          <input type="text" id="regex-pattern" class="input grow mono" placeholder="正则表达式，如 \d+">
+          <span class="mono muted">/</span>
+          <input type="text" id="regex-flags" class="input mono" style="width:90px" placeholder="gi" value="g">
+          <select id="regex-presets" class="input">
+            <option value="">常用模式…</option>
+            <option value="^[\w.+-]+@[\w-]+\.[\w.-]+$">邮箱</option>
+            <option value="^1[3-9]\d{9}$">中国大陆手机号</option>
+            <option value="^https?:\/\/[^\s]+$">URL</option>
+            <option value="^\d{4}-\d{2}-\d{2}$">日期 YYYY-MM-DD</option>
+            <option value="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$">十六进制颜色</option>
+            <option value="^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$">强密码（大小写+数字，8位+）</option>
+          </select>
+        </div>
+        <div class="logline mono" id="regex-status"></div>
+        <div class="grid-2">
+          <div>
+            <div class="panel-cap">测试文本</div>
+            <textarea id="regex-input" class="ta mono" rows="12" placeholder="粘贴要测试的文本…"></textarea>
+          </div>
+          <div>
+            <div class="panel-cap">高亮结果</div>
+            <div class="ta mono regex-view" id="regex-highlight" style="min-height:260px; overflow:auto;"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-cap">匹配列表 <span class="mono muted" id="regex-count">0 处</span></div>
+          <div id="regex-matches"></div>
+        </div>
+      </section>
+
+      <!-- ===== 11 JWT 解析 ===== -->
+      <section class="page hidden" id="page-jwt">
+        <div class="page-head">
+          <h1>JWT 解析器</h1>
+          <p class="lede">解析 JSON Web Token 的 Header 与 Payload。仅做本地 Base64URL 解码展示，不校验签名、不联网。</p>
+        </div>
+        <textarea id="jwt-input" class="ta mono" rows="6" placeholder="粘贴 JWT：eyJhbGciOi...xxx.yyy.zzz"></textarea>
+        <div class="logline mono" id="jwt-status"></div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">Header</div>
+            <pre class="code mono" id="jwt-header">—</pre>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">Payload</div>
+            <pre class="code mono" id="jwt-payload">—</pre>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-cap">常见时间字段</div>
+          <div id="jwt-times" class="mono"></div>
+        </div>
+      </section>
+
+      <!-- ===== 12 Cron ===== -->
+      <section class="page hidden" id="page-cron">
+        <div class="page-head">
+          <h1>Cron 表达式</h1>
+          <p class="lede">解析现有 Cron 表达式的含义与下 10 次执行时间，或从可视化选项生成表达式。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">解析</div>
+            <input type="text" id="cron-input" class="input mono grow" placeholder="*/5 * * * *" value="*/5 * * * *" style="margin-bottom:12px;width:100%">
+            <div class="logline mono" id="cron-desc"></div>
+            <div class="panel-cap" style="margin-top:12px">未来 10 次执行时间</div>
+            <div id="cron-next" class="mono"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">可视化生成</div>
+            <div class="row"><label class="field" style="flex:1">分钟<input type="text" id="cron-min" class="input" value="*/5"></label></div>
+            <div class="row">
+              <label class="field" style="flex:1">小时<input type="text" id="cron-hour" class="input" value="*"></label>
+              <label class="field" style="flex:1">日<input type="text" id="cron-dom" class="input" value="*"></label>
+            </div>
+            <div class="row">
+              <label class="field" style="flex:1">月<input type="text" id="cron-mon" class="input" value="*"></label>
+              <label class="field" style="flex:1">星期<input type="text" id="cron-dow" class="input" value="*"></label>
+            </div>
+            <button class="btn btn-primary" id="cron-build" type="button">生成表达式</button>
+            <div class="logline mono" id="cron-built"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 13 进制转换 ===== -->
+      <section class="page hidden" id="page-radix">
+        <div class="page-head">
+          <h1>进制转换 / 位运算</h1>
+          <p class="lede">二 / 八 / 十 / 十六进制互转，支持 64 位整数与常用位运算。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">进制互转</div>
+            <div class="field-xl"><label>十进制 DEC</label><input type="text" id="rx-dec" class="input mono" placeholder="255"></div>
+            <div class="field-xl"><label>十六进制 HEX</label><input type="text" id="rx-hex" class="input mono" placeholder="FF"></div>
+            <div class="field-xl"><label>八进制 OCT</label><input type="text" id="rx-oct" class="input mono" placeholder="377"></div>
+            <div class="field-xl"><label>二进制 BIN</label><input type="text" id="rx-bin" class="input mono" placeholder="11111111"></div>
+            <div class="logline mono" id="rx-status"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">位运算（基于十进制输入）</div>
+            <div class="row">
+              <input type="text" id="rx-a" class="input mono grow" placeholder="A">
+              <select id="rx-op" class="input mono">
+                <option value="and">AND &amp;</option>
+                <option value="or">OR |</option>
+                <option value="xor">XOR ^</option>
+                <option value="shl">SHL &lt;&lt;</option>
+                <option value="shr">SHR &gt;&gt;</option>
+              </select>
+              <input type="text" id="rx-b" class="input mono grow" placeholder="B">
+              <button class="btn btn-primary" id="rx-calc" type="button">计算</button>
+            </div>
+            <div class="result mono" id="rx-result"></div>
+            <div class="panel-cap" style="margin-top:14px">位视图（32 位）</div>
+            <div class="mono" id="rx-bits" style="word-break:break-all; letter-spacing:2px;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 14 生成器 ===== -->
+      <section class="page hidden" id="page-generator">
+        <div class="page-head">
+          <h1>UUID / 随机密码生成</h1>
+          <p class="lede">本地生成 UUID v4 与自定义规则的强随机密码，使用 WebCrypto 保证随机性。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">UUID v4</div>
+            <div class="row">
+              <input type="number" id="uuid-count" class="input" style="width:90px" value="5" min="1" max="50">
+              <button class="btn btn-primary" id="uuid-gen" type="button">生成</button>
+              <button class="btn" id="uuid-copy" type="button">复制全部</button>
+            </div>
+            <div id="uuid-list" class="mono"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">随机密码</div>
+            <div class="row">
+              <label class="field" style="width:90px">长度<input type="number" id="pw-len" class="input" value="16" min="4" max="128"></label>
+              <label class="check mono"><input type="checkbox" id="pw-upper" checked> A-Z</label>
+              <label class="check mono"><input type="checkbox" id="pw-lower" checked> a-z</label>
+              <label class="check mono"><input type="checkbox" id="pw-digit" checked> 0-9</label>
+              <label class="check mono"><input type="checkbox" id="pw-symbol"> 符号</label>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="pw-gen" type="button">生成</button>
+              <button class="btn" id="pw-copy" type="button">复制</button>
+            </div>
+            <input type="text" id="pw-output" class="input mono grow" readonly style="width:100%;margin-bottom:8px">
+            <div class="logline mono" id="pw-strength"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 15 Diff ===== -->
+      <section class="page hidden" id="page-diff">
+        <div class="page-head">
+          <h1>文本 Diff 对比</h1>
+          <p class="lede">逐行比较两段文本的增删，适合对比配置、代码片段或文案改动。</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="diff-run" type="button">对比</button>
+          <label class="check mono"><input type="checkbox" id="diff-trim" checked> 忽略行首尾空格</label>
+          <label class="check mono"><input type="checkbox" id="diff-ignorecase"> 忽略大小写</label>
+          <span class="mono muted" id="diff-summary"></span>
+        </div>
+        <div class="grid-2">
+          <textarea id="diff-left" class="ta mono" rows="16" placeholder="原始文本 A"></textarea>
+          <textarea id="diff-right" class="ta mono" rows="16" placeholder="对比文本 B"></textarea>
+        </div>
+        <div class="panel">
+          <div class="panel-cap">差异结果</div>
+          <div class="diff-view" id="diff-output"></div>
+        </div>
+      </section>
+
+      <!-- ===== 16 速查表 ===== -->
+      <section class="page hidden" id="page-reference">
+        <div class="page-head">
+          <h1>速查表</h1>
+          <p class="lede">HTTP 状态码、常用正则片段等静态参考资料，支持关键词过滤。</p>
+        </div>
+        <div class="tabs" id="ref-tabs">
+          <button class="tab active" data-tab="http" type="button">HTTP 状态码</button>
+          <button class="tab" data-tab="ascii" type="button">ASCII 表</button>
+          <button class="tab" data-tab="regex" type="button">正则速查</button>
+        </div>
+        <input type="text" id="ref-filter" class="input grow mono" placeholder="筛选关键词…" style="width:100%;margin-bottom:12px">
+        <div id="ref-content"></div>
+      </section>
+
+      <!-- ===== 17 文本处理 ===== -->
+      <section class="page hidden" id="page-text">
+        <div class="page-head">
+          <h1>文本处理</h1>
+          <p class="lede">字数统计、大小写转换、去重去空行、清理行首尾空格。整理歌词与字幕稿时常用。</p>
+        </div>
+        <div class="row">
+          <button class="btn" id="text-upper" type="button">转大写</button>
+          <button class="btn" id="text-lower" type="button">转小写</button>
+          <button class="btn" id="text-title" type="button">首字母大写</button>
+          <button class="btn" id="text-trim" type="button">去首尾空格</button>
+          <button class="btn" id="text-dedupe" type="button">去重行</button>
+          <button class="btn" id="text-blank" type="button">删空行</button>
+          <button class="btn" id="text-bracket" type="button">去【】标签</button>
+          <button class="btn btn-primary" id="text-copy" type="button">复制</button>
+        </div>
+        <div class="panel">
+          <div class="panel-cap">统计</div>
+          <div class="stats mono" id="text-stats">—</div>
+        </div>
+        <textarea id="text-input" class="ta mono" rows="16" placeholder="粘贴文本…"></textarea>
+      </section>
+
+      <!-- ===== 18 哈希 ===== -->
+      <section class="page hidden" id="page-hash">
+        <div class="page-head">
+          <h1>哈希校验</h1>
+          <p class="lede">基于 WebCrypto 计算 SHA 系列摘要，用于校验文件完整性。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">文本摘要</div>
+            <textarea id="hash-input" class="ta mono" rows="6" placeholder="输入文本"></textarea>
+            <div class="row">
+              <button class="btn btn-primary" id="hash-calc" type="button">计算</button>
+              <label class="check mono"><input type="checkbox" id="hash-upper"> 大写输出</label>
+            </div>
+            <div class="hash-results mono" id="hash-results"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">文件摘要</div>
+            <div class="row">
+              <label class="btn" for="hash-file">选择文件</label>
+              <input type="file" id="hash-file" hidden>
+              <span class="mono muted" id="hash-file-name"></span>
+            </div>
+            <div class="hash-results mono" id="hash-file-results"></div>
+            <div class="note">文件会整体读入内存，建议 500 MB 以内。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 19 时间戳 ===== -->
+      <section class="page hidden" id="page-timestamp">
+        <div class="page-head">
+          <h1>时间戳转换</h1>
+          <p class="lede">当前时间 <span class="mono" id="ts-now">—</span>（<span class="mono" id="ts-now-unix">—</span>）</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">时间戳 → 日期</div>
+            <div class="row">
+              <input type="text" id="ts-input" class="input grow" placeholder="1759238400（秒或毫秒）">
+              <button class="btn btn-primary" id="ts-to-date" type="button">转换</button>
+            </div>
+            <div class="result mono" id="ts-date-result"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">日期 → 时间戳</div>
+            <div class="row">
+              <input type="datetime-local" id="date-input" class="input grow" step="1">
+              <button class="btn btn-primary" id="date-to-ts" type="button">转换</button>
+              <button class="btn" id="date-now" type="button">当前</button>
+            </div>
+            <div class="result mono" id="ts-result"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 20 颜色 ===== -->
+      <section class="page hidden" id="page-color">
+        <div class="page-head">
+          <h1>颜色转换</h1>
+          <p class="lede">HEX / RGB / HSL 三向联动，拖动滑块或点击预设色快速取色，附明暗梯度与对比度参考。</p>
+        </div>
+        <div class="color-shell">
+          <div>
+            <div class="color-stage" id="color-preview">
+              <div class="readout" id="color-readout"></div>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <input type="color" id="color-picker" value="#2059c0">
+              <span class="mono muted">取色器，或直接拖动下方滑块</span>
+            </div>
+            <div class="panel-cap" style="margin-top:14px">常用预设</div>
+            <div class="swatch-grid" id="color-presets"></div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-cap">数值输入</div>
+              <div class="field-xl"><label>HEX</label><input type="text" id="color-hex" class="input" value="#2059C0" spellcheck="false"></div>
+              <div class="field-xl"><label>RGB</label><input type="text" id="color-rgb" class="input" value="32, 89, 192" spellcheck="false"></div>
+              <div class="field-xl"><label>HSL</label><input type="text" id="color-hsl" class="input" spellcheck="false"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-cap">滑块调节</div>
+              <div class="slider-row"><span class="mono muted" style="width:28px">R</span><input type="range" id="rs-r" min="0" max="255" value="32"><span class="val" id="rs-r-val">32</span></div>
+              <div class="slider-row"><span class="mono muted" style="width:28px">G</span><input type="range" id="rs-g" min="0" max="255" value="89"><span class="val" id="rs-g-val">89</span></div>
+              <div class="slider-row"><span class="mono muted" style="width:28px">B</span><input type="range" id="rs-b" min="0" max="255" value="192"><span class="val" id="rs-b-val">192</span></div>
+              <div class="slider-row" style="margin-top:10px"><span class="mono muted" style="width:28px">H</span><input type="range" id="rs-h" min="0" max="360" value="223"><span class="val" id="rs-h-val">223</span></div>
+              <div class="slider-row"><span class="mono muted" style="width:28px">S</span><input type="range" id="rs-s" min="0" max="100" value="71"><span class="val" id="rs-s-val">71</span></div>
+              <div class="slider-row"><span class="mono muted" style="width:28px">L</span><input type="range" id="rs-l" min="0" max="100" value="44"><span class="val" id="rs-l-val">44</span></div>
+            </div>
+            <div class="panel">
+              <div class="panel-cap">明暗梯度（点击复制）</div>
+              <div id="color-tints" class="tints"></div>
+              <div class="contrast-chip" id="color-contrast"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 21 关于 ===== -->
+      <section class="page hidden" id="page-about">
+        <div class="page-head">
+          <h1>隐私与部署</h1>
+          <p class="lede">本站的设计前提：服务器只发文件，计算留在用户设备上。</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-cap">安全设计</div>
+            <ul class="bullets">
+              <li><b>零上传</b>：解密、转换、压缩全部在浏览器内存完成，服务器不接收也不存储任何用户文件。</li>
+              <li><b>可离线</b>：除歌词检索外，所有工具断网可用。</li>
+              <li><b>零依赖</b>：不使用任何第三方 JS 库或 CDN，全部为原生代码，可直接审计 <code>assets/js/</code>。</li>
+              <li><b>服务器职责</b>：静态文件 + 酷狗密钥表分片 + 歌词接口中转，三项，无数据库。</li>
+              <li><b>对外请求清单</b>：仅歌词检索（歌名/歌手名）与密钥表分片（纯密钥字节，不含文件内容）。</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <div class="panel-cap">部署</div>
+            <p class="para">方式 A · 自带服务器（推荐，仅需 Python 3 标准库）：</p>
+            <pre class="code mono">cd toolbox
+python3 server.py 8000</pre>
+            <p class="para">首次启动会把 <code>assets/kugou_key.xz</code>（94 KB）解压为 70 MB 密钥表，供新版酷狗文件按需分片读取，无需用户下载整表。</p>
+            <p class="para">方式 B · 纯静态托管：整个目录交给 Nginx / Caddy / IIS 即可。歌词自动回退 LRCLIB；超 64 MiB 的酷狗新版文件会提示按需加载 12 MB 压缩密钥表。</p>
+            <pre class="code mono">server {
+  listen 80;
+  root /var/www/toolbox;
+}</pre>
+            <p class="para muted">以 <code>file://</code> 双击打开时：NCM 等本地工具可用；需读取掩码表的酷狗解密与联网检索不可用。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-cap">算法来源与声明</div>
+          <p class="para">NCM 解密与 <code>ncmdump</code> / <code>unlock-music</code> 实现一致；KGM / KWM / QMC / XM 解密算法移植自 <code>unlock-music</code>（MIT）与 <code>ghtz08/kugou-kgm-decoder</code>（密钥表来自后者）。两个上游项目的官方测试向量均已通过。</p>
+          <p class="para muted">本项目仅供个人对已合法获得的音频进行格式转换与备份，请尊重音乐版权。</p>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ============ 右侧信息栏（宽屏显示） ============ -->
+  <aside class="rail">
+    <div class="rail-block">
+      <div class="rail-cap">状态 / STATUS</div>
+      <div class="kv"><span>运行模式</span><b id="rail-mode">检测中</b></div>
+      <div class="kv"><span>酷狗密钥表</span><b id="rail-key">检测中</b></div>
+      <div class="kv"><span>解密格式数</span><b id="rail-formats">—</b></div>
+      <div class="kv"><span>上传流量</span><b class="status-ok">0 B</b></div>
+    </div>
+    <div class="rail-block">
+      <div class="rail-cap">快捷 / KEYS</div>
+      <div class="kv"><span>歌词打轴</span><b class="mono">空格</b></div>
+      <div class="kv"><span>撤销打轴</span><b class="mono">Ctrl+Z</b></div>
+      <div class="kv"><span>切换工具</span><b class="mono">Alt+1…9</b></div>
+    </div>
+    <div class="rail-block">
+      <div class="rail-cap">说明 / NOTE</div>
+      <p class="para muted">页面内所有音频、图片、文本均在内存中处理，刷新即清空。批量转换建议单次不超过 30 个文件，避免老旧设备内存吃紧。</p>
+    </div>
+  </aside>
+
+</div>
+
+<script src="assets/js/main.js?v=20261002"></script>
+<script src="assets/js/zip.js?v=20261002"></script>
+<script src="assets/js/music.js?v=20261002"></script>
+<script src="assets/js/ncm.js?v=20261002"></script>
+<script src="assets/js/kgm.js?v=20261002"></script>
+<script src="assets/js/kwm.js?v=20261002"></script>
+<script src="assets/js/qmc.js?v=20261002"></script>
+<script src="assets/js/xm.js?v=20261002"></script>
+<script src="assets/js/lyrics.js?v=20261002"></script>
+<script src="assets/js/syncer.js?v=20261002"></script>
+<script src="assets/js/tools.js?v=20261002"></script>
+<script src="assets/js/text.js?v=20261002"></script>
+<script src="assets/js/color.js?v=20261002"></script>
+<script src="assets/js/csvjson.js?v=20261002"></script>
+<script src="assets/js/markdown.js?v=20261002"></script>
+<script src="assets/js/regex.js?v=20261002"></script>
+<script src="assets/js/jwt.js?v=20261002"></script>
+<script src="assets/js/cron.js?v=20261002"></script>
+<script src="assets/js/radix.js?v=20261002"></script>
+<script src="assets/js/generator.js?v=20261002"></script>
+<script src="assets/js/diff.js?v=20261002"></script>
+<script src="assets/js/reference.js?v=20261002"></script>
+</body>
+</html>

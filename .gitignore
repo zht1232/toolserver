@@ -1,0 +1,13 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local generated data
+assets/kugou_key.bin
+*.tmp
+
+# Operating system files
+.DS_Store
+Thumbs.db

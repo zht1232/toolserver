@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+本地工具箱 - 轻量服务器（仅 Python 3 标准库，适配老旧 / ARM 设备）
+
+职责：
+1. 托管本站静态文件（HTML / CSS / JS），替代 Nginx
+2. 托管大体积解密密钥表，并按需分片下发（浏览器无需下载整个 70 MB 密钥）
+3. 中转部分站点接口（网易云歌词搜索），解决浏览器跨域限制
+
+接口：
+  GET /api/ping                     健康检查与能力探测，前端据此决定可用功能
+  GET /api/kgm/status               酷狗密钥表状态
+  GET /api/kgm/key?start=&len=      按字节区间返回酷狗公钥表（分片解密用）
+  GET /api/nc/search?s=关键词        网易云音乐搜索中转
+  GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
+
+用法：
+    python3 server.py                  # 默认 0.0.0.0:8000
+    python3 server.py 8080             # 指定端口
+    python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
+
+说明：除密钥表下发与歌词中转外，本站所有解密与转换都在用户浏览器本地完成，
+      服务器不接收、不存储任何用户文件。
+"""
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+KEY_XZ = os.path.join(BASE_DIR, "assets", "kugou_key.xz")
+KEY_BIN = os.path.join(BASE_DIR, "assets", "kugou_key.bin")
+KEY_SIZE = 73155904  # 解压后大小（73,155,904 字节 = 1170494464 / 16）
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+_key_state = {"expanding": False}
+
+
+def expand_key(force=False):
+    """把 kugou_key.xz 解压为原始密钥表（惰性，仅一次）"""
+    if not force and os.path.exists(KEY_BIN) and os.path.getsize(KEY_BIN) >= KEY_SIZE:
+        return True
+    if not os.path.exists(KEY_XZ):
+        return False
+    if _key_state["expanding"]:
+        return False
+    _key_state["expanding"] = True
+    try:
+        import lzma
+        sys.stderr.write("[key] 正在解压酷狗密钥表（约 70 MB，仅首次需要）...\n")
+        data = lzma.open(KEY_XZ, "rb").read()
+        tmp = KEY_BIN + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, KEY_BIN)
+        sys.stderr.write("[key] 完成：%d 字节，已缓存到 assets/kugou_key.bin\n" % len(data))
+        return True
+    except Exception as e:
+        sys.stderr.write("[key] 解压失败：%s\n" % e)
+        return False
+    finally:
+        _key_state["expanding"] = False
+
+
+def http_get(url, timeout=15):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Referer": "https://music.163.com/",
+        "Cookie": "appver=2.0.2",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 128  # 浏览器会并发拉取多个静态资源，放宽监听队列
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=BASE_DIR, **kwargs)
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+
+    # ---------- 缓存策略 ----------
+    # 边缘（Cloudflare）与浏览器都会遵循这里的 Cache-Control：
+    #   /api/*    → 不缓存（密钥分片、歌词检索都要实时）
+    #   /assets/* → 长缓存（文件名带 ?v= 版本号，更新时改版本即可）
+    #   HTML      → 短缓存 2 分钟：静态站点，重复访问直接命中边缘，更新也能很快生效
+    def cache_policy(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/"):
+            return "no-store"
+        if path.startswith("/assets/"):
+            return "public, max-age=604800"
+        if path in ("", "/") or path.endswith(".html"):
+            return "public, max-age=120"
+        return "public, max-age=3600"
+
+    def end_headers(self):
+        if not getattr(self, "_cache_set", False):
+            self.send_header("Cache-Control", self.cache_policy())
+        self.send_header("Access-Control-Allow-Origin", "*")
+        super().end_headers()
+
+    # ---------- 响应工具 ----------
+    def send_json(self, obj, status=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self._cache_set = True
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_binary(self, data, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self._cache_set = True
+        self.end_headers()
+        self.wfile.write(data)
+
+    # ---------- 路由 ----------
+    def do_HEAD(self):
+        # 接口路径用 GET 处理，HEAD 也要给出正确响应（供探针 / CDN 校验使用）
+        if urllib.parse.urlparse(self.path).path.startswith("/api/"):
+            self._cache_set = True
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self._cache_set = False
+        super().do_HEAD()
+
+    def do_GET(self):
+        self._cache_set = False
+        parsed = urllib.parse.urlparse(self.path)
+        path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
+
+        if path == "/api/ping":
+            self.send_json({
+                "ok": True,
+                "server": "toolbox",
+                "kgmKey": os.path.exists(KEY_BIN) or os.path.exists(KEY_XZ),
+                "kgmKeyExpanded": os.path.exists(KEY_BIN),
+                "kgmKeySize": KEY_SIZE,
+                "lyricsProxy": True,
+            })
+            return
+
+        if path == "/api/kgm/status":
+            self.send_json({
+                "hasXz": os.path.exists(KEY_XZ),
+                "expanded": os.path.exists(KEY_BIN),
+                "expanding": _key_state["expanding"],
+                "size": KEY_SIZE,
+            })
+            return
+
+        if path == "/api/kgm/key":
+            if not os.path.exists(KEY_XZ):
+                self.send_json({"error": "服务器未提供酷狗密钥表（assets/kugou_key.xz 缺失）"}, 404)
+                return
+            if not os.path.exists(KEY_BIN) and not expand_key():
+                self.send_json({"error": "密钥表解压失败或正在进行中，请稍后重试"}, 503)
+                return
+            try:
+                start = int((qs.get("start") or ["0"])[0])
+                length = int((qs.get("len") or ["1048576"])[0])
+            except ValueError:
+                self.send_json({"error": "参数错误"}, 400)
+                return
+            total = os.path.getsize(KEY_BIN)
+            if start < 0 or start >= total:
+                self.send_json({"error": "区间越界"}, 416)
+                return
+            length = max(1, min(length, total - start, 8 * 1024 * 1024))
+            with open(KEY_BIN, "rb") as f:
+                f.seek(start)
+                self.send_binary(f.read(length))
+            return
+
+        if path == "/api/nc/search":
+            keyword = (qs.get("s") or [""])[0].strip()
+            if not keyword:
+                self.send_json({"error": "缺少关键词"}, 400)
+                return
+            url = ("https://music.163.com/api/search/get/web?csrf_token="
+                   "&s=%s&type=1&offset=0&limit=15" % urllib.parse.quote(keyword))
+            self.proxy_json(url)
+            return
+
+        if path == "/api/nc/lyric":
+            song_id = (qs.get("id") or [""])[0].strip()
+            if not song_id.isdigit():
+                self.send_json({"error": "歌曲 ID 无效"}, 400)
+                return
+            url = "https://music.163.com/api/song/lyric?id=%s&lv=1&kv=1&tlyric=1&tv=-1" % song_id
+            self.proxy_json(url)
+            return
+
+        super().do_GET()
+
+    def proxy_json(self, url):
+        try:
+            data = http_get(url)
+        except Exception as e:
+            self.send_json({"error": "上游请求失败：%s" % e}, 502)
+            return
+        try:
+            self.send_json(json.loads(data.decode("utf-8")))
+        except Exception:
+            self.send_json({"error": "上游返回内容异常"}, 502)
+
+
+def main():
+    if "--expand-key" in sys.argv:
+        ok = expand_key(force=True)
+        print("密钥表就绪：%s" % KEY_BIN if ok else "密钥表处理失败（请确认 assets/kugou_key.xz 存在）")
+        return
+
+    port = 8000
+    for a in sys.argv[1:]:
+        if a.isdigit():
+            port = int(a)
+    expand_key()  # 启动时预热，避免首个用户等待
+    server = Server(("0.0.0.0", port), Handler)
+    print("本地工具箱已启动: http://0.0.0.0:%d" % port)
+    print("静态目录: %s" % BASE_DIR)
+    print("密钥表: %s" % ("已就绪" if os.path.exists(KEY_BIN) else "缺失（酷狗新版格式将不可用）"))
+    print("按 Ctrl+C 停止")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n已停止")
+
+
+if __name__ == "__main__":
+    main()
