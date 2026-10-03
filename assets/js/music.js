@@ -262,7 +262,7 @@
     return concatBytes([head, payload]);
   }
 
-  function preservedId3Frames(u8) {
+  function preservedId3Frames(u8, replacingLyrics) {
     var frames = [];
     if (u8.length < 10 || u8[0] !== 0x49 || u8[1] !== 0x44 || u8[2] !== 0x33) return frames;
     var major = u8[3];
@@ -286,8 +286,10 @@
       if (id === 'APIC' && major === 4) {
         var converted = convertApicToId3v23(payload);
         if (converted) frames.push(id3Frame('APIC', converted));
-      } else if (major === 3 && !/^(?:TIT2|TPE1|TALB|USLT|SYLT)$/.test(id) && !(id === 'TXXX' && id3TxxxDescription(payload) === 'LYRICS')) {
-        frames.push(u8.slice(pos, pos + 10 + size));
+      } else if (major === 3) {
+        var lyricFrame = /^(?:USLT|SYLT)$/.test(id) || (id === 'TXXX' && id3TxxxDescription(payload) === 'LYRICS');
+        var replacedFrame = /^(?:TIT2|TPE1|TALB)$/.test(id) || (replacingLyrics && lyricFrame);
+        if (!replacedFrame) frames.push(u8.slice(pos, pos + 10 + size));
       }
       pos += 10 + size;
     }
@@ -351,6 +353,24 @@
     return id3Frame(id, concatBytes([new Uint8Array([1]), utf16Le(value, true)]));
   }
 
+  function normalizeCoverMime(mime, bytes) {
+    if (/^image\/(?:jpeg|png|gif|webp)$/i.test(String(mime || ''))) return String(mime).toLowerCase();
+    if (bytes && bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+    if (bytes && bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+    if (bytes && bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+    if (bytes && bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    return 'image/jpeg';
+  }
+
+  function makeApicFrame(imageBytes, mime) {
+    var description = utf16Le('', true);
+    var payload = concatBytes([
+      new Uint8Array([1]), utf8(normalizeCoverMime(mime, imageBytes)), new Uint8Array([0, 3]),
+      description, new Uint8Array([0, 0]), imageBytes
+    ]);
+    return id3Frame('APIC', payload);
+  }
+
   function parseLrcEntries(lyric) {
     var entries = [];
     String(lyric || '').split(/\r?\n/).forEach(function (line) {
@@ -385,22 +405,28 @@
     return u8.slice(end);
   }
 
-  function embedMp3Lyrics(u8, item, lyric) {
+  function embedMp3Lyrics(u8, item, lyric, coverBytes, coverMime) {
     var r = item.result;
-    var plain = String(lyric || '').split(/\r?\n/).filter(function (line) {
-      return !/^\s*\[(?:ar|ti|al|by|re|ve|offset):/i.test(line);
-    }).map(function (line) { return line.replace(/\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/g, '').trim(); }).filter(Boolean).join('\n');
-    var uslt = concatBytes([new Uint8Array([1, 0x65, 0x6e, 0x67, 0, 0]), utf16Le(plain, true)]);
-    var txxx = concatBytes([new Uint8Array([1]), utf16Le('LYRICS', true), new Uint8Array([0, 0]), utf16Le(lyric, true)]);
-    var frames = preservedId3Frames(u8).concat([
+    lyric = String(lyric || '');
+    var frames = preservedId3Frames(u8, !!lyric).concat([
       utf16TextFrame('TIT2', r.name),
       utf16TextFrame('TPE1', r.artists),
-      utf16TextFrame('TALB', r.album),
-      id3Frame('USLT', uslt),
-      id3Frame('TXXX', txxx)
+      utf16TextFrame('TALB', r.album)
     ]);
-    var synced = makeSyltFrame(lyric);
-    if (synced) frames.push(synced);
+    if (lyric) {
+      var plain = lyric.split(/\r?\n/).filter(function (line) {
+        return !/^\s*\[(?:ar|ti|al|by|re|ve|offset):/i.test(line);
+      }).map(function (line) { return line.replace(/\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/g, '').trim(); }).filter(Boolean).join('\n');
+      var uslt = concatBytes([new Uint8Array([1, 0x65, 0x6e, 0x67, 0, 0]), utf16Le(plain, true)]);
+      var txxx = concatBytes([new Uint8Array([1]), utf16Le('LYRICS', true), new Uint8Array([0, 0]), utf16Le(lyric, true)]);
+      frames.push(id3Frame('USLT', uslt), id3Frame('TXXX', txxx));
+      var synced = makeSyltFrame(lyric);
+      if (synced) frames.push(synced);
+    }
+    var hasApic = frames.some(function (frame) {
+      return frame.length >= 4 && frame[0] === 0x41 && frame[1] === 0x50 && frame[2] === 0x49 && frame[3] === 0x43;
+    });
+    if (!hasApic && coverBytes && coverBytes.length) frames.push(makeApicFrame(coverBytes, coverMime));
     var body = concatBytes(frames);
     var header = new Uint8Array(10);
     header.set([0x49, 0x44, 0x33, 3, 0, 0], 0);
@@ -434,12 +460,13 @@
       }
       if (offset !== existing.length) throw new Error('FLAC 歌曲标签长度异常');
     }
-    var updates = { TITLE: r.name || '', ARTIST: r.artists || '', ALBUM: r.album || '', LYRICS: String(lyric || '') };
+    var updates = { TITLE: r.name || '', ARTIST: r.artists || '', ALBUM: r.album || '' };
+    if (String(lyric || '').trim()) updates.LYRICS = String(lyric);
     comments = comments.filter(function (comment) {
       var eq = comment.indexOf('=');
       if (eq < 0) return true;
       var key = comment.slice(0, eq).toUpperCase();
-      return !Object.prototype.hasOwnProperty.call(updates, key) || (!updates[key] && key !== 'LYRICS');
+      return !Object.prototype.hasOwnProperty.call(updates, key) || !updates[key];
     });
     Object.keys(updates).forEach(function (key) {
       if (updates[key]) comments.push(key + '=' + updates[key]);
@@ -452,11 +479,24 @@
     return concatBytes(parts);
   }
 
-  function embedFlacLyrics(u8, item, lyric) {
+  function writeBe32(n) {
+    return new Uint8Array([(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff]);
+  }
+
+  function makeFlacPicture(imageBytes, mime) {
+    var mimeBytes = utf8(normalizeCoverMime(mime, imageBytes));
+    return concatBytes([
+      writeBe32(3), writeBe32(mimeBytes.length), mimeBytes,
+      writeBe32(0), writeBe32(0), writeBe32(0), writeBe32(0), writeBe32(0),
+      writeBe32(imageBytes.length), imageBytes
+    ]);
+  }
+
+  function embedFlacLyrics(u8, item, lyric, coverBytes, coverMime) {
     if (u8.length < 4 || u8[0] !== 0x66 || u8[1] !== 0x4c || u8[2] !== 0x61 || u8[3] !== 0x43) {
       throw new Error('不是有效的 FLAC 文件');
     }
-    var blocks = [], offset = 4, foundComment = false, lastBlockSeen = false;
+    var blocks = [], offset = 4, foundComment = false, foundPicture = false, lastBlockSeen = false;
     while (offset + 4 <= u8.length) {
       var h = u8[offset], type = h & 0x7f, last = !!(h & 0x80);
       var len = (u8[offset + 1] << 16) | (u8[offset + 2] << 8) | u8[offset + 3];
@@ -465,6 +505,7 @@
         if (!foundComment) blocks.push({ type: 4, data: makeVorbisComment(item, lyric, u8.slice(offset + 4, offset + 4 + len)) });
         foundComment = true;
       } else {
+        if (type === 6) foundPicture = true;
         blocks.push({ type: type, data: u8.slice(offset + 4, offset + 4 + len) });
       }
       offset += 4 + len;
@@ -472,6 +513,7 @@
     }
     if (!lastBlockSeen) throw new Error('FLAC 元数据块缺少结束标记');
     if (!foundComment) blocks.push({ type: 4, data: makeVorbisComment(item, lyric) });
+    if (!foundPicture && coverBytes && coverBytes.length) blocks.push({ type: 6, data: makeFlacPicture(coverBytes, coverMime) });
     var out = [new Uint8Array([0x66, 0x4c, 0x61, 0x43])];
     blocks.forEach(function (block, i) {
       var h = new Uint8Array(4), len = block.data.length;
@@ -490,16 +532,24 @@
       notifyFn('等待这首歌的歌词匹配完成…');
       await item.lyricPromise;
     }
-    if ((forceEmbed || embedLyricsEnabled()) && item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac')) {
-      var bytes = new Uint8Array(await blob.arrayBuffer());
-      blob = item.result.format === 'mp3' ? embedMp3Lyrics(bytes, item, item.lyric) : embedFlacLyrics(bytes, item, item.lyric);
-    }
+    blob = await addExportMetadata(item, (forceEmbed || embedLyricsEnabled()) ? item.lyric : '');
     TB.download(blob, outputFilename(item));
   }
 
-  window.MusicDecrypt.embedLyrics = function (format, bytes, item, lyric) {
-    if (format === 'mp3') return embedMp3Lyrics(bytes, item, lyric);
-    if (format === 'flac') return embedFlacLyrics(bytes, item, lyric);
+  async function addExportMetadata(item, lyric) {
+    var result = item.result, format = result.format;
+    if (format !== 'mp3' && format !== 'flac') return result.audioBlob;
+    var coverBlob = result.coverExternal ? result.coverBlob : null;
+    if (!lyric && !coverBlob) return result.audioBlob;
+    var coverBytes = coverBlob ? new Uint8Array(await coverBlob.arrayBuffer()) : null;
+    var audioBytes = new Uint8Array(await result.audioBlob.arrayBuffer());
+    if (format === 'mp3') return embedMp3Lyrics(audioBytes, item, lyric || '', coverBytes, coverBlob && coverBlob.type);
+    return embedFlacLyrics(audioBytes, item, lyric || '', coverBytes, coverBlob && coverBlob.type);
+  }
+
+  window.MusicDecrypt.embedLyrics = function (format, bytes, item, lyric, coverBytes, coverMime) {
+    if (format === 'mp3') return embedMp3Lyrics(bytes, item, lyric, coverBytes, coverMime);
+    if (format === 'flac') return embedFlacLyrics(bytes, item, lyric, coverBytes, coverMime);
     throw new Error('只有 MP3 和 FLAC 支持内嵌歌词');
   };
 
@@ -770,11 +820,7 @@
       var entries = [];
       var usedNames = Object.create(null);
       for (var i = 0; i < ok.length; i++) {
-        var item = ok[i], blob = item.result.audioBlob;
-        if (embedLyricsEnabled() && item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac')) {
-          var bytes = new Uint8Array(await blob.arrayBuffer());
-          blob = item.result.format === 'mp3' ? embedMp3Lyrics(bytes, item, item.lyric) : embedFlacLyrics(bytes, item, item.lyric);
-        }
+        var item = ok[i], blob = await addExportMetadata(item, embedLyricsEnabled() ? item.lyric : '');
         entries.push({ name: uniqueFilename(outputFilename(item), usedNames), blob: blob });
       }
       var zip = await TB.zip(entries);

@@ -1,7 +1,6 @@
 /* 歌词工具：
- * 1. 歌词自动匹配 - 双歌词源：
- *    a. 本站中转（server.py 提供的 /api/nc/* 网易云接口，需用自带服务器启动）
- *    b. LRCLIB 开放歌词库（浏览器直连，纯静态托管时的兜底）
+ * 1. 歌词自动匹配 - LRCLIB 优先（搜索直接返回歌词），本站网易云中转兜底；
+ *    单曲手动搜索仍以网易云结果优先展示。
  * 2. LRC 时间轴偏移 / 去时间轴 / 下载
  */
 (function () {
@@ -18,7 +17,11 @@
   var fileNameSpan = document.getElementById('lyrics-file-name');
 
   var proxyAvailable = null; // null=未检测
+  var proxyPromise = null;
   var matchCache = {};
+  var matchPending = {};
+  var neteaseSearchTail = Promise.resolve();
+  var neteasePausedUntil = 0;
 
   function setStatus(msg, isErr) {
     status.textContent = msg;
@@ -27,14 +30,19 @@
 
   // 检测本站是否由 server.py 提供服务（支持 /api/nc/* 中转）
   async function detectProxy() {
-    if (proxyAvailable !== null) return proxyAvailable;
-    try {
-      var r = await fetch('api/ping', { method: 'GET' });
-      proxyAvailable = r.ok && (await r.json()).ok === true;
-    } catch (e) {
-      proxyAvailable = false;
-    }
-    return proxyAvailable;
+    if (proxyAvailable !== null) return Promise.resolve(proxyAvailable);
+    if (proxyPromise) return proxyPromise;
+    proxyPromise = (async function () {
+      try {
+        var r = await fetch('api/ping', { method: 'GET' });
+        proxyAvailable = r.ok && (await r.json()).ok === true;
+      } catch (e) {
+        proxyAvailable = false;
+      }
+      return proxyAvailable;
+    })();
+    try { return await proxyPromise; }
+    finally { proxyPromise = null; }
   }
 
   function escapeHtml(s) {
@@ -47,9 +55,13 @@
   async function searchNetease(song, artist) {
     var keyword = artist ? song + ' ' + artist : song;
     var r = await fetch('api/nc/search?s=' + encodeURIComponent(keyword));
-    if (!r.ok) throw new Error(r.status === 429 ? '网易云暂时限流' : '中转搜索失败');
+    if (!r.ok) {
+      if (r.status === 429) neteasePausedUntil = Date.now() + 60000;
+      throw new Error(r.status === 429 ? '网易云暂时限流' : '中转搜索失败');
+    }
     var data = await r.json();
     if (data.code && data.code !== 200) {
+      if (data.code === 405 || data.code === 429) neteasePausedUntil = Date.now() + 60000;
       throw new Error('网易云暂时限流：' + (data.msg || data.message || ('HTTP ' + data.code)));
     }
     var songs = (data.result && data.result.songs) || [];
@@ -83,7 +95,7 @@
     if (!r.ok) throw new Error('LRCLIB 搜索失败（HTTP ' + r.status + '）');
     var data = await r.json();
     if (!Array.isArray(data)) throw new Error('LRCLIB 返回内容异常');
-    return data.slice(0, 10).map(function (s) {
+    return data.slice(0, 20).map(function (s) {
       return {
         source: 'lrclib',
         id: s.id,
@@ -203,32 +215,98 @@
     return all;
   }
 
+  function normalizeMatchText(value) {
+    var text = String(value || '').toLowerCase();
+    try { text = text.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { /* Older engines may not implement normalize. */ }
+    return text.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+      .replace(/\b(?:remix|mix|edit|featuring|feat|ft)\b.*$/, ' ')
+      .replace(/\b(?:remaster(?:ed)?|version|radio edit|single edit|album edit|official audio|lyrics)\b/g, ' ')
+      .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ').trim();
+  }
+
+  function textSimilarity(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (a.indexOf(b) === 0 || b.indexOf(a) === 0) return Math.min(a.length, b.length) / Math.max(a.length, b.length);
+    var left = a.split(/\s+/), right = b.split(/\s+/), leftSet = {}, rightSet = {}, common = 0;
+    left.forEach(function (word) { leftSet[word] = true; });
+    right.forEach(function (word) { rightSet[word] = true; });
+    left.forEach(function (word) { if (rightSet[word]) common++; });
+    var total = Object.keys(leftSet).length + Object.keys(rightSet).length - common;
+    return total ? common / total : 0;
+  }
+
+  function candidateScore(song, artist, item) {
+    var titleScore = textSimilarity(normalizeMatchText(song), normalizeMatchText(item.name));
+    var artistScore = artist ? textSimilarity(normalizeMatchText(artist), normalizeMatchText(item.artist)) : 1;
+    return { title: titleScore, total: titleScore * 0.82 + artistScore * 0.18 };
+  }
+
+  function bestLrclibCandidate(song, artist, candidates) {
+    var ranked = [];
+    (candidates || []).forEach(function (item) {
+      var lyric = item._raw && (item._raw.syncedLyrics || item._raw.plainLyrics);
+      if (!lyric || !lyric.trim()) return;
+      var score = candidateScore(song, artist, item);
+      if (score.title < 0.5 || score.total < 0.55) return;
+      ranked.push({ item: item, lyric: lyric, score: score.total });
+    });
+    ranked.sort(function (a, b) { return b.score - a.score; });
+    return ranked[0] || null;
+  }
+
+  function searchNeteaseForMatch(song, artist) {
+    var task = neteaseSearchTail.then(function () {
+      if (Date.now() < neteasePausedUntil) throw new Error('网易云暂时限流，正在冷却；已优先尝试 LRCLIB');
+      return searchNetease(song, artist);
+    });
+    neteaseSearchTail = task.then(function () { return null; }, function () { return null; });
+    return task;
+  }
+
   async function matchLyric(song, artist) {
-    var cacheKey = String(song || '').trim().toLowerCase() + '|' + String(artist || '').trim().toLowerCase();
+    var cacheKey = normalizeMatchText(song) + '|' + normalizeMatchText(artist);
     if (matchCache[cacheKey]) return matchCache[cacheKey];
-    var candidates = [], errors = [], sources = [];
-    if (await detectProxy()) sources.push({ name: '网易云', search: function () { return searchNetease(song, artist); } });
-    sources.push({ name: 'LRCLIB', search: function () { return searchLrclib(song, artist); } });
-    for (var s = 0; s < sources.length; s++) {
-      var found;
-      try { found = await sources[s].search(); }
-      catch (searchError) { errors.push(sources[s].name + '搜索失败：' + searchError.message); continue; }
-      candidates = candidates.concat(found || []);
-      for (var i = 0; i < found.length; i++) {
+    if (matchPending[cacheKey]) return matchPending[cacheKey];
+    matchPending[cacheKey] = (async function () {
+      var candidates = [], errors = [];
+
+      // LRCLIB returns lyrics with its search results, so a successful match
+      // takes one request instead of a search plus a separate lyric request.
+      try {
+        var lrclib = await searchLrclib(song, artist);
+        candidates = candidates.concat(lrclib || []);
+        var best = bestLrclibCandidate(song, artist, lrclib);
+        if (best) return { item: best.item, lyric: best.lyric, candidates: candidates, source: 'lrclib' };
+      } catch (searchError) { errors.push('LRCLIB 搜索失败：' + searchError.message); }
+
+      // Only ask NetEase when LRCLIB has no credible lyric. Queue this fallback
+      // and open a 60-second circuit after an upstream 429/405 response.
+      if (await detectProxy() && Date.now() >= neteasePausedUntil) {
         try {
-          var lyric = await fetchLyricText(found[i]);
-          if (lyric && lyric.trim()) {
-            var matched = { item: found[i], lyric: lyric, candidates: candidates };
-            matchCache[cacheKey] = matched;
-            return matched;
+          var netease = await searchNeteaseForMatch(song, artist);
+          candidates = candidates.concat(netease || []);
+          netease.sort(function (a, b) {
+            return candidateScore(song, artist, b).total - candidateScore(song, artist, a).total;
+          });
+          for (var i = 0; i < netease.length; i++) {
+            try {
+              var lyric = await fetchLyricText(netease[i]);
+              if (lyric && lyric.trim()) return { item: netease[i], lyric: lyric, candidates: candidates, source: 'netease' };
+            } catch (fetchError) { errors.push('网易云歌词读取失败：' + fetchError.message); }
           }
-        } catch (fetchError) { errors.push(sources[s].name + '歌词读取失败：' + fetchError.message); }
+        } catch (searchError) { errors.push('网易云搜索失败：' + searchError.message); }
       }
-    }
-    if (!candidates.length && errors.length === sources.length) throw new Error(errors.join('；'));
-    var empty = { item: candidates[0] || null, lyric: '', candidates: candidates };
-    matchCache[cacheKey] = empty;
-    return empty;
+
+      if (!candidates.length && errors.length) throw new Error(errors.join('；'));
+      return { item: candidates[0] || null, lyric: '', candidates: candidates };
+    })().then(function (matched) {
+      matchCache[cacheKey] = matched;
+      return matched;
+    }).finally(function () {
+      delete matchPending[cacheKey];
+    });
+    return matchPending[cacheKey];
   }
 
   async function fetchLyricText(item) {

@@ -174,7 +174,8 @@
       format: format,
       source: 'NCM',
       audioBlob: new Blob([audio], { type: mime }),
-      coverBlob: coverBlob
+      coverBlob: coverBlob,
+      coverExternal: !!coverBlob
     };
   }
 

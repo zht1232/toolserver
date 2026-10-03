@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩与 AI 去水印、格式转换及开发者工具。仅主动运行服务器 AI 去水印时会发送所选图片和遮罩。">
-<link rel="stylesheet" href="assets/style.css?v=20261003-10">
+<link rel="stylesheet" href="assets/style.css?v=20261003-11">
 </head>
 <body>
 <div class="app">
@@ -98,7 +98,7 @@
             </select>
             <span class="mono muted">每首解密结果还可以单独改名</span>
           </div>
-          <div class="note">每首结果都可上传自己的 LRC / TXT 覆盖自动匹配；单曲下载会等本曲匹配完成，打包 ZIP 会等当前匹配完成。MP3 / FLAC 默认内嵌已载入歌词。MP3 写入 ID3v2.3 USLT（纯文本）和 SYLT（时间戳）；播放器是否显示仍取决于版本。Windows 11 Media Player 没有内置歌词显示面板时，请下载旁边的 LRC / TXT 文件并使用支持歌词的播放器。</div>
+          <div class="note">每首结果都可上传自己的 LRC / TXT 覆盖自动匹配；单曲下载会等本曲匹配完成，打包 ZIP 会等当前匹配完成。MP3 / FLAC 默认内嵌已载入歌词；NCM 解密出的 MP3 / FLAC 封面也会写入音频封面标签，即使关闭歌词内嵌仍保留。MP3 写入 ID3v2.3 USLT（纯文本）和 SYLT（时间戳）；播放器是否显示仍取决于版本。Windows 11 Media Player 没有内置歌词显示面板时，请下载旁边的 LRC / TXT 文件并使用支持歌词的播放器。</div>
         </div>
 
         <div id="music-decrypt-panel">
@@ -851,29 +851,29 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261003-10"></script>
-<script src="assets/js/zip.js?v=20261003-10"></script>
-<script src="assets/js/music.js?v=20261003-10"></script>
-<script src="assets/js/ncm.js?v=20261003-10"></script>
-<script src="assets/js/kgm.js?v=20261003-10"></script>
-<script src="assets/js/kwm.js?v=20261003-10"></script>
-<script src="assets/js/qmc.js?v=20261003-10"></script>
-<script src="assets/js/xm.js?v=20261003-10"></script>
-<script src="assets/js/lyrics.js?v=20261003-10"></script>
-<script src="assets/js/syncer.js?v=20261003-10"></script>
-<script src="assets/js/watermark-local.js?v=20261003-10"></script>
-<script src="assets/js/tools.js?v=20261003-10"></script>
-<script src="assets/js/text.js?v=20261003-10"></script>
-<script src="assets/js/color.js?v=20261003-10"></script>
-<script src="assets/js/csvjson.js?v=20261003-10"></script>
-<script src="assets/js/markdown.js?v=20261003-10"></script>
-<script src="assets/js/regex.js?v=20261003-10"></script>
-<script src="assets/js/jwt.js?v=20261003-10"></script>
-<script src="assets/js/cron.js?v=20261003-10"></script>
-<script src="assets/js/radix.js?v=20261003-10"></script>
-<script src="assets/js/generator.js?v=20261003-10"></script>
-<script src="assets/js/diff.js?v=20261003-10"></script>
-<script src="assets/js/reference.js?v=20261003-10"></script>
-<script src="assets/js/feedback.js?v=20261003-10"></script>
+<script src="assets/js/main.js?v=20261003-11"></script>
+<script src="assets/js/zip.js?v=20261003-11"></script>
+<script src="assets/js/music.js?v=20261003-11"></script>
+<script src="assets/js/ncm.js?v=20261003-11"></script>
+<script src="assets/js/kgm.js?v=20261003-11"></script>
+<script src="assets/js/kwm.js?v=20261003-11"></script>
+<script src="assets/js/qmc.js?v=20261003-11"></script>
+<script src="assets/js/xm.js?v=20261003-11"></script>
+<script src="assets/js/lyrics.js?v=20261003-11"></script>
+<script src="assets/js/syncer.js?v=20261003-11"></script>
+<script src="assets/js/watermark-local.js?v=20261003-11"></script>
+<script src="assets/js/tools.js?v=20261003-11"></script>
+<script src="assets/js/text.js?v=20261003-11"></script>
+<script src="assets/js/color.js?v=20261003-11"></script>
+<script src="assets/js/csvjson.js?v=20261003-11"></script>
+<script src="assets/js/markdown.js?v=20261003-11"></script>
+<script src="assets/js/regex.js?v=20261003-11"></script>
+<script src="assets/js/jwt.js?v=20261003-11"></script>
+<script src="assets/js/cron.js?v=20261003-11"></script>
+<script src="assets/js/radix.js?v=20261003-11"></script>
+<script src="assets/js/generator.js?v=20261003-11"></script>
+<script src="assets/js/diff.js?v=20261003-11"></script>
+<script src="assets/js/reference.js?v=20261003-11"></script>
+<script src="assets/js/feedback.js?v=20261003-11"></script>
 </body>
 </html>
