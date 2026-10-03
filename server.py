@@ -67,7 +67,7 @@ AI_MODEL_FILES = {
     "detector": (os.path.join(AI_MODEL_DIR, "watermark_detector.onnx"), "application/octet-stream"),
     "inpainter": (os.path.join(AI_MODEL_DIR, "migan_pipeline_v2.onnx"), "application/octet-stream"),
 }
-AI_RUNTIME_DIR = os.path.join(AI_MODEL_DIR, "onnxruntime-web-1.30.0", "dist")
+AI_RUNTIME_DIR = os.path.join(AI_MODEL_DIR, "onnxruntime-web-1.30.0")
 AI_RUNTIME_FILES = {
     "ort.webgpu.min.js": (os.path.join(AI_RUNTIME_DIR, "ort.webgpu.min.js"), "application/javascript; charset=utf-8"),
     "ort-wasm-simd-threaded.jsep.mjs": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.mjs"), "text/javascript; charset=utf-8"),
