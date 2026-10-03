@@ -22,9 +22,12 @@
     var wmButton = document.getElementById('img-watermark');
     var wmPanel = document.getElementById('img-watermark-panel');
     var wmCanvas = document.getElementById('img-wm-canvas');
+    var wmBrush = document.getElementById('img-wm-brush');
+    var wmStatus = document.getElementById('img-wm-status');
     var srcFile = null;
-    var srcObjectUrl = '', outObjectUrl = '';
-    var wmStart = null, wmRect = null, wmDragging = false;
+    var srcObjectUrl = '', outObjectUrl = '', wmCanvasFile = null;
+    var wmMaskCanvas = document.createElement('canvas');
+    var wmStrokes = [], wmCurrentStroke = null, wmDrawing = false;
 
     function loadFile(f) {
       if (!f || !/^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)) { alert('请选择 PNG、JPEG、WebP、GIF 或 BMP 图片。'); return; }
@@ -112,10 +115,17 @@
 
     function syncWatermarkCanvas() {
       if (!wmCanvas || !srcImg.naturalWidth) return;
+      if (wmCanvasFile === srcFile && wmCanvas.width === srcImg.naturalWidth && wmCanvas.height === srcImg.naturalHeight) {
+        drawWatermarkCanvas();
+        return;
+      }
       wmCanvas.width = srcImg.naturalWidth;
       wmCanvas.height = srcImg.naturalHeight;
-      wmCanvas.getContext('2d').drawImage(srcImg, 0, 0);
-      wmRect = null;
+      wmMaskCanvas.width = srcImg.naturalWidth;
+      wmMaskCanvas.height = srcImg.naturalHeight;
+      wmCanvasFile = srcFile;
+      wmStrokes = [];
+      drawWatermarkCanvas();
     }
 
     function canvasPoint(e) {
@@ -126,49 +136,111 @@
       };
     }
 
-    function drawSelection() {
+    function drawStroke(ctx, stroke, color) {
+      if (!stroke.points.length) return;
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.lineWidth = stroke.width;
+      if (stroke.points.length === 1) {
+        ctx.beginPath(); ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.width / 2, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+        for (var i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawWatermarkCanvas() {
       if (!wmCanvas || !srcImg.naturalWidth) return;
-      var ctx = wmCanvas.getContext('2d');
+      var ctx = wmCanvas.getContext('2d'), maskCtx = wmMaskCanvas.getContext('2d');
+      ctx.clearRect(0, 0, wmCanvas.width, wmCanvas.height);
       ctx.drawImage(srcImg, 0, 0);
-      if (!wmRect) return;
-      ctx.save(); ctx.setLineDash([8, 5]); ctx.lineWidth = Math.max(2, wmCanvas.width / 500);
-      ctx.strokeStyle = '#5EEAD4'; ctx.fillStyle = 'rgba(94,234,212,.16)';
-      ctx.fillRect(wmRect.x, wmRect.y, wmRect.w, wmRect.h); ctx.strokeRect(wmRect.x, wmRect.y, wmRect.w, wmRect.h); ctx.restore();
+      maskCtx.fillStyle = '#ffffff'; maskCtx.fillRect(0, 0, wmMaskCanvas.width, wmMaskCanvas.height);
+      wmStrokes.forEach(function (stroke) {
+        drawStroke(ctx, stroke, 'rgba(255, 45, 96, 0.55)');
+        drawStroke(maskCtx, stroke, '#000000');
+      });
     }
 
     if (wmButton) wmButton.addEventListener('click', function () {
       if (!srcFile) { alert('请先载入图片。'); return; }
       wmPanel.classList.remove('hidden');
+      if (srcImg.naturalWidth * srcImg.naturalHeight > 12000000) {
+        if (wmStatus) wmStatus.textContent = '图片超过 1200 万像素；请先用本地压缩并重新上传较小版本。';
+        wmPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
       syncWatermarkCanvas();
+      if (wmStatus) {
+        wmStatus.textContent = srcFile.size > 20 * 1024 * 1024 ? 'AI 修补单张限制为 20 MiB，请先压缩并重新上传较小图片。' : '正在检查服务器 AI 模型…';
+        fetch('api/ping').then(function (r) { return r.json(); }).then(function (info) {
+          wmStatus.textContent = info.watermarkAi && info.watermarkAi.ready ?
+            'AI 模型已就绪。涂抹水印区域后，点击提交；图片和遮罩会临时发送到站点服务器处理。' :
+            ((info.watermarkAi && info.watermarkAi.reason) || '服务器 AI 模型尚未就绪。');
+        }).catch(function () { wmStatus.textContent = '无法连接服务器 AI 接口，请通过本站 HTTPS 地址使用。'; });
+      }
       wmPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     if (wmCanvas) {
       wmCanvas.addEventListener('pointerdown', function (e) {
-        wmDragging = true; wmStart = canvasPoint(e); wmRect = { x: wmStart.x, y: wmStart.y, w: 0, h: 0 }; wmCanvas.setPointerCapture(e.pointerId);
+        if (!srcImg.naturalWidth || e.button !== 0) return;
+        wmDrawing = true;
+        wmCurrentStroke = { points: [canvasPoint(e)], width: parseInt(wmBrush.value, 10) };
+        wmStrokes.push(wmCurrentStroke);
+        wmCanvas.setPointerCapture(e.pointerId);
+        drawWatermarkCanvas();
       });
       wmCanvas.addEventListener('pointermove', function (e) {
-        if (!wmDragging) return;
-        var p = canvasPoint(e); wmRect = { x: Math.min(wmStart.x, p.x), y: Math.min(wmStart.y, p.y), w: Math.abs(p.x - wmStart.x), h: Math.abs(p.y - wmStart.y) }; drawSelection();
+        if (!wmDrawing || !wmCurrentStroke) return;
+        wmCurrentStroke.points.push(canvasPoint(e));
+        drawWatermarkCanvas();
       });
-      wmCanvas.addEventListener('pointerup', function () { wmDragging = false; });
+      function stopStroke() { wmDrawing = false; wmCurrentStroke = null; }
+      wmCanvas.addEventListener('pointerup', stopStroke);
+      wmCanvas.addEventListener('pointercancel', stopStroke);
     }
-    document.getElementById('img-wm-apply').addEventListener('click', function () {
-      if (!srcFile || !wmRect || wmRect.w < 2 || wmRect.h < 2) { alert('请先框选水印区域。'); return; }
-      var ctx = wmCanvas.getContext('2d'), r = wmRect, pixels = ctx.getImageData(0, 0, wmCanvas.width, wmCanvas.height), d = pixels.data;
-      var sx = r.x, sy = r.y >= r.h ? r.y - r.h : (r.y + r.h < wmCanvas.height ? r.y + r.h : Math.max(0, r.y - 1));
-      for (var y = 0; y < Math.floor(r.h); y++) for (var x = 0; x < Math.floor(r.w); x++) {
-        var dx = Math.floor(r.x) + x, dy = Math.floor(r.y) + y, sourceY = Math.max(0, Math.min(wmCanvas.height - 1, sy + y));
-        var from = (sourceY * wmCanvas.width + Math.max(0, Math.min(wmCanvas.width - 1, Math.floor(sx) + x))) * 4;
-        var to = (dy * wmCanvas.width + dx) * 4;
-        d[to] = d[from]; d[to + 1] = d[from + 1]; d[to + 2] = d[from + 2]; d[to + 3] = d[from + 3];
+    if (wmBrush) wmBrush.addEventListener('input', function () {
+      document.getElementById('img-wm-brush-val').textContent = wmBrush.value;
+    });
+    document.getElementById('img-wm-undo').addEventListener('click', function () {
+      wmStrokes.pop(); drawWatermarkCanvas();
+    });
+    document.getElementById('img-wm-clear').addEventListener('click', function () {
+      wmStrokes = []; drawWatermarkCanvas();
+    });
+    document.getElementById('img-wm-apply').addEventListener('click', async function (e) {
+      if (!srcFile || !wmStrokes.length) { if (wmStatus) wmStatus.textContent = '请先用画笔涂满需要修补的水印区域。'; return; }
+      if (srcFile.size > 20 * 1024 * 1024) { if (wmStatus) wmStatus.textContent = '单张图片超过 20 MiB，请先压缩并重新上传较小图片。'; return; }
+      var button = e.currentTarget;
+      button.disabled = true;
+      if (wmStatus) wmStatus.textContent = '正在发送遮罩并运行服务器 AI…';
+      try {
+        var maskBlob = await new Promise(function (resolve) { wmMaskCanvas.toBlob(resolve, 'image/png'); });
+        if (!maskBlob) throw new Error('遮罩编码失败');
+        var form = new FormData();
+        form.append('image', srcFile, srcFile.name);
+        form.append('mask', maskBlob, 'mask.png');
+        var response = await fetch('api/watermark/inpaint', { method: 'POST', body: form });
+        if (!response.ok) {
+          var error = {};
+          try { error = await response.json(); } catch (ignore) { /* ignore */ }
+          throw new Error(error.error || ('服务器返回 HTTP ' + response.status));
+        }
+        var blob = await response.blob();
+        var extension = blob.type === 'image/png' ? 'png' : 'webp';
+        if (outObjectUrl) URL.revokeObjectURL(outObjectUrl);
+        var objectUrl = URL.createObjectURL(blob);
+        outObjectUrl = objectUrl;
+        outImg.src = objectUrl;
+        document.getElementById('img-out-info').textContent = wmCanvas.width + '×' + wmCanvas.height + ' · ' + TB.formatSize(blob.size) + ' · MI-GAN 服务器推理';
+        panel.classList.remove('hidden');
+        TB.download(blob, TB.safeName(srcFile.name.replace(/\.[^.]+$/, '') + '-AI修补') + '.' + extension);
+        if (wmStatus) wmStatus.textContent = 'AI 修补完成；图片只在服务器内存中处理，未写入服务器文件。';
+      } catch (error) {
+        if (wmStatus) wmStatus.textContent = 'AI 修补失败：' + error.message;
       }
-      ctx.putImageData(pixels, 0, 0);
-      var type = /^image\/(png|jpeg|webp)$/.test(srcFile.type) ? srcFile.type : 'image/png';
-      wmCanvas.toBlob(function (blob) {
-        if (!blob) { alert('图片编码失败，请换用 JPEG 或 WebP 再试。'); return; }
-        var ext = type === 'image/jpeg' ? 'jpg' : type.split('/')[1];
-        TB.download(blob, TB.safeName(srcFile.name.replace(/\.[^.]+$/, '') + '-去水印') + '.' + ext);
-      }, type, parseInt(quality.value, 10) / 100);
+      button.disabled = false;
     });
 
     document.getElementById('img-convert').addEventListener('click', function () { convert(true); });

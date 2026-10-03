@@ -263,6 +263,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .filerow-actions { flex: none; }
 .music-rename { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .music-output-name { flex: 1; max-width: 420px; }
+.music-lyric-upload-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .tag {
   display: inline-block; margin-left: 6px; padding: 1px 6px;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;

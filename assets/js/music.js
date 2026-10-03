@@ -183,6 +183,18 @@
     return !!(embedLyricsToggle && embedLyricsToggle.checked);
   }
 
+  async function readLyricFile(file) {
+    var bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.slice(2));
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.slice(2));
+    if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.slice(3);
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch (utf8Error) {
+      try { return new TextDecoder('gb18030').decode(bytes); }
+      catch (encodingError) { throw new Error('歌词编码无法识别，请另存为 UTF-8 后重试'); }
+    }
+  }
+
   function drainLyricQueue() {
     while (lyricActive < lyricLimit && lyricQueue.length) {
       var task = lyricQueue.shift();
@@ -220,6 +232,14 @@
     return base + '.' + ext;
   }
 
+  function uniqueFilename(name, used) {
+    var dot = name.lastIndexOf('.'), stem = dot > 0 ? name.slice(0, dot) : name;
+    var ext = dot > 0 ? name.slice(dot) : '', candidate = name, suffix = 2;
+    while (used[candidate.toLowerCase()]) candidate = stem + ' (' + suffix++ + ')' + ext;
+    used[candidate.toLowerCase()] = true;
+    return candidate;
+  }
+
   function concatBytes(parts) {
     var total = 0, offset = 0;
     parts.forEach(function (part) { total += part.length; });
@@ -235,7 +255,10 @@
   function id3Frame(id, payload) {
     var head = new Uint8Array(10);
     for (var i = 0; i < 4; i++) head[i] = id.charCodeAt(i);
-    head.set(syncSafe(payload.length), 4);
+    head[4] = (payload.length >>> 24) & 0xff;
+    head[5] = (payload.length >>> 16) & 0xff;
+    head[6] = (payload.length >>> 8) & 0xff;
+    head[7] = payload.length & 0xff;
     return concatBytes([head, payload]);
   }
 
@@ -260,49 +283,127 @@
         ((u8[pos + 4] << 24) | (u8[pos + 5] << 16) | (u8[pos + 6] << 8) | u8[pos + 7]);
       if (size <= 0 || pos + 10 + size > end) break;
       var payload = u8.slice(pos + 10, pos + 10 + size);
-      var keep = id !== 'TIT2' && id !== 'TPE1' && id !== 'TALB' && id !== 'USLT';
-      if (id === 'TXXX' && payload.length > 1) {
-        var textEnd = 1;
-        if (payload[0] === 1 || payload[0] === 2) {
-          while (textEnd + 1 < payload.length && (payload[textEnd] !== 0 || payload[textEnd + 1] !== 0)) textEnd += 2;
-          textEnd += 2;
-        } else {
-          while (textEnd < payload.length && payload[textEnd] !== 0) textEnd++;
-        }
-        try {
-          var label = new TextDecoder(payload[0] === 1 ? 'utf-16' : (payload[0] === 2 ? 'utf-16be' : 'utf-8')).decode(payload.slice(1, textEnd)).toUpperCase();
-          if (label === 'LYRICS') keep = false;
-        } catch (e) { /* keep unknown text frames */ }
+      if (id === 'APIC' && major === 4) {
+        var converted = convertApicToId3v23(payload);
+        if (converted) frames.push(id3Frame('APIC', converted));
+      } else if (major === 3 && !/^(?:TIT2|TPE1|TALB|USLT|SYLT)$/.test(id) && !(id === 'TXXX' && id3TxxxDescription(payload) === 'LYRICS')) {
+        frames.push(u8.slice(pos, pos + 10 + size));
       }
-      if (keep) frames.push(id3Frame(id, payload));
       pos += 10 + size;
     }
     return frames;
   }
 
+  function id3TxxxDescription(payload) {
+    if (!payload.length) return '';
+    var encoding = payload[0], end = 1;
+    if (encoding === 1 || encoding === 2) {
+      while (end + 1 < payload.length && (payload[end] !== 0 || payload[end + 1] !== 0)) end += 2;
+      return decodeId3Text(payload.slice(1, end), encoding).replace(/^\ufeff/, '').trim().toUpperCase();
+    }
+    while (end < payload.length && payload[end] !== 0) end++;
+    return decodeId3Text(payload.slice(1, end), encoding).trim().toUpperCase();
+  }
+
   function utf8(s) { return new TextEncoder().encode(String(s || '')); }
+
+  function utf16Le(s, bom) {
+    s = String(s || '');
+    var out = new Uint8Array((bom ? 2 : 0) + s.length * 2), pos = 0;
+    if (bom) { out[0] = 0xff; out[1] = 0xfe; pos = 2; }
+    for (var i = 0; i < s.length; i++) {
+      var unit = s.charCodeAt(i);
+      out[pos++] = unit & 0xff; out[pos++] = unit >>> 8;
+    }
+    return out;
+  }
+
+  function decodeId3Text(data, encoding) {
+    try {
+      if (encoding === 0) return Array.from(data).map(function (b) { return String.fromCharCode(b); }).join('');
+      if (encoding === 1) return new TextDecoder('utf-16').decode(data);
+      if (encoding === 2) return new TextDecoder('utf-16be').decode(data);
+      return new TextDecoder('utf-8').decode(data);
+    } catch (e) { return ''; }
+  }
+
+  function convertApicToId3v23(payload) {
+    if (payload.length < 5) return null;
+    var encoding = payload[0], mimeEnd = 1;
+    while (mimeEnd < payload.length && payload[mimeEnd] !== 0) mimeEnd++;
+    if (mimeEnd + 2 >= payload.length) return null;
+    var mimeBytes = payload.slice(1, mimeEnd), pictureType = payload[mimeEnd + 1], descStart = mimeEnd + 2, descEnd = descStart;
+    if (encoding === 1 || encoding === 2) {
+      while (descEnd + 1 < payload.length && (payload[descEnd] !== 0 || payload[descEnd + 1] !== 0)) descEnd += 2;
+      descEnd = Math.min(payload.length, descEnd + 2);
+    } else {
+      while (descEnd < payload.length && payload[descEnd] !== 0) descEnd++;
+      descEnd = Math.min(payload.length, descEnd + 1);
+    }
+    var description = decodeId3Text(payload.slice(descStart, Math.max(descStart, descEnd - ((encoding === 1 || encoding === 2) ? 2 : 1))), encoding);
+    var image = payload.slice(descEnd);
+    var head = new Uint8Array([1]);
+    var mimeAndType = concatBytes([mimeBytes, new Uint8Array([0, pictureType])]);
+    return concatBytes([head, mimeAndType, utf16Le(description, true), new Uint8Array([0, 0]), image]);
+  }
+
+  function utf16TextFrame(id, value) {
+    return id3Frame(id, concatBytes([new Uint8Array([1]), utf16Le(value, true)]));
+  }
+
+  function parseLrcEntries(lyric) {
+    var entries = [];
+    String(lyric || '').split(/\r?\n/).forEach(function (line) {
+      var times = [], match, re = /\[(\d+):(\d{1,2})(?:\.(\d{1,3}))?\]/g;
+      while ((match = re.exec(line))) {
+        var fraction = (match[3] || '0').slice(0, 3);
+        while (fraction.length < 3) fraction += '0';
+        times.push((parseInt(match[1], 10) * 60 + parseInt(match[2], 10)) * 1000 + parseInt(fraction, 10));
+      }
+      var text = line.replace(re, '').trim();
+      if (!text) return;
+      times.forEach(function (time) { entries.push({ time: time, text: text }); });
+    });
+    return entries;
+  }
+
+  function makeSyltFrame(lyric) {
+    var entries = parseLrcEntries(lyric);
+    if (!entries.length) return null;
+    var parts = [new Uint8Array([1, 0x65, 0x6e, 0x67, 2, 1, 0, 0])];
+    entries.forEach(function (entry) {
+      var time = entry.time >>> 0;
+      parts.push(utf16Le(entry.text, true), new Uint8Array([0, 0]), new Uint8Array([(time >>> 24) & 0xff, (time >>> 16) & 0xff, (time >>> 8) & 0xff, time & 0xff]));
+    });
+    return id3Frame('SYLT', concatBytes(parts));
+  }
 
   function stripId3(u8) {
     if (u8.length < 10 || u8[0] !== 0x49 || u8[1] !== 0x44 || u8[2] !== 0x33) return u8;
     var size = (u8[6] << 21) | (u8[7] << 14) | (u8[8] << 7) | u8[9];
-    var end = Math.min(u8.length, 10 + size + ((u8[5] & 0x10) ? 10 : 0));
+    var end = Math.min(u8.length, 10 + size);
     return u8.slice(end);
   }
 
   function embedMp3Lyrics(u8, item, lyric) {
     var r = item.result;
-    var uslt = concatBytes([new Uint8Array([3, 0x65, 0x6e, 0x67, 0]), utf8(lyric)]);
-    var txxx = concatBytes([new Uint8Array([3]), utf8('LYRICS'), new Uint8Array([0]), utf8(lyric)]);
+    var plain = String(lyric || '').split(/\r?\n/).filter(function (line) {
+      return !/^\s*\[(?:ar|ti|al|by|re|ve|offset):/i.test(line);
+    }).map(function (line) { return line.replace(/\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/g, '').trim(); }).filter(Boolean).join('\n');
+    var uslt = concatBytes([new Uint8Array([1, 0x65, 0x6e, 0x67, 0, 0]), utf16Le(plain, true)]);
+    var txxx = concatBytes([new Uint8Array([1]), utf16Le('LYRICS', true), new Uint8Array([0, 0]), utf16Le(lyric, true)]);
     var frames = preservedId3Frames(u8).concat([
-      id3Frame('TIT2', concatBytes([new Uint8Array([3]), utf8(r.name)])),
-      id3Frame('TPE1', concatBytes([new Uint8Array([3]), utf8(r.artists)])),
-      id3Frame('TALB', concatBytes([new Uint8Array([3]), utf8(r.album)])),
+      utf16TextFrame('TIT2', r.name),
+      utf16TextFrame('TPE1', r.artists),
+      utf16TextFrame('TALB', r.album),
       id3Frame('USLT', uslt),
       id3Frame('TXXX', txxx)
     ]);
+    var synced = makeSyltFrame(lyric);
+    if (synced) frames.push(synced);
     var body = concatBytes(frames);
     var header = new Uint8Array(10);
-    header.set([0x49, 0x44, 0x33, 4, 0, 0], 0);
+    header.set([0x49, 0x44, 0x33, 3, 0, 0], 0);
     header.set(syncSafe(body.length), 6);
     return new Blob([concatBytes([header, body, stripId3(u8)])], { type: 'audio/mpeg' });
   }
@@ -315,14 +416,34 @@
     return new Uint8Array([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]);
   }
 
-  function makeVorbisComment(item, lyric) {
+  function makeVorbisComment(item, lyric, existing) {
     var r = item.result;
-    var comments = [];
-    if (r.name) comments.push('TITLE=' + r.name);
-    if (r.artists) comments.push('ARTIST=' + r.artists);
-    if (r.album) comments.push('ALBUM=' + r.album);
-    comments.push('LYRICS=' + lyric);
-    var vendor = utf8('LOCALTOOLS');
+    var comments = [], vendor = utf8('LOCALTOOLS');
+    if (existing && existing.length >= 8) {
+      var offset = 0, vendorLength = readLe32(existing, offset); offset += 4;
+      if (offset + vendorLength + 4 > existing.length) throw new Error('FLAC 歌曲标签损坏');
+      vendor = existing.slice(offset, offset + vendorLength); offset += vendorLength;
+      var count = readLe32(existing, offset); offset += 4;
+      if (count > 100000) throw new Error('FLAC 歌曲标签异常');
+      for (var i = 0; i < count; i++) {
+        if (offset + 4 > existing.length) throw new Error('FLAC 歌曲标签损坏');
+        var length = readLe32(existing, offset); offset += 4;
+        if (offset + length > existing.length) throw new Error('FLAC 歌曲标签损坏');
+        comments.push(new TextDecoder('utf-8').decode(existing.slice(offset, offset + length)));
+        offset += length;
+      }
+      if (offset !== existing.length) throw new Error('FLAC 歌曲标签长度异常');
+    }
+    var updates = { TITLE: r.name || '', ARTIST: r.artists || '', ALBUM: r.album || '', LYRICS: String(lyric || '') };
+    comments = comments.filter(function (comment) {
+      var eq = comment.indexOf('=');
+      if (eq < 0) return true;
+      var key = comment.slice(0, eq).toUpperCase();
+      return !Object.prototype.hasOwnProperty.call(updates, key) || (!updates[key] && key !== 'LYRICS');
+    });
+    Object.keys(updates).forEach(function (key) {
+      if (updates[key]) comments.push(key + '=' + updates[key]);
+    });
     var parts = [writeLe32(vendor.length), vendor, writeLe32(comments.length)];
     comments.forEach(function (comment) {
       var bytes = utf8(comment);
@@ -341,7 +462,7 @@
       var len = (u8[offset + 1] << 16) | (u8[offset + 2] << 8) | u8[offset + 3];
       if (offset + 4 + len > u8.length) throw new Error('FLAC 元数据块长度异常');
       if (type === 4) {
-        if (!foundComment) blocks.push({ type: 4, data: makeVorbisComment(item, lyric) });
+        if (!foundComment) blocks.push({ type: 4, data: makeVorbisComment(item, lyric, u8.slice(offset + 4, offset + 4 + len)) });
         foundComment = true;
       } else {
         blocks.push({ type: type, data: u8.slice(offset + 4, offset + 4 + len) });
@@ -365,6 +486,10 @@
 
   async function downloadAudio(item, forceEmbed) {
     var blob = item.result.audioBlob;
+    if ((forceEmbed || (embedLyricsEnabled() && lyricsEnabled())) && item.lyricState === 'pending' && item.lyricPromise && item.lyricSource !== 'manual') {
+      notifyFn('等待这首歌的歌词匹配完成…');
+      await item.lyricPromise;
+    }
     if ((forceEmbed || embedLyricsEnabled()) && item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac')) {
       var bytes = new Uint8Array(await blob.arrayBuffer());
       blob = item.result.format === 'mp3' ? embedMp3Lyrics(bytes, item, item.lyric) : embedFlacLyrics(bytes, item, item.lyric);
@@ -396,12 +521,25 @@
       box.classList.toggle('hidden', !enabled);
       if (!enabled) box.innerHTML = '';
     });
-    if (!enabled) return;
+    if (!enabled) {
+      results.forEach(function (item) { if (item.lyricState === 'pending' && !item.lyricPromise) item.lyricState = 'not-run'; });
+      updateToolbar();
+      return;
+    }
     results.forEach(function (item) {
       var meta = item.ok ? item.result : item.musicMeta;
       var box = item.row && item.row.querySelector('.music-lyric-box');
       if (meta && box && !box.textContent.trim()) {
-        autoFetchLyric(box, meta.name || '', meta.artists || '', item);
+        if (item.lyricState === 'pending' && item.lyricPromise) {
+          box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配中…</div>';
+        } else if (item.lyric && (item.lyricSource === 'manual' || item.lyricSource === 'matched')) {
+          renderLyricResult(box, item, item.lyricItem, item.lyric, item.lyricSource === 'manual' ? '手动上传' : ((item.lyricItem && item.lyricItem.source) || '已匹配'));
+        } else if (item.lyricState === 'not-found') {
+          box.innerHTML = '<div class="muted mono" style="font-size:11.5px">未找到可下载歌词（已自动尝试备用源）</div>';
+        } else if (item.lyricState === 'error') {
+          box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词服务暂不可用；可上传自己的 LRC / TXT</div>';
+        }
+        else autoFetchLyric(box, meta.name || '', meta.artists || '', item);
       }
     });
   }
@@ -409,13 +547,30 @@
   function updateToolbar() {
     toolbar.classList.toggle('hidden', results.length === 0);
     var ok = results.filter(function (r) { return r.ok; }).length;
-    var failed = results.length - ok;
-    var lyricOk = results.filter(function (r) { return r.lyric; }).length;
-    stats.textContent = results.length + ' 个文件 / 解密成功 ' + ok + ' 个 / 失败 ' + failed + ' 个 / 歌词匹配 ' + lyricOk + ' 个';
+    var decryptFailed = results.length - ok;
+    var lyricMatched = results.filter(function (r) { return r.lyricState === 'matched'; }).length;
+    var lyricManual = results.filter(function (r) { return r.lyricState === 'manual'; }).length;
+    var lyricPending = results.filter(function (r) { return r.lyricState === 'pending'; }).length;
+    var lyricNotFound = results.filter(function (r) { return r.lyricState === 'not-found'; }).length;
+    var lyricErrors = results.filter(function (r) { return r.lyricState === 'error'; }).length;
+    var lyricNoInfo = results.filter(function (r) {
+      var meta = r.ok ? r.result : r.musicMeta;
+      return !meta || !meta.name;
+    }).length;
+    var lyricNotStarted = results.filter(function (r) { return r.lyricState === 'not-run'; }).length;
+    stats.textContent = results.length + ' 个文件 · 解密成功 ' + ok + ' · 解密失败 ' + decryptFailed +
+      (lyricsEnabled() ? ' · 歌词自动匹配 ' + lyricMatched + ' · 未找到 ' + lyricNotFound + ' · 查询错误 ' + lyricErrors +
+        ' · 手动歌词 ' + lyricManual + ' · 匹配中 ' + lyricPending + ' · 缺少曲目信息 ' + lyricNoInfo + ' · 未开始 ' + lyricNotStarted : ' · 自动匹配已关闭 · 手动歌词 ' + lyricManual);
   }
 
   function renderItem(item) {
     var div = document.createElement('div');
+    item.objectUrls = [];
+    function previewUrl(blob) {
+      var url = URL.createObjectURL(blob);
+      item.objectUrls.push(url);
+      return url;
+    }
     div.className = 'filerow';
     if (!item.ok) {
       var meta = item.musicMeta;
@@ -433,7 +588,7 @@
     var title = r.name || item.fileName.replace(/\.[^.]+$/, '');
     if (!item.outputName) item.outputName = defaultOutputName(title, r.artists || '');
     var cover = r.coverBlob
-      ? '<img class="filerow-cover" src="' + URL.createObjectURL(r.coverBlob) + '" alt="">'
+      ? '<img class="filerow-cover" src="' + previewUrl(r.coverBlob) + '" alt="">'
       : '<div class="filerow-cover empty"></div>';
     var sub = [r.artists, r.album].filter(Boolean).join(' · ');
     div.innerHTML =
@@ -445,7 +600,9 @@
       '<div class="filerow-sub">' + escapeHtml(sub) + (sub ? ' · ' : '') + TB.formatSize(r.audioBlob.size) + '</div>' +
       '<div class="music-rename"><span class="mono muted">导出文件名</span>' +
       '<input type="text" class="input music-output-name" value="' + escapeHtml(item.outputName) + '" aria-label="导出文件名（不含扩展名）"></div>' +
-      '<audio controls preload="none" src="' + URL.createObjectURL(r.audioBlob) + '"></audio>' +
+      '<div class="music-lyric-upload-row"><label class="btn">上传 / 更换 LRC 或 TXT<input class="music-lyric-upload" type="file" accept=".lrc,.txt,text/plain" hidden></label>' +
+      '<span class="mono muted music-lyric-source">' + (item.lyricSource === 'manual' ? '已使用手动上传歌词' : '') + '</span></div>' +
+      '<audio controls preload="none" src="' + previewUrl(r.audioBlob) + '"></audio>' +
       '<div class="music-lyric-box" style="margin-top:8px"></div>' +
       '</div>' +
       '<div class="filerow-actions"><button class="btn btn-primary" type="button">下载</button></div>';
@@ -460,57 +617,90 @@
       catch (err) { notifyFn('下载失败：' + err.message); }
       e.currentTarget.disabled = false;
     });
+    div.querySelector('.music-lyric-upload').addEventListener('change', async function (e) {
+      var file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (file.size > 1024 * 1024) { notifyFn('单个歌词文件不能超过 1 MiB'); return; }
+      try {
+        item.lyric = await readLyricFile(file);
+        if (!item.lyric.trim()) throw new Error('歌词文件为空');
+        item.lyricSource = 'manual';
+        item.lyricState = 'manual';
+        item.lyricItem = { name: r.name || item.fileName.replace(/\.[^.]+$/, ''), artist: r.artists || '' };
+        item.lyricPromise = null;
+        div.querySelector('.music-lyric-source').textContent = '已载入手动歌词';
+        renderLyricResult(div.querySelector('.music-lyric-box'), item, item.lyricItem, item.lyric, '手动上传');
+        updateToolbar();
+        notifyFn('已载入 ' + file.name + '；下载时将按选项内嵌歌词。');
+      } catch (err) { notifyFn('歌词读取失败：' + err.message); }
+    });
     autoFetchLyric(div.querySelector('.music-lyric-box'), title, r.artists, item);
     return div;
   }
 
   /* 解密完成后自动用识别到的歌名/歌手去匹配歌词，省去手动跳转歌词页再输入一遍 */
   function autoFetchLyric(box, title, artist, item) {
-    if (!box || !title || !window.LyricsTool || !lyricsEnabled()) return;
+    if (!box || !lyricsEnabled()) return;
+    if (!title || !window.LyricsTool) {
+      if (item) item.lyricState = 'not-run';
+      updateToolbar();
+      return;
+    }
+    if (item && item.lyricSource === 'manual' && item.lyric) {
+      renderLyricResult(box, item, item.lyricItem, item.lyric, '手动上传');
+      return;
+    }
+    if (item) item.lyricState = 'pending';
+    updateToolbar();
     box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配中…</div>';
-    enqueueLyricMatch(function () {
+    var lyricPromise = enqueueLyricMatch(function () {
       return lyricsEnabled() ? window.LyricsTool.match(title, artist || '') : null;
     }).then(function (matched) {
-      if (!lyricsEnabled()) { box.innerHTML = ''; return; }
+      if (!lyricsEnabled()) { if (item) { item.lyricState = 'not-run'; item.lyricPromise = null; } updateToolbar(); box.innerHTML = ''; return; }
+      if (item && item.lyricSource === 'manual' && item.lyric) { item.lyricPromise = null; return; }
       var best = matched && matched.item;
       var lyric = matched && matched.lyric;
       if (!best || !lyric) {
+        if (item) { item.lyricState = matched ? 'not-found' : 'not-run'; item.lyricPromise = null; }
+        updateToolbar();
         box.innerHTML = '<div class="muted mono" style="font-size:11.5px">未找到可下载歌词（已自动尝试备用源）</div>';
         return;
       }
       if (item) {
         item.lyric = lyric;
         item.lyricItem = best;
+        item.lyricSource = 'matched';
+        item.lyricState = 'matched';
+        item.lyricPromise = null;
         updateToolbar();
       }
-      box.innerHTML =
+      renderLyricResult(box, item, best, lyric, matched.source || best.source || '已匹配');
+    }, function () {
+      if (!lyricsEnabled()) { if (item) { item.lyricState = 'not-run'; item.lyricPromise = null; } updateToolbar(); box.innerHTML = ''; return; }
+      if (item) { item.lyricState = 'error'; item.lyricPromise = null; }
+      updateToolbar();
+      box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词服务暂不可用；可上传自己的 LRC / TXT 重试</div>';
+    });
+    if (item) item.lyricPromise = lyricPromise;
+  }
+
+  function renderLyricResult(box, item, best, lyric, source) {
+    if (!box || !best || !lyric) return;
+    box.innerHTML =
         '<div class="row" style="margin:0;gap:6px">' +
-        '<span class="tag-dim tag" style="margin-left:0">歌词：' + escapeHtml(best.name) +
+      '<span class="tag-dim tag" style="margin-left:0">歌词：' + escapeHtml(best.name) +
         (best.artist ? ' - ' + escapeHtml(best.artist) : '') + '</span>' +
-        '<span class="muted mono" style="font-size:11.5px">已匹配</span></div>' +
+        '<span class="muted mono" style="font-size:11.5px">' + escapeHtml(source === 'netease' ? '网易云' : (source === 'lrclib' ? 'LRCLIB' : (source || '已匹配'))) + '</span></div>' +
         '<div class="music-lyric-result" style="margin-top:6px">' +
         '<div class="lyric-preview" style="max-height:120px">' + escapeHtml(lyric.slice(0, 1500)) + '</div>' +
-        '<button class="btn" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px" data-act="dl-lrc">下载 LRC</button>' +
-        ((item && item.ok && (item.result.format === 'mp3' || item.result.format === 'flac')) ?
-          ' <button class="btn btn-primary" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px" data-act="embed">内嵌歌词并下载</button>' : '') +
-        '</div>';
-      var lrcBtn = box.querySelector('[data-act="dl-lrc"]');
-      if (lrcBtn) lrcBtn.addEventListener('click', function () {
-        var fname = window.LyricsTool.safeLrcName(best.name, best.artist);
-        TB.download(new Blob(['\ufeff' + lyric], { type: 'text/plain;charset=utf-8' }), fname);
+        '<button class="btn" type="button" style="margin-top:6px;padding:4px 10px;font-size:12px" data-act="dl-lyric">单独下载 ' + (/\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/.test(lyric) ? 'LRC' : 'TXT') + '</button></div>';
+      var lyricBtn = box.querySelector('[data-act="dl-lyric"]');
+      if (lyricBtn) lyricBtn.addEventListener('click', function () {
+        var extension = /\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/.test(lyric) ? 'lrc' : 'txt';
+        var base = TB.safeName(best.name + (best.artist ? ' - ' + best.artist : ''));
+        TB.download(new Blob(['\ufeff' + lyric], { type: 'text/plain;charset=utf-8' }), base + '.' + extension);
       });
-      var embedBtn = box.querySelector('[data-act="embed"]');
-      if (embedBtn) embedBtn.addEventListener('click', async function (e) {
-        var button = e.currentTarget;
-        button.disabled = true;
-        try { await downloadAudio(item, true); }
-        catch (err) { box.querySelector('.music-lyric-result').insertAdjacentHTML('beforeend', '<div class="err mono">内嵌失败：' + escapeHtml(err.message) + '</div>'); }
-        button.disabled = false;
-      });
-    }, function () {
-      if (!lyricsEnabled()) { box.innerHTML = ''; return; }
-      box.innerHTML = '<div class="muted mono" style="font-size:11.5px">歌词匹配失败，已尝试网易云和备用歌词源</div>';
-    });
   }
 
   async function handleFiles(files) {
@@ -556,6 +746,7 @@
   TB.bindDropzone(drop, handleFiles);
 
   document.getElementById('music-clear').addEventListener('click', function () {
+    results.forEach(function (item) { (item.objectUrls || []).forEach(function (url) { URL.revokeObjectURL(url); }); });
     results = [];
     list.innerHTML = '';
     updateToolbar();
@@ -566,52 +757,31 @@
     var button = e.currentTarget;
     var ok = results.filter(function (item) { return item.ok; });
     if (!ok.length) return;
-    if (!embedLyricsEnabled()) {
-      ok.forEach(function (item) { TB.download(item.result.audioBlob, outputFilename(item)); });
-      return;
-    }
     button.disabled = true;
-    notifyFn('正在准备批量下载…');
+    notifyFn('正在打包 ' + ok.length + ' 首…');
     try {
-      var entries = [];
-      for (var i = 0; i < ok.length; i++) {
-        var item = ok[i], blob = item.result.audioBlob;
-        if (item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac')) {
-          var bytes = new Uint8Array(await blob.arrayBuffer());
-          blob = item.result.format === 'mp3' ? embedMp3Lyrics(bytes, item, item.lyric) : embedFlacLyrics(bytes, item, item.lyric);
+      if (embedLyricsEnabled() && lyricsEnabled()) {
+        var pendingMatches = ok.map(function (item) { return item.lyricPromise; }).filter(Boolean);
+        if (pendingMatches.length) {
+          notifyFn('正在等待 ' + pendingMatches.length + ' 首歌曲的歌词匹配完成…');
+          await Promise.all(pendingMatches);
         }
-        entries.push({ name: outputFilename(item), blob: blob });
       }
-      var zip = await TB.zip(entries);
-      TB.download(zip, 'music-with-lyrics-' + Date.now() + '.zip');
-      notifyFn('已打包 ' + ok.length + ' 首；匹配到歌词 ' + ok.filter(function (item) { return !!item.lyric; }).length + ' 首');
-    } catch (err) { notifyFn('批量下载失败：' + err.message); }
-    button.disabled = false;
-  });
-
-  document.getElementById('music-zip').addEventListener('click', async function (e) {
-    var ok = results.filter(function (r) { return r.ok; });
-    if (!ok.length) return;
-    var btn = e.currentTarget;
-    btn.disabled = true;
-    notifyFn('正在打包 ' + ok.length + ' 个文件…');
-    try {
       var entries = [];
+      var usedNames = Object.create(null);
       for (var i = 0; i < ok.length; i++) {
         var item = ok[i], blob = item.result.audioBlob;
         if (embedLyricsEnabled() && item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac')) {
           var bytes = new Uint8Array(await blob.arrayBuffer());
           blob = item.result.format === 'mp3' ? embedMp3Lyrics(bytes, item, item.lyric) : embedFlacLyrics(bytes, item, item.lyric);
         }
-        entries.push({ name: outputFilename(item), blob: blob });
+        entries.push({ name: uniqueFilename(outputFilename(item), usedNames), blob: blob });
       }
       var zip = await TB.zip(entries);
       TB.download(zip, 'music-' + Date.now() + '.zip');
-      notifyFn('打包完成（' + TB.formatSize(zip.size) + '）');
-    } catch (err) {
-      notifyFn('打包失败：' + err.message);
-    }
-    btn.disabled = false;
+      notifyFn('已打包 ' + ok.length + ' 首；已内嵌歌词 ' + (embedLyricsEnabled() ? ok.filter(function (item) { return !!item.lyric && (item.result.format === 'mp3' || item.result.format === 'flac'); }).length : 0) + ' 首');
+    } catch (err) { notifyFn('批量下载失败：' + err.message); }
+    button.disabled = false;
   });
 
   if (decryptToggle) decryptToggle.addEventListener('change', updateFeaturePanels);

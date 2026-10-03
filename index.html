@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="纯前端本地工具箱：音乐解密、歌词工具、格式转换、正则/JWT/Cron/二维码/进制转换/Diff/Markdown 等开发者常用工具。所有处理在浏览器本地完成，文件不上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261003-7">
+<link rel="stylesheet" href="assets/style.css?v=20261003-8">
 </head>
 <body>
 <div class="app">
@@ -52,7 +52,7 @@
     <div class="sidebar-foot">
       <div class="kv"><span>运行位置</span><b id="env-mode">检测中</b></div>
       <div class="kv"><span>酷狗密钥表</span><b id="env-key">检测中</b></div>
-      <div class="kv"><span>上传数据</span><b>0 B</b></div>
+      <div class="kv"><span>文件处理</span><b>默认本地</b></div>
     </div>
   </aside>
 
@@ -64,11 +64,11 @@
         <span class="mono" id="top-title">MUSIC / DECRYPT</span>
       </div>
       <div class="topbar-right mono">
-        <span>ALL PROCESSING LOCAL</span>
+        <span>BROWSER FIRST · SERVER AI OPT-IN</span>
         <span class="sep">|</span>
         <span id="top-format-count">—</span>
         <span class="sep">|</span>
-        <span class="status-ok">NO UPLOAD</span>
+        <span class="status-ok">LOCAL FIRST</span>
       </div>
     </header>
 
@@ -78,15 +78,15 @@
       <section class="page" id="page-music">
         <div class="page-head">
           <h1>音乐解密与歌词匹配</h1>
-          <p class="lede">解密音频、按歌曲名优先命名，并可选自动匹配歌词。文件只在浏览器本地处理；歌词检索只发送歌名和歌手名。</p>
+          <p class="lede">音频解密和常规图片处理在浏览器本地完成；歌词检索只发送歌名和歌手名。只有主动运行 AI 水印修补时，选中的图片与遮罩才会发送到本站服务器。</p>
         </div>
 
         <div class="panel music-options-panel">
           <div class="panel-cap">功能开关与导出命名</div>
           <div class="row music-option-row">
-            <label class="check"><input type="checkbox" id="music-enable-decrypt" checked>启用音乐解密</label>
-            <label class="check"><input type="checkbox" id="music-enable-lyrics" checked>启用歌词匹配</label>
-            <label class="check"><input type="checkbox" id="music-embed-lyrics" checked>下载时内嵌歌词（MP3 / FLAC）</label>
+            <label class="check"><input type="checkbox" id="music-enable-decrypt" checked>解密所选音乐</label>
+            <label class="check"><input type="checkbox" id="music-enable-lyrics" checked>解密后自动匹配歌词</label>
+            <label class="check"><input type="checkbox" id="music-embed-lyrics" checked>下载时内嵌已载入歌词（自动匹配或上传）</label>
           </div>
           <div class="row">
             <label for="music-name-order">默认文件名格式</label>
@@ -97,7 +97,7 @@
             </select>
             <span class="mono muted">每首解密结果还可以单独改名</span>
           </div>
-          <div class="note">开启歌词匹配后，成功解密时会自动检索；也可以不解密，直接在下方输入歌名单独找歌词。</div>
+          <div class="note">每首结果都可上传自己的 LRC / TXT 覆盖自动匹配；单曲下载会等本曲匹配完成，打包 ZIP 会等当前匹配完成。MP3 / FLAC 默认内嵌已载入歌词。MP3 写入 ID3v2.3 USLT（纯文本）和 SYLT（时间戳）；播放器是否显示仍取决于版本。Windows 11 Media Player 没有内置歌词显示面板时，请下载旁边的 LRC / TXT 文件并使用支持歌词的播放器。</div>
         </div>
 
         <div id="music-decrypt-panel">
@@ -109,8 +109,7 @@
                 <div class="dz-meta mono" id="music-formats">格式表加载中</div>
               </div>
               <div class="row hidden" id="music-toolbar">
-                <button class="btn btn-primary" id="music-download-all" type="button">全部下载</button>
-                <button class="btn" id="music-zip" type="button">打包为 ZIP</button>
+                <button class="btn btn-primary" id="music-download-all" type="button">全部打包下载 ZIP</button>
                 <button class="btn" id="music-clear" type="button">清空</button>
                 <span class="mono muted" id="music-stats"></span>
               </div>
@@ -261,7 +260,7 @@
       <section class="page hidden" id="page-image">
         <div class="page-head">
           <h1>图片转换压缩</h1>
-          <p class="lede">PNG / JPEG / WebP 互转并压缩，可调质量、压缩预设与尺寸。基于浏览器 Canvas，图片不上传。GIF 会转换当前帧。局部去水印仅用相邻像素修补自有图片，复杂背景效果有限。</p>
+          <p class="lede">PNG / JPEG / WebP 互转并压缩在浏览器本地完成。AI 水印修补会把你选中的图片和画笔遮罩临时发送到本站服务器内存处理，不保存到磁盘；只处理你有权修改的图片。GIF 仅转换当前帧。</p>
         </div>
         <div class="dropzone" id="img-drop">
           <div class="dz-title">拖入图片</div>
@@ -291,7 +290,7 @@
               <input type="range" id="img-scale" min="10" max="100" value="100">
             </label>
             <button class="btn btn-primary" id="img-convert" type="button">转换并下载</button>
-            <button class="btn" id="img-watermark" type="button">去水印（实验）</button>
+            <button class="btn" id="img-watermark" type="button">AI 水印修补</button>
           </div>
         <div class="panel hidden" id="img-panel">
           <div class="img-compare">
@@ -306,12 +305,17 @@
           </div>
         </div>
         <div class="panel hidden" id="img-watermark-panel">
-          <div class="panel-cap">局部修补水印</div>
+          <div class="panel-cap">MI-GAN 服务器 AI 修补</div>
           <canvas id="img-wm-canvas" class="img-wm-canvas"></canvas>
           <div class="row">
-            <span class="mono muted">拖拽框选水印区域，工具会从相邻区域复制纹理。适合纯色背景或小型静态水印。</span>
-            <button class="btn btn-primary" id="img-wm-apply" type="button">修补并下载</button>
+            <label class="field">画笔 <span class="mono" id="img-wm-brush-val">36</span> px
+              <input type="range" id="img-wm-brush" min="8" max="160" value="36">
+            </label>
+            <button class="btn" id="img-wm-undo" type="button">撤销笔画</button>
+            <button class="btn" id="img-wm-clear" type="button">清除遮罩</button>
+            <button class="btn btn-primary" id="img-wm-apply" type="button">运行 AI 并下载结果</button>
           </div>
+          <div class="logline mono" id="img-wm-status">红色笔迹是待修补区域。单张图片上限 20 MiB / 1200 万像素；图片和遮罩只在服务器内存处理，不落盘。</div>
         </div>
       </section>
 
@@ -740,17 +744,18 @@
       <section class="page hidden" id="page-about">
         <div class="page-head">
           <h1>隐私与部署</h1>
-          <p class="lede">本站的设计前提：服务器只发文件，计算留在用户设备上。</p>
+          <p class="lede">大多数工具在浏览器本地运行；AI 水印修补是用户主动选择的服务器功能。</p>
         </div>
         <div class="grid-2">
           <div class="panel">
             <div class="panel-cap">安全设计</div>
             <ul class="bullets">
-              <li><b>本地处理</b>：音乐解密、图片转换压缩和水印修补在浏览器内存完成，服务器不接收文件。</li>
+              <li><b>本地处理</b>：音乐解密、常规图片转换压缩和文本工具在浏览器内存完成，服务器不接收这些文件。</li>
+              <li><b>AI 修补</b>：只有点击“运行 AI 并下载结果”后，所选图片和遮罩才会经 HTTPS 发送给本站服务器，限制大小、串行推理且只在内存处理，不写入磁盘。</li>
               <li><b>可离线</b>：除歌词检索外，所有工具断网可用。</li>
               <li><b>零依赖</b>：不使用任何第三方 JS 库或 CDN，全部为原生代码，可直接审计 <code>assets/js/</code>。</li>
               <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转，以及保存用户主动提交的文字反馈。</li>
-              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）与密钥表分片（不含文件内容）。反馈文字与可选联系方式存于站点目录之外。</li>
+              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、用户主动提交的反馈，以及用户主动选择的 AI 图片修补。反馈存于站点目录之外。</li>
             </ul>
           </div>
           <div class="panel">
@@ -824,28 +829,28 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261003-7"></script>
-<script src="assets/js/zip.js?v=20261003-7"></script>
-<script src="assets/js/music.js?v=20261003-7"></script>
-<script src="assets/js/ncm.js?v=20261003-7"></script>
-<script src="assets/js/kgm.js?v=20261003-7"></script>
-<script src="assets/js/kwm.js?v=20261003-7"></script>
-<script src="assets/js/qmc.js?v=20261003-7"></script>
-<script src="assets/js/xm.js?v=20261003-7"></script>
-<script src="assets/js/lyrics.js?v=20261003-7"></script>
-<script src="assets/js/syncer.js?v=20261003-7"></script>
-<script src="assets/js/tools.js?v=20261003-7"></script>
-<script src="assets/js/text.js?v=20261003-7"></script>
-<script src="assets/js/color.js?v=20261003-7"></script>
-<script src="assets/js/csvjson.js?v=20261003-7"></script>
-<script src="assets/js/markdown.js?v=20261003-7"></script>
-<script src="assets/js/regex.js?v=20261003-7"></script>
-<script src="assets/js/jwt.js?v=20261003-7"></script>
-<script src="assets/js/cron.js?v=20261003-7"></script>
-<script src="assets/js/radix.js?v=20261003-7"></script>
-<script src="assets/js/generator.js?v=20261003-7"></script>
-<script src="assets/js/diff.js?v=20261003-7"></script>
-<script src="assets/js/reference.js?v=20261003-7"></script>
-<script src="assets/js/feedback.js?v=20261003-7"></script>
+<script src="assets/js/main.js?v=20261003-8"></script>
+<script src="assets/js/zip.js?v=20261003-8"></script>
+<script src="assets/js/music.js?v=20261003-8"></script>
+<script src="assets/js/ncm.js?v=20261003-8"></script>
+<script src="assets/js/kgm.js?v=20261003-8"></script>
+<script src="assets/js/kwm.js?v=20261003-8"></script>
+<script src="assets/js/qmc.js?v=20261003-8"></script>
+<script src="assets/js/xm.js?v=20261003-8"></script>
+<script src="assets/js/lyrics.js?v=20261003-8"></script>
+<script src="assets/js/syncer.js?v=20261003-8"></script>
+<script src="assets/js/tools.js?v=20261003-8"></script>
+<script src="assets/js/text.js?v=20261003-8"></script>
+<script src="assets/js/color.js?v=20261003-8"></script>
+<script src="assets/js/csvjson.js?v=20261003-8"></script>
+<script src="assets/js/markdown.js?v=20261003-8"></script>
+<script src="assets/js/regex.js?v=20261003-8"></script>
+<script src="assets/js/jwt.js?v=20261003-8"></script>
+<script src="assets/js/cron.js?v=20261003-8"></script>
+<script src="assets/js/radix.js?v=20261003-8"></script>
+<script src="assets/js/generator.js?v=20261003-8"></script>
+<script src="assets/js/diff.js?v=20261003-8"></script>
+<script src="assets/js/reference.js?v=20261003-8"></script>
+<script src="assets/js/feedback.js?v=20261003-8"></script>
 </body>
 </html>
