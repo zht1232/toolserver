@@ -1,10 +1,10 @@
 # LOCALTOOLS
 
-一个以浏览器本地处理为主的工具箱，包含音乐、格式转换、开发辅助和文本处理等功能。音乐解密与歌词匹配已合并到同一页面，可分别开关；支持自动匹配或上传歌词、MP3 / FLAC 内嵌、图片压缩、服务器端 AI 水印修补和建议反馈。前端使用原生 JavaScript 编写，无框架依赖。
+一个以浏览器本地处理为主的工具箱，包含音乐、格式转换、开发辅助和文本处理等功能。音乐解密与歌词匹配已合并到同一页面，可分别开关；支持自动匹配或上传歌词、MP3 / FLAC 内嵌、图片压缩、可选浏览器/服务器推理的自动水印检测与 AI 修补，以及建议反馈。
 
 ## 本地预览
 
-需要 Python 3；静态托管、歌词代理和反馈接口使用 Python 标准库。启用服务器 AI 水印修补还需安装 `requirements-ai.txt` 中的依赖，并从 MI-GAN 上游下载模型权重和 `LICENSE-WEIGHTS`。模型应放在站点静态目录之外；可通过 `LOCALTOOLS_MIGAN_MODEL` 指定模型路径。参考 [第三方声明](THIRD_PARTY_NOTICES.md)。
+需要 Python 3；静态托管、歌词代理和反馈接口使用 Python 标准库。服务器修补需要 `requirements-ai.txt`、MI-GAN 权重和许可证。浏览器本地 AI 需要 MI-GAN / YOLO11 模型及 ONNX Runtime Web 1.30.0 WebGPU 文件。将这些大文件放在站点静态目录之外的 `/home/zht/localtools-models/`（或设置 `LOCALTOOLS_AI_MODEL_DIR`）；API 会按 allowlist 提供给浏览器，不将权重提交进 Git。参考 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ```sh
 python3 server.py 8000
@@ -16,7 +16,7 @@ python3 server.py 8000
 
 ## 隐私与联网
 
-音乐解密、图片转换压缩和文本处理在浏览器中完成。点击“运行 AI 并下载结果”后，所选图片和遮罩会经 HTTPS 临时发送到自己的服务器，在内存中推理，不写入磁盘。歌词搜索会向歌词服务发送歌名和歌手名；建议反馈会把用户主动填写的文字与可选联系方式保存到站点目录之外的本地文件 `localtools-feedback.jsonl`。
+音乐解密、图片转换压缩和文本处理在浏览器中完成。AI 水印可选择浏览器本地推理（模型只下载并缓存在当前浏览器，图片不上传），或服务器推理（用户主动开始后才经 HTTPS 上传图片和遮罩，服务器只在内存推理）。歌词搜索会向歌词服务发送歌名和歌手名；建议反馈会把用户主动填写的文字与可选联系方式保存到站点目录之外的本地文件 `localtools-feedback.jsonl`。
 
 ## 项目文件
 

@@ -1,9 +1,8 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 21 个页面，页面 JS 使用原生 JavaScript（ES5 风格，IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩在浏览器本地运行，AI 水印修补由自有服务器推理。
-`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、AI 水印修补和反馈），
-纯静态部署（无 Python 后端）时酷狗新版密钥分片、网易云歌词代理、服务器 AI 水印修补和在线反馈不可用；歌词会尝试 LRCLIB，反馈页仍可复制或下载内容。AI 推理需要 `requirements-ai.txt` 与 MI-GAN 模型；模型权重和 `LICENSE-WEIGHTS` 放在静态目录之外，见 `THIRD_PARTY_NOTICES.md`。
+前端工具箱 21 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩在浏览器本地运行，AI 水印可自动检测与选择浏览器/服务器修补。
+`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、AI 水印修补、浏览器模型文件和反馈）。纯静态部署（无 Python 后端）时以上服务器 API 不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供，路径配置位于 `server.py`；见 `THIRD_PARTY_NOTICES.md`。
 
 启动预览：
 ```
@@ -15,10 +14,11 @@ python3 server.py 8000
 - `index.html` — 单页应用外壳，侧边栏导航 + 21 个 `<section class="page">`，hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + `/api/watermark/inpaint`
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + `/api/watermark/inpaint` + 浏览器 AI 模型/运行库下发
 - `watermark_ai.py` — MI-GAN ONNX Runtime CPU 推理，图片只在服务器内存中处理
+- `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
 - `requirements-ai.txt` — 可选 AI 推理依赖；模型文件单独安装在站点目录之外
-- `THIRD_PARTY_NOTICES.md` — MI-GAN 权重来源与许可证说明
+- `THIRD_PARTY_NOTICES.md` — MI-GAN / YOLO11 模型与 ONNX Runtime Web 来源、许可说明
 
 ## 工具清单与对应 JS
 | 分组 | 页面 | JS 文件 |
@@ -43,7 +43,9 @@ python3 server.py 8000
 | 信息 | 建议与反馈 | feedback.js + server.py `/api/feedback` |
 
 在线反馈写入 `BASE_DIR` 的父目录 `localtools-feedback.jsonl`，不对静态资源开放；提交内容包含用户填写的文字和可选联系方式。
-AI 水印修补只在用户明确点击后上传原图与画笔遮罩，图片只在服务器内存处理，不会保存到磁盘。单张图片限制 20 MiB / 1200 万像素；服务端每个来源每分钟最多运行 3 次且全局一次只运行一个推理任务。
+浏览器模式下载的模型经 `/api/ai/models/*` 和 `/api/ai/runtime/*` 提供，并缓存在该浏览器。此模式不上传图片。服务器模式只在用户点击修补后上传原图与遮罩，在服务器内存处理，不保存到磁盘。单张图片限制 20 MiB / 1200 万像素；服务端每个来源每分钟最多运行 3 次且全局一次只运行一个推理任务。
+
+运行时文件和模型默认位于 `/home/zht/localtools-models/`（可用 `LOCALTOOLS_AI_MODEL_DIR` 覆盖）：`watermark_detector.onnx`、`migan_pipeline_v2.onnx`，以及 `onnxruntime-web-1.30.0/dist/` 下的 `ort.webgpu.min.js`、`ort-wasm-simd-threaded.jsep.mjs`、`ort-wasm-simd-threaded.jsep.wasm`。AI 检测器模型的 AGPL-3.0 条款见 `THIRD_PARTY_NOTICES.md`。
 
 ## 已知缺口 / 未完成事项
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），

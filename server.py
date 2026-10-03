@@ -14,6 +14,8 @@
   GET /api/kgm/key?start=&len=      按字节区间返回酷狗公钥表（分片解密用）
   GET /api/nc/search?s=关键词        网易云音乐搜索中转
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
+  GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
+  GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/watermark/inpaint       用户主动选择的服务器端 AI 图片修补
   POST /api/feedback                用户主动提交建议反馈
 
@@ -22,8 +24,8 @@
     python3 server.py 8080             # 指定端口
     python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
 
-说明：音频解密与常规转换都在用户浏览器本地完成。用户主动运行 AI 水印修补时，
-      图片和遮罩会在服务器内存推理，不写入磁盘。
+说明：音频解密与常规转换都在用户浏览器本地完成。AI 水印支持浏览器本地推理；
+      用户选择服务器修补时，图片和遮罩只在内存推理，不写入磁盘。
 """
 import json
 import ipaddress
@@ -57,6 +59,20 @@ _watermark_rate_lock = threading.Lock()
 WATERMARK_MAX_BODY = 24 * 1024 * 1024
 WATERMARK_MAX_IMAGE = 20 * 1024 * 1024
 WATERMARK_MAX_MASK = 4 * 1024 * 1024
+AI_MODEL_DIR = os.environ.get(
+    "LOCALTOOLS_AI_MODEL_DIR",
+    os.path.join(os.path.dirname(BASE_DIR), "localtools-models"),
+)
+AI_MODEL_FILES = {
+    "detector": (os.path.join(AI_MODEL_DIR, "watermark_detector.onnx"), "application/octet-stream"),
+    "inpainter": (os.path.join(AI_MODEL_DIR, "migan_pipeline_v2.onnx"), "application/octet-stream"),
+}
+AI_RUNTIME_DIR = os.path.join(AI_MODEL_DIR, "onnxruntime-web-1.30.0", "dist")
+AI_RUNTIME_FILES = {
+    "ort.webgpu.min.js": (os.path.join(AI_RUNTIME_DIR, "ort.webgpu.min.js"), "application/javascript; charset=utf-8"),
+    "ort-wasm-simd-threaded.jsep.mjs": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.mjs"), "text/javascript; charset=utf-8"),
+    "ort-wasm-simd-threaded.jsep.wasm": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.wasm"), "application/wasm"),
+}
 
 
 def expand_key(force=False):
@@ -168,6 +184,30 @@ class Handler(SimpleHTTPRequestHandler):
         self._cache_set = True
         self.end_headers()
         self.wfile.write(data)
+
+    def send_ai_asset(self, path, content_type):
+        try:
+            size = os.path.getsize(path)
+            stream = open(path, "rb")
+        except OSError:
+            self.send_json({"error": "浏览器 AI 文件尚未安装"}, 404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self._cache_set = True
+        self.end_headers()
+        try:
+            with stream:
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     # ---------- 路由 ----------
     def do_HEAD(self):
@@ -309,8 +349,35 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
 
+        if path.startswith("/api/ai/models/"):
+            name = path.rsplit("/", 1)[-1]
+            entry = AI_MODEL_FILES.get(name)
+            if not entry:
+                self.send_json({"error": "模型不存在"}, 404)
+                return
+            self.send_ai_asset(entry[0], entry[1])
+            return
+
+        if path.startswith("/api/ai/runtime/"):
+            name = path.rsplit("/", 1)[-1]
+            entry = AI_RUNTIME_FILES.get(name)
+            if not entry:
+                self.send_json({"error": "运行库文件不存在"}, 404)
+                return
+            self.send_ai_asset(entry[0], entry[1])
+            return
+
         if path == "/api/ping":
             watermark_status = watermark_ai.status()
+            browser_ai = {
+                "ready": all(os.path.isfile(path) for path, content_type in AI_MODEL_FILES.values()) and
+                         all(os.path.isfile(path) for path, content_type in AI_RUNTIME_FILES.values()),
+                "models": {
+                    name: (os.path.getsize(path) if os.path.isfile(path) else 0)
+                    for name, (path, content_type) in AI_MODEL_FILES.items()
+                },
+                "runtime": all(os.path.isfile(path) for path, content_type in AI_RUNTIME_FILES.values()),
+            }
             self.send_json({
                 "ok": True,
                 "server": "toolbox",
@@ -320,6 +387,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "lyricsProxy": True,
                 "feedback": True,
                 "watermarkAi": watermark_status,
+                "browserWatermarkAi": browser_ai,
             })
             return
 

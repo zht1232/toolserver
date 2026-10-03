@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩与 AI 去水印、格式转换及开发者工具。仅主动运行服务器 AI 去水印时会发送所选图片和遮罩。">
-<link rel="stylesheet" href="assets/style.css?v=20261003-9">
+<link rel="stylesheet" href="assets/style.css?v=20261003-10">
 </head>
 <body>
 <div class="app">
@@ -261,7 +261,7 @@
       <section class="page hidden" id="page-image">
         <div class="page-head">
           <h1>图片转换压缩</h1>
-          <p class="lede">PNG / JPEG / WebP 互转并压缩在浏览器本地完成。AI 水印修补会把你选中的图片和画笔遮罩临时发送到本站服务器内存处理，不保存到磁盘；只处理你有权修改的图片。GIF 仅转换当前帧。</p>
+          <p class="lede">PNG / JPEG / WebP 互转并压缩在浏览器本地完成。整图 AI 可自动检测水印；默认在浏览器本地推理，也可切换到服务器。服务器模式会上传选中的图片和遮罩；只处理你有权修改的图片。GIF 仅转换当前帧。</p>
         </div>
         <div class="dropzone" id="img-drop">
           <div class="dz-title">拖入图片</div>
@@ -306,17 +306,31 @@
           </div>
         </div>
         <div class="panel hidden" id="img-watermark-panel">
-          <div class="panel-cap">整图多处 AI 修补 · 手动画出水印区域</div>
+          <div class="panel-cap">自动检测消除 · 或手动涂抹修补</div>
+          <div class="row wm-mode-row">
+            <label class="field">修补位置
+              <select class="input" id="img-wm-mode">
+                <option value="browser" selected>浏览器本地（不上传图片，自动模式首次约 65 MiB）</option>
+                <option value="server">服务器（图片上传后由本站推理）</option>
+              </select>
+            </label>
+            <button class="btn" id="img-wm-cache-clear" type="button">清除浏览器模型缓存</button>
+          </div>
+          <div class="note" id="img-wm-mode-note">自动检测模型约 10.5 MiB，浏览器运行库约 27 MiB，本地修补模型约 26.8 MiB；自动检测加本地修补首次合计约 65 MiB。模型会缓存到此浏览器，支持 WebGPU 时优先用 GPU，否则回退 CPU。图片和遮罩只在浏览器处理。</div>
           <canvas id="img-wm-canvas" class="img-wm-canvas"></canvas>
           <div class="row">
+            <label class="field">识别灵敏度 <span class="mono" id="img-wm-threshold-val">50</span>%
+              <input type="range" id="img-wm-threshold" min="20" max="90" value="50">
+            </label>
             <label class="field">画笔 <span class="mono" id="img-wm-brush-val">36</span> px
               <input type="range" id="img-wm-brush" min="8" max="160" value="36">
             </label>
+            <button class="btn btn-primary" id="img-wm-auto" type="button">自动检测并消除</button>
             <button class="btn" id="img-wm-undo" type="button">撤销笔画</button>
             <button class="btn" id="img-wm-clear" type="button">清除遮罩</button>
-            <button class="btn btn-primary" id="img-wm-apply" type="button">运行 AI 并下载结果</button>
+            <button class="btn" id="img-wm-apply" type="button">修补画笔区域</button>
           </div>
-          <div class="logline mono" id="img-wm-status" role="status" aria-live="polite">红色笔迹是待修补区域。单张图片上限 20 MiB / 1200 万像素；图片和遮罩只在服务器内存处理，不落盘。</div>
+          <div class="logline mono" id="img-wm-status" role="status" aria-live="polite">自动模式会识别整张图片中的文字/Logo 水印，再一次修补所有候选区域。也可手动画出多个区域后修补。图片上限 1200 万像素。</div>
           <div class="wm-progress hidden" id="img-wm-progress">
             <div class="wm-progress-track" id="img-wm-progress-track" role="progressbar" aria-label="AI 去水印进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div class="wm-progress-fill" id="img-wm-progress-fill"></div>
@@ -750,18 +764,20 @@
       <section class="page hidden" id="page-about">
         <div class="page-head">
           <h1>隐私与部署</h1>
-          <p class="lede">大多数工具在浏览器本地运行；AI 水印修补是用户主动选择的服务器功能。</p>
+          <p class="lede">大多数工具在浏览器本地运行；AI 水印修补可选在浏览器本地或本站服务器执行。</p>
         </div>
         <div class="grid-2">
           <div class="panel">
             <div class="panel-cap">安全设计</div>
             <ul class="bullets">
               <li><b>本地处理</b>：音乐解密、常规图片转换压缩和文本工具在浏览器内存完成，服务器不接收这些文件。</li>
-              <li><b>AI 修补</b>：只有点击“运行 AI 并下载结果”后，所选图片和遮罩才会经 HTTPS 发送给本站服务器，限制大小、串行推理且只在内存处理，不写入磁盘。</li>
+              <li><b>浏览器 AI</b>：检测和修补模型下载并缓存到当前浏览器；图片和遮罩不离开设备。</li>
+              <li><b>服务器 AI</b>：选择服务器模式并开始修补后，原图和遮罩才会经 HTTPS 发送给本站服务器，限制大小、串行推理且只在内存处理，不写入磁盘。</li>
               <li><b>可离线</b>：除歌词检索外，所有工具断网可用。</li>
-              <li><b>零依赖</b>：不使用任何第三方 JS 库或 CDN，全部为原生代码，可直接审计 <code>assets/js/</code>。</li>
+              <li><b>依赖与模型</b>：AI 去水印会按需载入 ONNX Runtime Web 与 MI-GAN / YOLO11 模型；未运行时不下载。</li>
+              <li><b>模型许可</b>：YOLO11 检测模型标注 AGPL-3.0；模型来源和权重信息见 <a href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">第三方声明</a>。</li>
               <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转，以及保存用户主动提交的文字反馈。</li>
-              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、用户主动提交的反馈，以及用户主动选择的 AI 图片修补。反馈存于站点目录之外。</li>
+              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载和用户主动提交的反馈；服务器修补模式会上传选中的图片与遮罩。</li>
             </ul>
           </div>
           <div class="panel">
@@ -835,28 +851,29 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261003-9"></script>
-<script src="assets/js/zip.js?v=20261003-9"></script>
-<script src="assets/js/music.js?v=20261003-9"></script>
-<script src="assets/js/ncm.js?v=20261003-9"></script>
-<script src="assets/js/kgm.js?v=20261003-9"></script>
-<script src="assets/js/kwm.js?v=20261003-9"></script>
-<script src="assets/js/qmc.js?v=20261003-9"></script>
-<script src="assets/js/xm.js?v=20261003-9"></script>
-<script src="assets/js/lyrics.js?v=20261003-9"></script>
-<script src="assets/js/syncer.js?v=20261003-9"></script>
-<script src="assets/js/tools.js?v=20261003-9"></script>
-<script src="assets/js/text.js?v=20261003-9"></script>
-<script src="assets/js/color.js?v=20261003-9"></script>
-<script src="assets/js/csvjson.js?v=20261003-9"></script>
-<script src="assets/js/markdown.js?v=20261003-9"></script>
-<script src="assets/js/regex.js?v=20261003-9"></script>
-<script src="assets/js/jwt.js?v=20261003-9"></script>
-<script src="assets/js/cron.js?v=20261003-9"></script>
-<script src="assets/js/radix.js?v=20261003-9"></script>
-<script src="assets/js/generator.js?v=20261003-9"></script>
-<script src="assets/js/diff.js?v=20261003-9"></script>
-<script src="assets/js/reference.js?v=20261003-9"></script>
-<script src="assets/js/feedback.js?v=20261003-9"></script>
+<script src="assets/js/main.js?v=20261003-10"></script>
+<script src="assets/js/zip.js?v=20261003-10"></script>
+<script src="assets/js/music.js?v=20261003-10"></script>
+<script src="assets/js/ncm.js?v=20261003-10"></script>
+<script src="assets/js/kgm.js?v=20261003-10"></script>
+<script src="assets/js/kwm.js?v=20261003-10"></script>
+<script src="assets/js/qmc.js?v=20261003-10"></script>
+<script src="assets/js/xm.js?v=20261003-10"></script>
+<script src="assets/js/lyrics.js?v=20261003-10"></script>
+<script src="assets/js/syncer.js?v=20261003-10"></script>
+<script src="assets/js/watermark-local.js?v=20261003-10"></script>
+<script src="assets/js/tools.js?v=20261003-10"></script>
+<script src="assets/js/text.js?v=20261003-10"></script>
+<script src="assets/js/color.js?v=20261003-10"></script>
+<script src="assets/js/csvjson.js?v=20261003-10"></script>
+<script src="assets/js/markdown.js?v=20261003-10"></script>
+<script src="assets/js/regex.js?v=20261003-10"></script>
+<script src="assets/js/jwt.js?v=20261003-10"></script>
+<script src="assets/js/cron.js?v=20261003-10"></script>
+<script src="assets/js/radix.js?v=20261003-10"></script>
+<script src="assets/js/generator.js?v=20261003-10"></script>
+<script src="assets/js/diff.js?v=20261003-10"></script>
+<script src="assets/js/reference.js?v=20261003-10"></script>
+<script src="assets/js/feedback.js?v=20261003-10"></script>
 </body>
 </html>
