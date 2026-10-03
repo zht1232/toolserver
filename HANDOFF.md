@@ -1,9 +1,9 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-纯前端静态工具箱，20 个页面，全部原生 JS（ES5 风格，IIFE 模块，无框架无第三方库）。音乐解密与歌词匹配合并在同一页，并可分别开关。
+纯前端静态工具箱，21 个页面，全部原生 JS（ES5 风格，IIFE 模块，无框架无第三方库）。音乐解密与歌词匹配合并在同一页，并可分别开关；支持 MP3 / FLAC 内嵌歌词、图片压缩和建议反馈。
 `server.py` 是可选的本地托管 + 两个中转接口（酷狗密钥分片、网易云歌词搜索代理），
-纯静态部署（无 Python 后端）时这两个增强功能自动降级，其余全部可用。
+纯静态部署（无 Python 后端）时酷狗新版密钥分片、网易云歌词代理和在线反馈不可用；歌词会尝试 LRCLIB，反馈页仍可复制或下载内容。
 
 启动预览：
 ```
@@ -12,10 +12,10 @@ python3 server.py 8000
 ```
 
 ## 目录结构
-- `index.html` — 单页应用外壳，侧边栏导航 + 20 个 `<section class="page">`，hash 路由切页
+- `index.html` — 单页应用外壳，侧边栏导航 + 21 个 `<section class="page">`，hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
-- `server.py` — 仅 Python 标准库，静态托管 + `/api/kgm/*`（酷狗密钥分片）+ `/api/nc/*`（网易云中转）
+- `server.py` — 仅 Python 标准库，静态托管 + `/api/kgm/*`（酷狗密钥分片）+ `/api/nc/*`（网易云中转）+ `/api/feedback`
 
 ## 工具清单与对应 JS
 | 分组 | 页面 | JS 文件 |
@@ -35,8 +35,12 @@ python3 server.py 8000
 | 开发 | 文本 Diff 对比 | diff.js（LCS 算法） |
 | 开发 | 速查表 | reference.js（HTTP 状态码 / ASCII / 常用正则，纯静态数据） |
 | 文本 | 文本处理 / 哈希校验 / 时间戳 | text.js |
-| 文本 | 颜色转换 | color.js（HEX/RGB/HSL 三向联动 + 滑块 + 预设色 + 明暗梯度） |
+| 文本 | 颜色转换 | color.js（HEX/RGB/HSL 三向联动 + 色轮 + 滑块 + 预设色 + 明暗梯度） |
+| 格式 | 图片转换压缩 | tools.js（PNG/JPEG/WebP 互转 + 压缩预设 + Canvas 局部水印修补实验功能） |
 | 工具库 | zip.js | 纯 JS 打包下载用的 ZIP 封装 |
+| 信息 | 建议与反馈 | feedback.js + server.py `/api/feedback` |
+
+在线反馈写入 `BASE_DIR` 的父目录 `localtools-feedback.jsonl`，不对静态资源开放；提交内容包含用户填写的文字和可选联系方式。
 
 ## 已知缺口 / 未完成事项
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），

@@ -26,6 +26,7 @@
 import json
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -34,11 +35,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KEY_XZ = os.path.join(BASE_DIR, "assets", "kugou_key.xz")
 KEY_BIN = os.path.join(BASE_DIR, "assets", "kugou_key.bin")
 KEY_SIZE = 73155904  # 解压后大小（73,155,904 字节 = 1170494464 / 16）
+# Keep user feedback outside the static document root so it cannot be fetched as a file.
+FEEDBACK_FILE = os.path.join(os.path.dirname(BASE_DIR), "localtools-feedback.jsonl")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 _key_state = {"expanding": False}
+_feedback_state = {}
 
 
 def expand_key(force=False):
@@ -144,6 +148,52 @@ class Handler(SimpleHTTPRequestHandler):
         self._cache_set = False
         super().do_HEAD()
 
+    def do_POST(self):
+        """Save explicit text feedback outside the static document root."""
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/api/feedback":
+            self.send_json({"error": "接口不存在"}, 404)
+            return
+        now = time.time()
+        client = self.client_address[0] if self.client_address else "unknown"
+        recent = [t for t in _feedback_state.get(client, []) if now - t < 3600]
+        if len(recent) >= 10:
+            self.send_json({"error": "提交过于频繁，请稍后再试"}, 429)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 65536:
+            self.send_json({"error": "反馈内容大小无效"}, 413)
+            return
+        try:
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            self.send_json({"error": "反馈内容不是有效 JSON"}, 400)
+            return
+        kind = str(data.get("type", "其他")).strip()[:40]
+        message = str(data.get("message", "")).strip()
+        contact = str(data.get("contact", "")).strip()[:200]
+        if not message:
+            self.send_json({"error": "反馈内容不能为空"}, 400)
+            return
+        if len(message) > 5000:
+            self.send_json({"error": "反馈内容不能超过 5000 字"}, 400)
+            return
+        record = {"type": kind or "其他", "message": message, "contact": contact, "receivedAt": int(now)}
+        try:
+            with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            os.chmod(FEEDBACK_FILE, 0o600)
+        except Exception:
+            self.send_json({"error": "服务器暂时无法保存反馈"}, 500)
+            return
+        recent.append(now)
+        _feedback_state[client] = recent
+        self.send_json({"ok": True})
+
     def do_GET(self):
         self._cache_set = False
         parsed = urllib.parse.urlparse(self.path)
@@ -157,6 +207,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "kgmKeyExpanded": os.path.exists(KEY_BIN),
                 "kgmKeySize": KEY_SIZE,
                 "lyricsProxy": True,
+                "feedback": True,
             })
             return
 
@@ -220,7 +271,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({"error": "上游请求失败：%s" % e}, 502)
             return
         try:
-            self.send_json(json.loads(data.decode("utf-8")))
+            obj = json.loads(data.decode("utf-8"))
+            upstream_code = obj.get("code") if isinstance(obj, dict) else None
+            status = 429 if upstream_code in (405, 429) else 200
+            self.send_json(obj, status)
         except Exception:
             self.send_json({"error": "上游返回内容异常"}, 502)
 

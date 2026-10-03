@@ -4,7 +4,7 @@
 
   var ROUTES = ['music', 'syncer', 'lrc', 'image', 'json', 'encode', 'csvjson', 'markdown',
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
-    'text', 'hash', 'timestamp', 'color', 'about'];
+    'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
     music: 'MUSIC / DECRYPT + LYRICS', syncer: 'MUSIC / SYNC EDITOR',
     lrc: 'MUSIC / LRC SHIFT', image: 'FORMAT / IMAGE', json: 'FORMAT / JSON',
@@ -12,7 +12,7 @@
     regex: 'DEV / REGEX', jwt: 'DEV / JWT', cron: 'DEV / CRON', radix: 'DEV / RADIX',
     generator: 'DEV / GENERATOR', diff: 'DEV / DIFF', reference: 'DEV / REFERENCE',
     text: 'TEXT / PROCESS', hash: 'TEXT / HASH',
-    timestamp: 'TEXT / TIMESTAMP', color: 'TEXT / COLOR', about: 'INFO / PRIVACY'
+    timestamp: 'TEXT / TIMESTAMP', color: 'TEXT / COLOR', about: 'INFO / PRIVACY', feedback: 'INFO / FEEDBACK'
   };
 
   function showPage(route) {

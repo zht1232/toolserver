@@ -18,17 +18,31 @@
     var fmtSel = document.getElementById('img-format');
     var quality = document.getElementById('img-quality');
     var scale = document.getElementById('img-scale');
+    var preset = document.getElementById('img-compress-preset');
+    var wmButton = document.getElementById('img-watermark');
+    var wmPanel = document.getElementById('img-watermark-panel');
+    var wmCanvas = document.getElementById('img-wm-canvas');
     var srcFile = null;
+    var srcObjectUrl = '', outObjectUrl = '';
+    var wmStart = null, wmRect = null, wmDragging = false;
 
     function loadFile(f) {
-      if (!f || !/^image\//.test(f.type)) return;
+      if (!f || !/^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)) { alert('请选择 PNG、JPEG、WebP、GIF 或 BMP 图片。'); return; }
+      if (f.size > 100 * 1024 * 1024) { alert('图片超过 100 MB，为保护浏览器内存未加载。'); return; }
       srcFile = f;
-      srcImg.src = URL.createObjectURL(f);
+      if (srcObjectUrl) URL.revokeObjectURL(srcObjectUrl);
+      srcObjectUrl = URL.createObjectURL(f);
+      srcImg.src = srcObjectUrl;
       srcImg.onload = function () {
         document.getElementById('img-src-info').textContent =
           srcImg.naturalWidth + '×' + srcImg.naturalHeight + ' · ' + TB.formatSize(f.size);
         panel.classList.remove('hidden');
         convert(false);
+      };
+      srcImg.onerror = function () {
+        if (srcObjectUrl) URL.revokeObjectURL(srcObjectUrl);
+        srcObjectUrl = '';
+        alert('图片读取失败或格式不受当前浏览器支持。');
       };
     }
 
@@ -40,9 +54,19 @@
 
     quality.addEventListener('input', function () {
       document.getElementById('img-quality-val').textContent = quality.value;
+      if (preset) preset.value = 'custom';
     });
     scale.addEventListener('input', function () {
       document.getElementById('img-scale-val').textContent = scale.value;
+      if (preset) preset.value = 'custom';
+    });
+    if (preset) preset.addEventListener('change', function () {
+      if (preset.value === 'balanced') { fmtSel.value = 'image/webp'; quality.value = '82'; scale.value = '100'; }
+      else if (preset.value === 'small') { fmtSel.value = 'image/webp'; quality.value = '68'; scale.value = '85'; }
+      else if (preset.value === 'jpeg') { fmtSel.value = 'image/jpeg'; quality.value = '82'; scale.value = '100'; }
+      document.getElementById('img-quality-val').textContent = quality.value;
+      document.getElementById('img-scale-val').textContent = scale.value;
+      if (srcFile) convert(false);
     });
     [fmtSel, quality, scale].forEach(function (el) {
       el.addEventListener('change', function () { if (srcFile) convert(false); });
@@ -65,19 +89,87 @@
       canvas.toBlob(function (blob) {
         if (!blob) { alert('当前浏览器不支持输出该格式'); return; }
         lastBlob = blob;
-        outImg.src = URL.createObjectURL(blob);
+        if (outObjectUrl) URL.revokeObjectURL(outObjectUrl);
+        outObjectUrl = URL.createObjectURL(blob);
+        outImg.src = outObjectUrl;
+        var reduction = srcFile && srcFile.size ? Math.round((1 - blob.size / srcFile.size) * 100) : 0;
+        var sizeText = reduction > 0 ? ' · 减少 ' + reduction + '%' : (reduction < 0 ? ' · 增大 ' + Math.abs(reduction) + '%' : ' · 体积不变');
         document.getElementById('img-out-info').textContent =
-          canvas.width + '×' + canvas.height + ' · ' + TB.formatSize(blob.size);
+          canvas.width + '×' + canvas.height + ' · ' + TB.formatSize(blob.size) + sizeText;
+        if (fmtSel.value === 'image/png' && quality.value !== '100') {
+          document.getElementById('img-out-info').textContent += '（PNG 无损格式不使用质量滑块）';
+        }
         if (autoDownload) downloadOut();
       }, fmtSel.value, parseInt(quality.value, 10) / 100);
     }
 
     function downloadOut() {
       if (!lastBlob) return;
-      var ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[fmtSel.value];
+      var ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[lastBlob.type] || 'png';
       var base = srcFile ? srcFile.name.replace(/\.[^.]+$/, '') : 'image';
       TB.download(lastBlob, TB.safeName(base) + '.' + ext);
     }
+
+    function syncWatermarkCanvas() {
+      if (!wmCanvas || !srcImg.naturalWidth) return;
+      wmCanvas.width = srcImg.naturalWidth;
+      wmCanvas.height = srcImg.naturalHeight;
+      wmCanvas.getContext('2d').drawImage(srcImg, 0, 0);
+      wmRect = null;
+    }
+
+    function canvasPoint(e) {
+      var box = wmCanvas.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(wmCanvas.width, (e.clientX - box.left) * wmCanvas.width / box.width)),
+        y: Math.max(0, Math.min(wmCanvas.height, (e.clientY - box.top) * wmCanvas.height / box.height))
+      };
+    }
+
+    function drawSelection() {
+      if (!wmCanvas || !srcImg.naturalWidth) return;
+      var ctx = wmCanvas.getContext('2d');
+      ctx.drawImage(srcImg, 0, 0);
+      if (!wmRect) return;
+      ctx.save(); ctx.setLineDash([8, 5]); ctx.lineWidth = Math.max(2, wmCanvas.width / 500);
+      ctx.strokeStyle = '#5EEAD4'; ctx.fillStyle = 'rgba(94,234,212,.16)';
+      ctx.fillRect(wmRect.x, wmRect.y, wmRect.w, wmRect.h); ctx.strokeRect(wmRect.x, wmRect.y, wmRect.w, wmRect.h); ctx.restore();
+    }
+
+    if (wmButton) wmButton.addEventListener('click', function () {
+      if (!srcFile) { alert('请先载入图片。'); return; }
+      wmPanel.classList.remove('hidden');
+      syncWatermarkCanvas();
+      wmPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    if (wmCanvas) {
+      wmCanvas.addEventListener('pointerdown', function (e) {
+        wmDragging = true; wmStart = canvasPoint(e); wmRect = { x: wmStart.x, y: wmStart.y, w: 0, h: 0 }; wmCanvas.setPointerCapture(e.pointerId);
+      });
+      wmCanvas.addEventListener('pointermove', function (e) {
+        if (!wmDragging) return;
+        var p = canvasPoint(e); wmRect = { x: Math.min(wmStart.x, p.x), y: Math.min(wmStart.y, p.y), w: Math.abs(p.x - wmStart.x), h: Math.abs(p.y - wmStart.y) }; drawSelection();
+      });
+      wmCanvas.addEventListener('pointerup', function () { wmDragging = false; });
+    }
+    document.getElementById('img-wm-apply').addEventListener('click', function () {
+      if (!srcFile || !wmRect || wmRect.w < 2 || wmRect.h < 2) { alert('请先框选水印区域。'); return; }
+      var ctx = wmCanvas.getContext('2d'), r = wmRect, pixels = ctx.getImageData(0, 0, wmCanvas.width, wmCanvas.height), d = pixels.data;
+      var sx = r.x, sy = r.y >= r.h ? r.y - r.h : (r.y + r.h < wmCanvas.height ? r.y + r.h : Math.max(0, r.y - 1));
+      for (var y = 0; y < Math.floor(r.h); y++) for (var x = 0; x < Math.floor(r.w); x++) {
+        var dx = Math.floor(r.x) + x, dy = Math.floor(r.y) + y, sourceY = Math.max(0, Math.min(wmCanvas.height - 1, sy + y));
+        var from = (sourceY * wmCanvas.width + Math.max(0, Math.min(wmCanvas.width - 1, Math.floor(sx) + x))) * 4;
+        var to = (dy * wmCanvas.width + dx) * 4;
+        d[to] = d[from]; d[to + 1] = d[from + 1]; d[to + 2] = d[from + 2]; d[to + 3] = d[from + 3];
+      }
+      ctx.putImageData(pixels, 0, 0);
+      var type = /^image\/(png|jpeg|webp)$/.test(srcFile.type) ? srcFile.type : 'image/png';
+      wmCanvas.toBlob(function (blob) {
+        if (!blob) { alert('图片编码失败，请换用 JPEG 或 WebP 再试。'); return; }
+        var ext = type === 'image/jpeg' ? 'jpg' : type.split('/')[1];
+        TB.download(blob, TB.safeName(srcFile.name.replace(/\.[^.]+$/, '') + '-去水印') + '.' + ext);
+      }, type, parseInt(quality.value, 10) / 100);
+    });
 
     document.getElementById('img-convert').addEventListener('click', function () { convert(true); });
   })();

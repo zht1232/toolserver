@@ -11,6 +11,8 @@
   var tints = document.getElementById('color-tints');
   var contrastBox = document.getElementById('color-contrast');
   var presetsBox = document.getElementById('color-presets');
+  var wheel = document.getElementById('color-wheel');
+  var svCanvas = document.getElementById('color-sv');
 
   if (!hexEl || !rgbEl || !hslEl) { return; }
 
@@ -85,6 +87,70 @@
     };
   }
 
+  function rgbToHsv(rgb) {
+    var r = rgb.r / 255, g = rgb.g / 255, b = rgb.b / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    var h = 0;
+    if (d) {
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h = Math.round(h * 60);
+      if (h < 0) h += 360;
+    }
+    return { h: h, s: max ? d / max : 0, v: max };
+  }
+
+  function hsvToRgb(h, s, v) {
+    var c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c;
+    var r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    return { r: Math.round((r + m) * 255), g: Math.round((g + m) * 255), b: Math.round((b + m) * 255) };
+  }
+
+  function drawWheel(hue) {
+    if (!wheel || !wheel.getContext) return;
+    var ctx = wheel.getContext('2d'), cx = wheel.width / 2, cy = wheel.height / 2;
+    var outer = Math.min(cx, cy) - 8, inner = outer - 28;
+    ctx.clearRect(0, 0, wheel.width, wheel.height);
+    for (var deg = 0; deg < 360; deg++) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, outer, (deg - 1) * Math.PI / 180, (deg + 1) * Math.PI / 180);
+      ctx.arc(cx, cy, inner, (deg + 1) * Math.PI / 180, (deg - 1) * Math.PI / 180, true);
+      ctx.closePath();
+      ctx.fillStyle = 'hsl(' + deg + ', 100%, 50%)';
+      ctx.fill();
+    }
+    var a = (hue - 90) * Math.PI / 180;
+    var mx = cx + Math.cos(a) * ((outer + inner) / 2), my = cy + Math.sin(a) * ((outer + inner) / 2);
+    ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(mx, my, 9, 0, Math.PI * 2); ctx.strokeStyle = '#0A0C10'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  function drawSv(rgb) {
+    if (!svCanvas || !svCanvas.getContext) return;
+    var ctx = svCanvas.getContext('2d'), w = svCanvas.width, h = svCanvas.height, hsv = rgbToHsv(rgb);
+    var gradS = ctx.createLinearGradient(0, 0, w, 0);
+    gradS.addColorStop(0, '#fff'); gradS.addColorStop(1, 'hsl(' + hsv.h + ',100%,50%)');
+    ctx.fillStyle = gradS; ctx.fillRect(0, 0, w, h);
+    var gradV = ctx.createLinearGradient(0, 0, 0, h);
+    gradV.addColorStop(0, 'rgba(0,0,0,0)'); gradV.addColorStop(1, '#000');
+    ctx.fillStyle = gradV; ctx.fillRect(0, 0, w, h);
+    var x = hsv.s * w, y = (1 - hsv.v) * h;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.strokeStyle = '#0A0C10'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  function canvasPoint(canvas, event) {
+    var rect = canvas.getBoundingClientRect();
+    return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
+  }
+
   function luminance(rgb) {
     var f = function (c) {
       c /= 255;
@@ -120,6 +186,8 @@
     }
 
     if (stage) stage.style.background = hex;
+    drawWheel(hsl.h);
+    drawSv(rgb);
 
     var white = (1.05) / (luminance(rgb) + 0.05);
     var black = (luminance(rgb) + 0.05) / 0.05;
@@ -168,6 +236,27 @@
     picker.addEventListener('input', function () {
       var rgb = hexToRgb(picker.value);
       if (rgb) applyRgb(rgb);
+    });
+  }
+
+  if (wheel) {
+    wheel.addEventListener('pointerdown', function (e) {
+      var p = canvasPoint(wheel, e), cx = wheel.width / 2, cy = wheel.height / 2;
+      var dx = p.x - cx, dy = p.y - cy, distance = Math.sqrt(dx * dx + dy * dy);
+      var outer = Math.min(cx, cy) - 8, inner = outer - 28;
+      if (distance < inner || distance > outer) return;
+      var h = Math.round((Math.atan2(dy, dx) * 180 / Math.PI + 90 + 360) % 360);
+      var hsv = rgbToHsv(hexToRgb(hexEl.value) || { r: 0, g: 0, b: 0 });
+      applyRgb(hsvToRgb(h, hsv.s, hsv.v));
+    });
+  }
+  if (svCanvas) {
+    svCanvas.addEventListener('pointerdown', function (e) {
+      var p = canvasPoint(svCanvas, e);
+      var hsv = rgbToHsv(hexToRgb(hexEl.value) || { r: 0, g: 0, b: 0 });
+      hsv.s = Math.max(0, Math.min(1, p.x / svCanvas.width));
+      hsv.v = Math.max(0, Math.min(1, 1 - p.y / svCanvas.height));
+      applyRgb(hsvToRgb(hsv.h, hsv.s, hsv.v));
     });
   }
 

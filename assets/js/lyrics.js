@@ -18,6 +18,7 @@
   var fileNameSpan = document.getElementById('lyrics-file-name');
 
   var proxyAvailable = null; // null=未检测
+  var matchCache = {};
 
   function setStatus(msg, isErr) {
     status.textContent = msg;
@@ -46,10 +47,14 @@
   async function searchNetease(song, artist) {
     var keyword = artist ? song + ' ' + artist : song;
     var r = await fetch('api/nc/search?s=' + encodeURIComponent(keyword));
-    if (!r.ok) throw new Error('中转搜索失败');
+    if (!r.ok) throw new Error(r.status === 429 ? '网易云暂时限流' : '中转搜索失败');
     var data = await r.json();
+    if (data.code && data.code !== 200) {
+      throw new Error('网易云暂时限流：' + (data.msg || data.message || ('HTTP ' + data.code)));
+    }
     var songs = (data.result && data.result.songs) || [];
-    return songs.slice(0, 10).map(function (s) {
+    if (!songs.length) throw new Error('网易云没有搜索结果');
+    return songs.slice(0, 15).map(function (s) {
       return {
         source: 'netease',
         id: s.id,
@@ -77,6 +82,7 @@
     var r = await fetch(url);
     if (!r.ok) throw new Error('LRCLIB 搜索失败（HTTP ' + r.status + '）');
     var data = await r.json();
+    if (!Array.isArray(data)) throw new Error('LRCLIB 返回内容异常');
     return data.slice(0, 10).map(function (s) {
       return {
         source: 'lrclib',
@@ -177,14 +183,52 @@
    */
   async function searchLyricCandidates(song, artist) {
     if (!song) return [];
-    try {
-      if (await detectProxy()) {
-        return await searchNetease(song, artist);
-      }
-      return await searchLrclib(song, artist);
-    } catch (e) {
-      return await searchLrclib(song, artist);
+    var all = [];
+    var seen = {};
+    var errors = [];
+    var attempted = 0;
+    function append(items) {
+      (items || []).forEach(function (item) {
+        var key = String(item.name || '').toLowerCase() + '|' + String(item.artist || '').toLowerCase();
+        if (!seen[key]) { seen[key] = true; all.push(item); }
+      });
     }
+    if (await detectProxy()) {
+      attempted++;
+      try { append(await searchNetease(song, artist)); } catch (e) { errors.push(e.message); }
+    }
+    attempted++;
+    try { append(await searchLrclib(song, artist)); } catch (e) { errors.push(e.message); }
+    if (!all.length && errors.length === attempted) throw new Error(errors.join('；'));
+    return all;
+  }
+
+  async function matchLyric(song, artist) {
+    var cacheKey = String(song || '').trim().toLowerCase() + '|' + String(artist || '').trim().toLowerCase();
+    if (matchCache[cacheKey]) return matchCache[cacheKey];
+    var candidates = [], errors = [], sources = [];
+    if (await detectProxy()) sources.push({ name: '网易云', search: function () { return searchNetease(song, artist); } });
+    sources.push({ name: 'LRCLIB', search: function () { return searchLrclib(song, artist); } });
+    for (var s = 0; s < sources.length; s++) {
+      var found;
+      try { found = await sources[s].search(); }
+      catch (searchError) { errors.push(sources[s].name + '搜索失败：' + searchError.message); continue; }
+      candidates = candidates.concat(found || []);
+      for (var i = 0; i < found.length; i++) {
+        try {
+          var lyric = await fetchLyricText(found[i]);
+          if (lyric && lyric.trim()) {
+            var matched = { item: found[i], lyric: lyric, candidates: candidates };
+            matchCache[cacheKey] = matched;
+            return matched;
+          }
+        } catch (fetchError) { errors.push(sources[s].name + '歌词读取失败：' + fetchError.message); }
+      }
+    }
+    if (!candidates.length && errors.length === sources.length) throw new Error(errors.join('；'));
+    var empty = { item: candidates[0] || null, lyric: '', candidates: candidates };
+    matchCache[cacheKey] = empty;
+    return empty;
   }
 
   async function fetchLyricText(item) {
@@ -197,6 +241,7 @@
 
   window.LyricsTool = {
     search: searchLyricCandidates,
+    match: matchLyric,
     fetchLyric: fetchLyricText,
     safeLrcName: function (name, artist) {
       return TB.safeName(name + (artist ? ' - ' + artist : '')) + '.lrc';
