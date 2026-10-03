@@ -147,6 +147,7 @@ a { color: var(--accent); }
 .lede { color: var(--ink-2); margin-top: 6px; max-width: 92ch; }
 .music-options-panel { margin-bottom: 18px; }
 .music-option-row { gap: 18px; }
+.music-stats { flex: 1; min-width: min(100%, 280px); white-space: normal; line-height: 1.5; }
 .music-section-head { margin: 26px 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .music-section-head h2 { font-size: 16px; font-weight: 600; }
 .music-section-head p { color: var(--ink-2); margin-top: 5px; font-size: 12.5px; }
@@ -313,6 +314,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .img-wm-canvas { display: block; max-width: 100%; max-height: 560px; margin: 0 auto 12px; border: 1px solid var(--line); border-radius: var(--r-sm); cursor: crosshair; touch-action: none; }
 .wm-mode-row .field { flex: 1; min-width: min(100%, 320px); }
 .wm-mode-row .input { max-width: 100%; }
+.wm-manual { margin: 4px 0 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.wm-manual summary { color: var(--ink-2); cursor: pointer; font-size: 12px; }
+.wm-manual[open] summary { margin-bottom: 8px; color: var(--accent); }
+.wm-manual-row { margin-bottom: 6px; }
 .wm-progress { margin-top: 8px; }
 .wm-progress-track { height: 9px; overflow: hidden; border: 1px solid var(--line-2); border-radius: 999px; background: #0A0C10; }
 .wm-progress-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .16s ease; }
@@ -431,4 +436,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .nav-cap { width: 100%; padding-left: 8px; }
   .topbar { position: static; }
   .stage { padding: 18px 15px 44px; }
+}
+@media (max-width: 600px) {
+  .music-stats { min-width: 100%; }
+  .music-option-row { align-items: flex-start; }
 }

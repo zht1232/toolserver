@@ -178,8 +178,8 @@
     function updateWatermarkMode() {
       var browser = !wmMode || wmMode.value === 'browser';
       if (wmModeNote) wmModeNote.textContent = browser ?
-        '自动检测模型约 10.5 MiB，浏览器运行库约 27 MiB，本地修补模型约 26.8 MiB；自动检测加本地修补首次合计约 65 MiB。模型会缓存到此浏览器，支持 WebGPU 时优先用 GPU，否则回退 CPU。图片和遮罩只在浏览器处理。' :
-        '自动检测仍在浏览器本地完成（检测模型加运行库首次约 38 MiB）；修补时会将原图与遮罩上传到本站服务器。';
+        '自动检测 + 本地修补首次下载约 65 MiB；手动画选区本地修补约 54 MiB。模型缓存到浏览器，图片不上传。' :
+        '手动画选区可直接用服务器修补。自动检测仍在浏览器运行，需要首次下载约 38 MiB；服务器修补会上传图片。';
       if (wmStatus && wmPanel && !wmPanel.classList.contains('hidden') && srcFile) {
         wmStatus.textContent = browser ? '浏览器本地模式：图片不会上传。模型会按需下载并缓存。' : '服务器模式：自动检测在浏览器本地运行；修补时会上传图片和遮罩。';
       }

@@ -607,10 +607,10 @@
       var meta = r.ok ? r.result : r.musicMeta;
       return !meta || !meta.name;
     }).length;
-    var lyricNotStarted = results.filter(function (r) { return r.lyricState === 'not-run'; }).length;
-    stats.textContent = results.length + ' 个文件 · 解密成功 ' + ok + ' · 解密失败 ' + decryptFailed +
-      (lyricsEnabled() ? ' · 歌词自动匹配 ' + lyricMatched + ' · 未找到 ' + lyricNotFound + ' · 查询错误 ' + lyricErrors +
-        ' · 手动歌词 ' + lyricManual + ' · 匹配中 ' + lyricPending + ' · 缺少曲目信息 ' + lyricNoInfo + ' · 未开始 ' + lyricNotStarted : ' · 自动匹配已关闭 · 手动歌词 ' + lyricManual);
+    stats.textContent = '解密 ' + ok + ' 成功 / ' + decryptFailed + ' 失败' +
+      (lyricsEnabled() ? ' · 歌词自动 ' + lyricMatched + ' / 手动 ' + lyricManual + ' · 未找到 ' + lyricNotFound + ' · 查询错误 ' + lyricErrors +
+        ' · 匹配中 ' + lyricPending + (lyricNoInfo ? ' · 缺曲目信息 ' + lyricNoInfo : '') :
+        ' · 自动匹配关闭' + (lyricManual ? ' · 手动歌词 ' + lyricManual : ''));
   }
 
   function renderItem(item) {

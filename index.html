@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩与 AI 去水印、格式转换及开发者工具。仅主动运行服务器 AI 去水印时会发送所选图片和遮罩。">
-<link rel="stylesheet" href="assets/style.css?v=20261003-11">
+<link rel="stylesheet" href="assets/style.css?v=20261003-12">
 </head>
 <body>
 <div class="app">
@@ -79,7 +79,7 @@
       <section class="page" id="page-music">
         <div class="page-head">
           <h1>音乐解密与歌词匹配</h1>
-          <p class="lede">音频解密和常规图片处理在浏览器本地完成；歌词检索只发送歌名和歌手名。只有主动运行 AI 水印修补时，选中的图片与遮罩才会发送到本站服务器。</p>
+          <p class="lede">音频解密和普通图片处理在浏览器本地完成；歌词检索只发送歌名和歌手名。AI 去水印可在本地运行，也可选择上传图片到本站服务器修补。</p>
         </div>
 
         <div class="panel music-options-panel">
@@ -98,7 +98,7 @@
             </select>
             <span class="mono muted">每首解密结果还可以单独改名</span>
           </div>
-          <div class="note">每首结果都可上传自己的 LRC / TXT 覆盖自动匹配；单曲下载会等本曲匹配完成，打包 ZIP 会等当前匹配完成。MP3 / FLAC 默认内嵌已载入歌词；NCM 解密出的 MP3 / FLAC 封面也会写入音频封面标签，即使关闭歌词内嵌仍保留。MP3 写入 ID3v2.3 USLT（纯文本）和 SYLT（时间戳）；播放器是否显示仍取决于版本。Windows 11 Media Player 没有内置歌词显示面板时，请下载旁边的 LRC / TXT 文件并使用支持歌词的播放器。</div>
+          <div class="note">每首可换 LRC / TXT；ZIP 会等匹配结束后内嵌歌词，并保留 NCM 封面。Windows 播放器若不显示内嵌歌词，可下载 LRC / TXT。</div>
         </div>
 
         <div id="music-decrypt-panel">
@@ -112,7 +112,7 @@
               <div class="row hidden" id="music-toolbar">
                 <button class="btn btn-primary" id="music-download-all" type="button">全部打包下载 ZIP</button>
                 <button class="btn" id="music-clear" type="button">清空</button>
-                <span class="mono muted" id="music-stats"></span>
+              <span class="mono muted music-stats" id="music-stats"></span>
               </div>
               <div class="logline mono" id="music-log"></div>
             </div>
@@ -308,28 +308,33 @@
         <div class="panel hidden" id="img-watermark-panel">
           <div class="panel-cap">自动检测消除 · 或手动涂抹修补</div>
           <div class="row wm-mode-row">
-            <label class="field">修补位置
+            <label class="field">修补方式
               <select class="input" id="img-wm-mode">
-                <option value="browser" selected>浏览器本地（不上传图片，自动模式首次约 65 MiB）</option>
-                <option value="server">服务器（图片上传后由本站推理）</option>
+                <option value="browser" selected>本地推理（图片不上传）</option>
+                <option value="server">服务器推理（图片会上传）</option>
               </select>
             </label>
-            <button class="btn" id="img-wm-cache-clear" type="button">清除浏览器模型缓存</button>
           </div>
-          <div class="note" id="img-wm-mode-note">自动检测模型约 10.5 MiB，浏览器运行库约 27 MiB，本地修补模型约 26.8 MiB；自动检测加本地修补首次合计约 65 MiB。模型会缓存到此浏览器，支持 WebGPU 时优先用 GPU，否则回退 CPU。图片和遮罩只在浏览器处理。</div>
+          <div class="note" id="img-wm-mode-note">自动检测 + 本地修补首次下载约 65 MiB；手动画选区本地修补约 54 MiB。模型缓存到浏览器，图片不上传。</div>
           <canvas id="img-wm-canvas" class="img-wm-canvas"></canvas>
           <div class="row">
             <label class="field">识别灵敏度 <span class="mono" id="img-wm-threshold-val">50</span>%
               <input type="range" id="img-wm-threshold" min="20" max="90" value="50">
             </label>
-            <label class="field">画笔 <span class="mono" id="img-wm-brush-val">36</span> px
-              <input type="range" id="img-wm-brush" min="8" max="160" value="36">
-            </label>
             <button class="btn btn-primary" id="img-wm-auto" type="button">自动检测并消除</button>
-            <button class="btn" id="img-wm-undo" type="button">撤销笔画</button>
-            <button class="btn" id="img-wm-clear" type="button">清除遮罩</button>
-            <button class="btn" id="img-wm-apply" type="button">修补画笔区域</button>
           </div>
+          <details class="wm-manual">
+            <summary>手动修补 / 调整选区</summary>
+            <div class="row wm-manual-row">
+              <label class="field">画笔 <span class="mono" id="img-wm-brush-val">36</span> px
+                <input type="range" id="img-wm-brush" min="8" max="160" value="36">
+              </label>
+              <button class="btn" id="img-wm-undo" type="button">撤销上一步</button>
+              <button class="btn" id="img-wm-clear" type="button">清除标记</button>
+              <button class="btn" id="img-wm-apply" type="button">修补标记区域</button>
+            </div>
+            <button class="btn" id="img-wm-cache-clear" type="button">清除浏览器模型缓存</button>
+          </details>
           <div class="logline mono" id="img-wm-status" role="status" aria-live="polite">自动模式会识别整张图片中的文字/Logo 水印，再一次修补所有候选区域。也可手动画出多个区域后修补。图片上限 1200 万像素。</div>
           <div class="wm-progress hidden" id="img-wm-progress">
             <div class="wm-progress-track" id="img-wm-progress-track" role="progressbar" aria-label="AI 去水印进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -851,29 +856,29 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261003-11"></script>
-<script src="assets/js/zip.js?v=20261003-11"></script>
-<script src="assets/js/music.js?v=20261003-11"></script>
-<script src="assets/js/ncm.js?v=20261003-11"></script>
-<script src="assets/js/kgm.js?v=20261003-11"></script>
-<script src="assets/js/kwm.js?v=20261003-11"></script>
-<script src="assets/js/qmc.js?v=20261003-11"></script>
-<script src="assets/js/xm.js?v=20261003-11"></script>
-<script src="assets/js/lyrics.js?v=20261003-11"></script>
-<script src="assets/js/syncer.js?v=20261003-11"></script>
-<script src="assets/js/watermark-local.js?v=20261003-11"></script>
-<script src="assets/js/tools.js?v=20261003-11"></script>
-<script src="assets/js/text.js?v=20261003-11"></script>
-<script src="assets/js/color.js?v=20261003-11"></script>
-<script src="assets/js/csvjson.js?v=20261003-11"></script>
-<script src="assets/js/markdown.js?v=20261003-11"></script>
-<script src="assets/js/regex.js?v=20261003-11"></script>
-<script src="assets/js/jwt.js?v=20261003-11"></script>
-<script src="assets/js/cron.js?v=20261003-11"></script>
-<script src="assets/js/radix.js?v=20261003-11"></script>
-<script src="assets/js/generator.js?v=20261003-11"></script>
-<script src="assets/js/diff.js?v=20261003-11"></script>
-<script src="assets/js/reference.js?v=20261003-11"></script>
-<script src="assets/js/feedback.js?v=20261003-11"></script>
+<script src="assets/js/main.js?v=20261003-12"></script>
+<script src="assets/js/zip.js?v=20261003-12"></script>
+<script src="assets/js/music.js?v=20261003-12"></script>
+<script src="assets/js/ncm.js?v=20261003-12"></script>
+<script src="assets/js/kgm.js?v=20261003-12"></script>
+<script src="assets/js/kwm.js?v=20261003-12"></script>
+<script src="assets/js/qmc.js?v=20261003-12"></script>
+<script src="assets/js/xm.js?v=20261003-12"></script>
+<script src="assets/js/lyrics.js?v=20261003-12"></script>
+<script src="assets/js/syncer.js?v=20261003-12"></script>
+<script src="assets/js/watermark-local.js?v=20261003-12"></script>
+<script src="assets/js/tools.js?v=20261003-12"></script>
+<script src="assets/js/text.js?v=20261003-12"></script>
+<script src="assets/js/color.js?v=20261003-12"></script>
+<script src="assets/js/csvjson.js?v=20261003-12"></script>
+<script src="assets/js/markdown.js?v=20261003-12"></script>
+<script src="assets/js/regex.js?v=20261003-12"></script>
+<script src="assets/js/jwt.js?v=20261003-12"></script>
+<script src="assets/js/cron.js?v=20261003-12"></script>
+<script src="assets/js/radix.js?v=20261003-12"></script>
+<script src="assets/js/generator.js?v=20261003-12"></script>
+<script src="assets/js/diff.js?v=20261003-12"></script>
+<script src="assets/js/reference.js?v=20261003-12"></script>
+<script src="assets/js/feedback.js?v=20261003-12"></script>
 </body>
 </html>
