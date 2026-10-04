@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-本地工具箱 - 轻量服务器（基础站点仅依赖 Python 标准库；AI 修补使用可选推理依赖）
+本地工具箱 - 轻量服务器（基础站点仅依赖 Python 标准库）
 
 职责：
 1. 托管本站静态文件（HTML / CSS / JS），替代 Nginx
@@ -16,7 +16,6 @@
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
-  POST /api/watermark/inpaint       用户主动选择的服务器端 AI 图片修补
   POST /api/feedback                用户主动提交建议反馈
 
 用法：
@@ -24,22 +23,16 @@
     python3 server.py 8080             # 指定端口
     python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
 
-说明：音频解密与常规转换都在用户浏览器本地完成。AI 水印支持浏览器本地推理；
-      用户选择服务器修补时，图片和遮罩只在内存推理，不写入磁盘。
+说明：音频解密、图片处理与 AI 水印推理都在用户浏览器本地完成；服务器只按需下发模型和运行库。
 """
 import json
 import ipaddress
 import os
 import sys
 import time
-import threading
 import urllib.parse
 import urllib.request
-from email import policy
-from email.parser import BytesParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-
-import watermark_ai
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KEY_XZ = os.path.join(BASE_DIR, "assets", "kugou_key.xz")
@@ -53,12 +46,6 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 _key_state = {"expanding": False}
 _feedback_state = {}
-_watermark_state = {}
-_watermark_inference = threading.BoundedSemaphore(1)
-_watermark_rate_lock = threading.Lock()
-WATERMARK_MAX_BODY = 24 * 1024 * 1024
-WATERMARK_MAX_IMAGE = 20 * 1024 * 1024
-WATERMARK_MAX_MASK = 4 * 1024 * 1024
 AI_MODEL_DIR = os.environ.get(
     "LOCALTOOLS_AI_MODEL_DIR",
     os.path.join(os.path.dirname(BASE_DIR), "localtools-models"),
@@ -175,16 +162,6 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def send_image(self, data, content_type):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self._cache_set = True
-        self.end_headers()
-        self.wfile.write(data)
-
     def send_ai_asset(self, path, content_type):
         try:
             size = os.path.getsize(path)
@@ -225,7 +202,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/watermark/inpaint":
-            self.post_watermark_inpaint()
+            self.close_connection = True
+            self.send_json({"error": "服务器端图片修补已停用，请在浏览器本地处理"}, 410)
             return
         if parsed.path != "/api/feedback":
             self.send_json({"error": "接口不存在"}, 404)
@@ -270,80 +248,6 @@ class Handler(SimpleHTTPRequestHandler):
         _feedback_state[client] = recent
         self.send_json({"ok": True})
 
-    def post_watermark_inpaint(self):
-        """Run opted-in image repair in memory; neither upload is persisted."""
-        model_status = watermark_ai.status()
-        if not model_status.get("ready"):
-            self.send_json({"error": model_status.get("reason", "AI 模型不可用")}, 503)
-            return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = 0
-        if length <= 0 or length > WATERMARK_MAX_BODY:
-            self.send_json({"error": "请求超过 24 MiB 上限"}, 413)
-            return
-        content_type = self.headers.get("Content-Type", "")
-        if not content_type.lower().startswith("multipart/form-data;"):
-            self.send_json({"error": "需要 multipart/form-data 图片与遮罩"}, 415)
-            return
-        now = time.time()
-        client = self.rate_limit_key()
-        with _watermark_rate_lock:
-            recent = [t for t in _watermark_state.get(client, []) if now - t < 60]
-            if len(recent) >= 3:
-                self.send_json({"error": "每个来源每分钟最多修补 3 张图片，请稍后再试"}, 429)
-                return
-            recent.append(now)
-            _watermark_state[client] = recent
-
-        # Hold the single-flight slot while receiving the body as well as while
-        # running inference, so concurrent clients cannot each buffer 24 MiB.
-        if not _watermark_inference.acquire(blocking=False):
-            self.close_connection = True
-            self.send_json({"error": "AI 正在处理其他图片，请稍后重试"}, 503)
-            return
-        try:
-            try:
-                raw = self.rfile.read(length)
-                if len(raw) != length:
-                    raise ValueError("上传数据不完整，请重试")
-                message = BytesParser(policy=policy.default).parsebytes(
-                    ("Content-Type: %s\r\nMIME-Version: 1.0\r\n\r\n" % content_type).encode("ascii") + raw
-                )
-                if not message.is_multipart():
-                    raise ValueError("multipart 格式无效")
-                files = {}
-                for part in message.iter_parts():
-                    if part.get_content_disposition() != "form-data":
-                        continue
-                    name = part.get_param("name", header="content-disposition")
-                    if name in ("image", "mask"):
-                        files[name] = part.get_payload(decode=True) or b""
-                image, mask = files.get("image", b""), files.get("mask", b"")
-                if not image or not mask:
-                    raise ValueError("请同时提交原图和画笔遮罩")
-                if len(image) > WATERMARK_MAX_IMAGE or len(mask) > WATERMARK_MAX_MASK:
-                    self.send_json({"error": "原图上限 20 MiB、遮罩上限 4 MiB"}, 413)
-                    return
-            except ValueError as exc:
-                self.send_json({"error": str(exc)}, 400)
-                return
-            except Exception:
-                self.send_json({"error": "上传内容无法解析"}, 400)
-                return
-            output, output_type = watermark_ai.inpaint(image, mask)
-            self.send_image(output, output_type)
-        except ValueError as exc:
-            self.send_json({"error": str(exc)}, 400)
-        except watermark_ai.ModelUnavailable as exc:
-            self.send_json({"error": str(exc)}, 503)
-        except Exception as exc:
-            sys.stderr.write("[watermark] inference failed: %s\n" % exc)
-            self.send_json({"error": "AI 修补失败，请缩小遮罩区域后重试"}, 500)
-        finally:
-            _watermark_inference.release()
-
     def do_GET(self):
         self._cache_set = False
         parsed = urllib.parse.urlparse(self.path)
@@ -368,7 +272,6 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         if path == "/api/ping":
-            watermark_status = watermark_ai.status()
             browser_ai = {
                 "ready": all(os.path.isfile(path) for path, content_type in AI_MODEL_FILES.values()) and
                          all(os.path.isfile(path) for path, content_type in AI_RUNTIME_FILES.values()),
@@ -386,7 +289,6 @@ class Handler(SimpleHTTPRequestHandler):
                 "kgmKeySize": KEY_SIZE,
                 "lyricsProxy": True,
                 "feedback": True,
-                "watermarkAi": watermark_status,
                 "browserWatermarkAi": browser_ai,
             })
             return

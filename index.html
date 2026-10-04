@@ -79,7 +79,7 @@
       <section class="page" id="page-music">
         <div class="page-head">
           <h1>音乐解密与歌词匹配</h1>
-          <p class="lede">音频解密和普通图片处理在浏览器本地完成；歌词检索只发送歌名和歌手名。AI 去水印可在本地运行，也可选择上传图片到本站服务器修补。</p>
+          <p class="lede">音频解密和图片处理在浏览器本地完成；歌词检索只发送歌名和歌手名。AI 水印模型按需下载，图片不会上传。</p>
         </div>
 
         <div class="panel music-options-panel">
@@ -261,7 +261,7 @@
       <section class="page hidden" id="page-image">
         <div class="page-head">
           <h1>图片转换压缩</h1>
-          <p class="lede">PNG / JPEG / WebP 互转并压缩在浏览器本地完成。整图 AI 可自动检测水印；默认在浏览器本地推理，也可切换到服务器。服务器模式会上传选中的图片和遮罩；只处理你有权修改的图片。GIF 仅转换当前帧。</p>
+          <p class="lede">PNG / JPEG / WebP 互转压缩、自动水印检测和 AI 修补都在浏览器本地运行。AI 模型会按需下载并缓存；图片不会上传。只处理你有权修改的图片。GIF 仅转换当前帧。</p>
         </div>
         <div class="dropzone" id="img-drop">
           <div class="dz-title">拖入图片</div>
@@ -307,15 +307,7 @@
         </div>
         <div class="panel hidden" id="img-watermark-panel">
           <div class="panel-cap">自动检测消除 · 或手动涂抹修补</div>
-          <div class="row wm-mode-row">
-            <label class="field">修补方式
-              <select class="input" id="img-wm-mode">
-                <option value="browser" selected>本地推理（图片不上传）</option>
-                <option value="server">服务器推理（图片会上传）</option>
-              </select>
-            </label>
-          </div>
-          <div class="note" id="img-wm-mode-note">自动检测 + 本地修补首次下载约 65 MiB；手动画选区本地修补约 54 MiB。模型缓存到浏览器，图片不上传。</div>
+          <div class="note">模型首次按需下载：自动检测约 38 MiB，修补模型另约 27 MiB；之后会缓存到浏览器。图片不上传。</div>
           <canvas id="img-wm-canvas" class="img-wm-canvas"></canvas>
           <div class="row">
             <label class="field">识别灵敏度 <span class="mono" id="img-wm-threshold-val">50</span>%
@@ -769,20 +761,19 @@
       <section class="page hidden" id="page-about">
         <div class="page-head">
           <h1>隐私与部署</h1>
-          <p class="lede">大多数工具在浏览器本地运行；AI 水印修补可选在浏览器本地或本站服务器执行。</p>
+          <p class="lede">所有图片均在浏览器本地处理，AI 模型只在需要时下载。</p>
         </div>
         <div class="grid-2">
           <div class="panel">
             <div class="panel-cap">安全设计</div>
             <ul class="bullets">
               <li><b>本地处理</b>：音乐解密、常规图片转换压缩和文本工具在浏览器内存完成，服务器不接收这些文件。</li>
-              <li><b>浏览器 AI</b>：检测和修补模型下载并缓存到当前浏览器；图片和遮罩不离开设备。</li>
-              <li><b>服务器 AI</b>：选择服务器模式并开始修补后，原图和遮罩才会经 HTTPS 发送给本站服务器，限制大小、串行推理且只在内存处理，不写入磁盘。</li>
+              <li><b>AI 修补</b>：模型下载并缓存在当前浏览器；检测、修补时图片和遮罩不离开设备。</li>
               <li><b>可离线</b>：除歌词检索外，所有工具断网可用。</li>
               <li><b>依赖与模型</b>：AI 去水印会按需载入 ONNX Runtime Web 与 MI-GAN / YOLO11 模型；未运行时不下载。</li>
               <li><b>模型许可</b>：YOLO11 检测模型标注 AGPL-3.0；模型来源和权重信息见 <a href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">第三方声明</a>。</li>
               <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转，以及保存用户主动提交的文字反馈。</li>
-              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载和用户主动提交的反馈；服务器修补模式会上传选中的图片与遮罩。</li>
+              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载和用户主动提交的反馈；水印处理不会上传图片。</li>
             </ul>
           </div>
           <div class="panel">
@@ -867,7 +858,7 @@ python3 server.py 8000</pre>
 <script src="assets/js/lyrics.js?v=20261003-12"></script>
 <script src="assets/js/syncer.js?v=20261003-12"></script>
 <script src="assets/js/watermark-local.js?v=20261003-12"></script>
-<script src="assets/js/tools.js?v=20261003-12"></script>
+<script src="assets/js/tools.js?v=20261004-13"></script>
 <script src="assets/js/text.js?v=20261003-12"></script>
 <script src="assets/js/color.js?v=20261003-12"></script>
 <script src="assets/js/csvjson.js?v=20261003-12"></script>
