@@ -2,11 +2,11 @@
 (function () {
   'use strict';
 
-  var ROUTES = ['music', 'syncer', 'lrc', 'image', 'json', 'encode', 'csvjson', 'markdown',
+  var ROUTES = ['music', 'musicdl', 'syncer', 'lrc', 'image', 'json', 'encode', 'csvjson', 'markdown',
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
-    music: 'MUSIC / DECRYPT + LYRICS', syncer: 'MUSIC / SYNC EDITOR',
+    music: 'MUSIC / DECRYPT + LYRICS', musicdl: 'MUSIC / DOWNLOAD', syncer: 'MUSIC / SYNC EDITOR',
     lrc: 'MUSIC / LRC SHIFT', image: 'FORMAT / IMAGE', json: 'FORMAT / JSON',
     encode: 'FORMAT / CODEC', csvjson: 'FORMAT / CSV-JSON', markdown: 'FORMAT / MARKDOWN',
     regex: 'DEV / REGEX', jwt: 'DEV / JWT', cron: 'DEV / CRON', radix: 'DEV / RADIX',
@@ -37,6 +37,11 @@
       if (lyricsPanel) setTimeout(function () { lyricsPanel.scrollIntoView(); }, 0);
     }
     window.scrollTo(0, 0);
+    if (pageRoute === 'musicdl') {
+      // 首次打开多源下载页时才加载 go-music-dl 的 Web UI，避免拖慢首屏
+      var frame = document.getElementById('musicdl-frame');
+      if (frame && !frame.getAttribute('src')) frame.setAttribute('src', '/music/');
+    }
     if (watermarkAlias) setTimeout(function () {
       if (window.openWatermarkTool) window.openWatermarkTool();
       else {

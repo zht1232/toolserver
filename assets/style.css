@@ -145,6 +145,15 @@ a { color: var(--accent); }
   -webkit-background-clip: text; background-clip: text; color: var(--ink);
 }
 .lede { color: var(--ink-2); margin-top: 6px; max-width: 92ch; }
+/* 内嵌 go-music-dl Web UI 的iframe 容器：撑满视口剩余高度 */
+.embed-frame {
+  position: relative; width: 100%;
+  height: calc(100vh - 262px); min-height: 560px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; background: var(--panel); margin-bottom: 16px;
+}
+.embed-frame iframe { width: 100%; height: 100%; border: 0; display: block; background: #0A0C10; }
+@media (max-width: 720px) { .embed-frame { height: calc(100vh - 330px); min-height: 480px; } }
 .music-options-panel { margin-bottom: 18px; }
 .music-option-row { gap: 18px; }
 .music-stats { flex: 1; min-width: min(100%, 280px); white-space: normal; line-height: 1.5; }

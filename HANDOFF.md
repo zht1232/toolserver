@@ -1,8 +1,8 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 21 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。
-`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件和反馈）。纯静态部署（无 Python 后端）时以上服务器 API 不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理。旧的 `/api/watermark/inpaint` 接口返回 410。
+前端工具箱 22 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。
+`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈，以及 `/music/*` 到本机 music-dl 服务的反向代理）。纯静态部署（无 Python 后端）时以上服务器 API 与音乐下载页不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
 ```
@@ -11,18 +11,19 @@ python3 server.py 8000
 ```
 
 ## 目录结构
-- `index.html` — 单页应用外壳，侧边栏导航 + 21 个 `<section class="page">`，hash 路由切页
+- `index.html` — 单页应用外壳，侧边栏导航 + 22 个 `<section class="page">`，hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + 浏览器 AI 模型/运行库下发
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + 浏览器 AI 模型/运行库下发 + `/music/*` 反向代理
 - `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
 - 浏览器 AI 模型和 ONNX Runtime Web 文件 — 单独安装在站点目录之外，路径配置位于 `server.py`
-- `THIRD_PARTY_NOTICES.md` — MI-GAN / YOLO11 模型与 ONNX Runtime Web 来源、许可说明
+- `THIRD_PARTY_NOTICES.md` — go-music-dl / music-lib（AGPL-3.0）、MI-GAN / YOLO11 模型与 ONNX Runtime Web 来源、许可说明
 
 ## 工具清单与对应 JS
 | 分组 | 页面 | JS 文件 |
 |---|---|---|
 | 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
+| 音乐 | 多源音乐下载 | 无本地 JS：`index.html` 内嵌 iframe（`/music/`，src 由 main.js 首次进入路由时懒加载），实际 UI 由服务器上的 go-music-dl 提供 |
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
@@ -46,6 +47,18 @@ python3 server.py 8000
 
 运行时文件和模型默认位于 `/home/zht/localtools-models/`（可用 `LOCALTOOLS_AI_MODEL_DIR` 覆盖）：`watermark_detector.onnx`、`migan_pipeline_v2.onnx`，以及 `onnxruntime-web-1.30.0/` 下的 `ort.webgpu.min.js`、`ort-wasm-simd-threaded.jsep.mjs`、`ort-wasm-simd-threaded.jsep.wasm`。AI 检测器模型的 AGPL-3.0 条款见 `THIRD_PARTY_NOTICES.md`。
 
+## 多源音乐下载（go-music-dl）部署约定
+
+「多源音乐下载」页不是本站代码，而是把开源项目 [go-music-dl](https://github.com/guohuiyuan/go-music-dl)（AGPL-3.0，v1.1.2 起接入）的 Web UI 通过 `/music/*` 反向代理进来。接入方式与运维约定：
+
+- **独立服务**：服务器上另跑 systemd 单元 `music-dl.service`，`ExecStart=/home/zht/music-dl/music-dl web --port 8080 --desktop --no-browser`。`--desktop` 是上游为「内嵌在别的程序后面」提供的模式：只监听 `127.0.0.1:8080`、免管理员登录、挂载在 `/music` 前缀下。二进制从 GitHub Releases 下载 `go-music-dl_linux_arm64.tar.gz`（服务器是 aarch64），不需要 Go 工具链。
+- **数据目录**：`WorkingDirectory=/home/zht/music-dl`，下载文件与 SQLite 索引都落在其 `data/` 子目录（`data/downloads`、`data/video_output`）。要改下载位置就在 UI「设置」里改。
+- **代理**：`server.py` 的 `proxy_music_dl()` 把 `/music` 与 `/music/*` 流式转发到 `127.0.0.1:8080`。对齐 go-music-dl README 的 Nginx 反代约定：透传原始 `Host`、`X-Forwarded-For/Proto`、`X-Real-IP`（取 `CF-Connecting-IP`）、`X-Requested-With`、`Origin`、`Sec-Fetch-*`、`Range`、`Cookie`、`Referer`——`X-Requested-With` 是上游区分 XHR/JSON 与整页导航的依据，`Host`+`Origin` 是它同源写校验（`allowSameOriginWrite`，收藏到本地歌单等写操作）的依据，缺了会 403。响应头用黑名单过滤 hop-by-hop 头后其余全透传（`Content-Disposition` 下载文件名、多值 `Set-Cookie` 都要），上游未给 `Cache-Control` 时注入 `no-cache`。上游不可达时返回 503 提示页。
+- **依赖**：服务器需安装 `ffmpeg`（`apt install ffmpeg`），用于非 MP3 格式的元数据内嵌与视频生成；普通搜索/MP3/FLAC 下载不依赖它。
+- **能力探测**：`/api/ping` 的 `musicDl.reachable` 会探测 8080 端口；iframe 的 src 由 `main.js` 在首次进入 `#musicdl` 路由时懒加载。
+- **合规**：AGPL-3.0 是强 Copyleft，通过网络提供修改版服务必须公开对应源码；目前运行的是官方未修改二进制，详见 `THIRD_PARTY_NOTICES.md`。音乐版权风险由使用者自行承担。
+- **升级**：换版本时替换 `/home/zht/music-dl/music-dl` 二进制后 `systemctl restart music-dl`；`data/` 目录保留即保留歌单与设置。
+
 ## 已知缺口 / 未完成事项
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），
 不存在半成品或占位页面。原因：要求纯本地手写完整 QR 编码标准（ISO/IEC 18004）算法，
@@ -62,6 +75,6 @@ python3 server.py 8000
 - 音频、常规图片转换和文本仍在浏览器本地处理；服务器 AI 水印修补会接收用户主动选中的图片与遮罩，仅内存推理，不落盘。
 - 代码风格统一为 ES5（`var`、`function`、无箭头函数/class/let/const/模板字符串），
   是为了兼容老旧设备/浏览器，新增代码请保持一致。
-- 已做过的验证：`node --check` 全部 JS 文件语法通过；用 headless 浏览器扫描过全部 21 个路由，
+- 已做过的验证：`node --check` 全部 JS 文件语法通过；用 headless 浏览器扫描过全部 22 个路由，
   确认无 `Uncaught` JS 运行时错误。未做过的验证：真实移动设备/老旧浏览器的实机测试、
   各音乐解密格式用真实加密文件的端到端测试（之前版本已有基础，这次新增工具不涉及这部分）。

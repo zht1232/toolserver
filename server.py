@@ -17,6 +17,7 @@
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/feedback                用户主动提交建议反馈
+  *    /music  /music/*             反向代理到本机 music-dl（go-music-dl Web 服务，多源音乐下载）
 
 用法：
     python3 server.py                  # 默认 0.0.0.0:8000
@@ -24,12 +25,15 @@
     python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
 
 说明：音频解密、图片处理与 AI 水印推理都在用户浏览器本地完成；服务器只按需下发模型和运行库。
+/music/* 代理到 go-music-dl（12 个音源的搜索 / 试听 / 下载 Web 服务，AGPL-3.0，见 THIRD_PARTY_NOTICES.md）。
 """
 import json
 import ipaddress
 import os
+import socket
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -60,6 +64,28 @@ AI_RUNTIME_FILES = {
     "ort-wasm-simd-threaded.jsep.mjs": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.mjs"), "text/javascript; charset=utf-8"),
     "ort-wasm-simd-threaded.jsep.wasm": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.wasm"), "application/wasm"),
 }
+
+# 多源音乐下载服务（go-music-dl Web 模式，systemd: music-dl.service，仅监听 127.0.0.1:8080）。
+# 本站把 /music 与 /music/* 反向代理到它，对外只暴露 8000 一个端口。
+MUSIC_DL_ORIGIN = "http://127.0.0.1:8080"
+MUSIC_DL_PREFIX = "/music"
+# 透传给上游的请求头。X-Requested-With / Origin / Sec-Fetch-* 是 go-music-dl 区分 XHR 与
+# 整页导航、做同源写校验的依据，必须原样透传；Accept-Encoding 不透传（上游不做压缩，
+# 透传反而会让流式回写复杂化）。
+_MUSIC_DL_REQ_HEADERS = ("range", "content-type", "cookie", "accept", "user-agent",
+                         "x-requested-with", "origin", "referer",
+                         "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest")
+# 响应头回写黑名单：hop-by-hop 头与 Server/Date 不回写（后者由 http.server 自己生成）。
+# Content-Disposition（下载文件名）等其余头部全部透传。
+_MUSIC_DL_SKIP_RESP_HEADERS = frozenset([
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "transfer-encoding", "upgrade", "server", "date",
+])
+
+
+def _http_header_name(h):
+    """range -> Range，content-type -> Content-Type"""
+    return "-".join(p.capitalize() for p in h.split("-"))
 
 
 def expand_key(force=False):
@@ -96,6 +122,15 @@ def http_get(url, timeout=15):
     })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
+
+
+def music_dl_reachable(timeout=0.5):
+    """探测 music-dl 是否在本机 8080 监听（用于 /api/ping 能力上报）"""
+    try:
+        with socket.create_connection(("127.0.0.1", 8080), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 class Server(ThreadingHTTPServer):
@@ -186,21 +221,146 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    # ---------- 音乐下载反向代理（/music -> 127.0.0.1:8080） ----------
+    def send_music_unavailable(self, reason):
+        """music-dl 未运行时给浏览器一个可读的提示页（iframe 内直接可见）"""
+        body = (
+            "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>音乐下载服务未就绪</title></head>"
+            "<body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+            "background:#0A0C10;color:#E7EAF0;font-family:-apple-system,'Segoe UI','PingFang SC',"
+            "'Microsoft YaHei',sans-serif;font-size:14px;line-height:1.7\">"
+            "<div style=\"max-width:420px;padding:32px;text-align:center\">"
+            "<div style=\"font-size:40px;margin-bottom:12px\">🎵</div>"
+            "<h1 style=\"font-size:18px;margin:0 0 10px\">音乐下载服务未就绪</h1>"
+            "<p style=\"color:#A7AEBC;margin:0 0 8px\">本机 127.0.0.1:8080 上的 music-dl 服务没有响应，"
+            "可能正在启动或已停止。</p>"
+            "<p style=\"color:#6B7280;margin:0 0 16px;font-size:12px\">%s</p>"
+            "<a href=\"/music/\" style=\"display:inline-block;padding:8px 22px;border-radius:8px;"
+            "background:rgba(94,234,212,.12);color:#5EEAD4;text-decoration:none;font-weight:600\">重试</a>"
+            "</div></body></html>"
+        ) % (reason or "connection refused")
+        body = body.encode("utf-8")
+        self.send_response(503)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self._cache_set = True
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def proxy_music_dl(self, method):
+        """把 /music 与 /music/* 请求流式代理到本机 go-music-dl Web 服务。
+
+        对齐 go-music-dl README 里的 Nginx 反代约定：转发原始 Host、X-Forwarded-*、
+        X-Requested-With / Origin / Sec-Fetch-*，使上游的 XHR 判别与同源写校验正常工作。
+        响应按 64 KB 分块流式回写，大文件（FLAC 整专打包）不会堆在内存里。
+        """
+        parsed = urllib.parse.urlparse(self.path)
+        upstream = MUSIC_DL_ORIGIN + parsed.path
+        if parsed.query:
+            upstream += "?" + parsed.query
+
+        body = None
+        if method == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if length > 0:
+                body = self.rfile.read(min(length, 32 * 1024 * 1024))
+
+        client_ip = self.client_address[0] if self.client_address else ""
+
+        req = urllib.request.Request(upstream, data=body, method=method)
+        # 原始 Host 必须透传：上游用请求 Host 与 Origin 做同源校验
+        if self.headers.get("Host"):
+            req.add_header("Host", self.headers.get("Host"))
+        for h in _MUSIC_DL_REQ_HEADERS:
+            v = self.headers.get(h)
+            if v:
+                req.add_header(_http_header_name(h), v)
+        # 反代标准转发头（保留 Cloudflare 已写入的真实客户端信息）
+        if self.headers.get("X-Forwarded-For"):
+            req.add_header("X-Forwarded-For", self.headers.get("X-Forwarded-For"))
+        elif client_ip:
+            req.add_header("X-Forwarded-For", client_ip)
+        real_ip = self.headers.get("CF-Connecting-IP") or client_ip
+        if real_ip:
+            req.add_header("X-Real-IP", real_ip)
+        proto = self.headers.get("X-Forwarded-Proto") or ("https" if self.headers.get("CF-Visitor") else "http")
+        req.add_header("X-Forwarded-Proto", proto)
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=300)
+        except urllib.error.HTTPError as e:
+            resp = e  # 上游的 4xx/5xx 也原样透传
+        except Exception as e:
+            self.send_music_unavailable(str(e))
+            return
+
+        try:
+            self.send_response(resp.status)
+            has_length, has_cache = False, False
+            for name, value in resp.headers.items():
+                lname = name.lower()
+                if lname in _MUSIC_DL_SKIP_RESP_HEADERS:
+                    continue
+                if lname == "content-length":
+                    has_length = True
+                if lname == "cache-control":
+                    has_cache = True
+                self.send_header(name, value)
+            if not has_cache:
+                # 上游未指定缓存策略：要求每次重新验证，避免 music-dl 升级后
+                # 浏览器拿着启发式缓存的旧 UI / 旧 JSON
+                self.send_header("Cache-Control", "no-cache")
+            if not has_length:
+                # 上游未给出长度（chunked 已被 urllib 解包）：关闭 keep-alive，
+                # 依靠连接结束向客户端标识 body 结尾
+                self.close_connection = True
+            self.end_headers()
+            if method == "HEAD":
+                return
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # 客户端中途断开（用户切页 / 取消下载），静默结束
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+
     # ---------- 路由 ----------
     def do_HEAD(self):
         # 接口路径用 GET 处理，HEAD 也要给出正确响应（供探针 / CDN 校验使用）
-        if urllib.parse.urlparse(self.path).path.startswith("/api/"):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/"):
             self._cache_set = True
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        if parsed.path == MUSIC_DL_PREFIX or parsed.path.startswith(MUSIC_DL_PREFIX + "/"):
+            self._cache_set = True
+            self.proxy_music_dl("HEAD")
+            return
         self._cache_set = False
         super().do_HEAD()
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == MUSIC_DL_PREFIX or parsed.path.startswith(MUSIC_DL_PREFIX + "/"):
+            self._cache_set = True
+            self.proxy_music_dl("POST")
+            return
         if parsed.path == "/api/watermark/inpaint":
             self.close_connection = True
             self.send_json({"error": "服务器端图片修补已停用，请在浏览器本地处理"}, 410)
@@ -253,6 +413,11 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
 
+        if path == MUSIC_DL_PREFIX or path.startswith(MUSIC_DL_PREFIX + "/"):
+            self._cache_set = True
+            self.proxy_music_dl("GET")
+            return
+
         if path.startswith("/api/ai/models/"):
             name = path.rsplit("/", 1)[-1]
             entry = AI_MODEL_FILES.get(name)
@@ -290,6 +455,11 @@ class Handler(SimpleHTTPRequestHandler):
                 "lyricsProxy": True,
                 "feedback": True,
                 "browserWatermarkAi": browser_ai,
+                "musicDl": {
+                    "proxied": True,
+                    "path": MUSIC_DL_PREFIX,
+                    "reachable": music_dl_reachable(),
+                },
             })
             return
 
