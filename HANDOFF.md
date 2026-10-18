@@ -59,18 +59,22 @@ python3 server.py 8000
 - **合规**：AGPL-3.0 是强 Copyleft，通过网络提供修改版服务必须公开对应源码；目前运行的是官方未修改二进制，详见 `THIRD_PARTY_NOTICES.md`。音乐版权风险由使用者自行承担。
 - **升级**：换版本时替换 `/home/zht/music-dl/music-dl` 二进制后 `systemctl restart music-dl`；`data/` 目录保留即保留歌单与设置。
 
-## 视觉规范（2026-10 精修版）
+## 视觉规范（2026-10 视觉打磨版）
 
 `assets/style.css` 是全站唯一样式源，改样式只改这里，不要在页面里写内联样式（既有少量内联是历史遗留，新代码用 class）。
 
-- **基调**：深色中性底（`--bg #0A0C10`）+ 单一青绿强调色（`--accent #5EEAD4`）。刻意去掉了早期版本的渐变标题字、辉光（glow）、玻璃拟态（backdrop-filter）——那些是「模板感」的来源。现在层级只靠三件事：表面明度（bg < panel < panel-2）、1px 描边（`--line` / `--line-2`）、轻投影（`--shadow-1`）。
-- **两级面板**：`.panel` 是主操作区（实心 `--panel` + 描边 + 轻投影，用户在这里干活）；`.panel panel-quiet` 是说明/参考区（透明底 + 细描边、无投影，视觉退后）。新增面板先想清楚是「干活」还是「看说明」，再选层级。
-- **页头**：`.page-head` 是 flex 行，`<h1>`（19px/600，中文不加 letter-spacing）与一行 `.lede`（13px）同行排布，工具内容不被挤到首屏以下。lede 只写一句话，详细说明放面板或 `.note` 里。
+- **基调**：带蓝的深灰底（`--bg #0C0F16`，不是纯黑）+ 单一青绿强调色（`--accent #2DD4BF`，图标/文字用更亮的 `--accent-hi #5EEAD4`）。层级三件套：表面明度（bg < panel < panel-2）、1px 描边（`--line` / `--line-2`）、轻投影（`--shadow-1`）；面板另有一道 1px 顶部内高光（`--sheen`）做出实体感。刻意不要：渐变标题字、辉光 glow、玻璃拟态大面积背景（仅 topbar 用少量 translucency+blur）。
+- **两级面板**：`.panel` 是主操作区（实心 + 描边 + 轻投影，用户在这里干活）；`.panel panel-quiet` 是说明/参考区（近透明底 + 细描边、无投影，视觉退后）。新增面板先想清楚是「干活」还是「看说明」，再选层级。
+- **页头**：`.page-head` 是 flex 行，`<h1>`（20px/600，前面带 8px 强调色方块，中文不加 letter-spacing）与一行 `.lede`（13px）同行排布。lede 只写一句话，详细说明放面板或 `.note` 里。
 - **字号阶梯**：正文 14px；次要 13px；面板说明 12.5px；表格/日志 12.5px；等宽 `--mono` 12.5px；最小不小于 11px。中文标题一律不加 letter-spacing。
-- **导航**：侧边栏只有文字项（早期版本的编号角标 `<i>01</i>` 和 featured 高亮插队已移除——它们制造噪音还打乱分组）；`nav-cap` 只写中文组名。
-- **顶栏**：只放当前页中文标题（`main.js` 的 `TITLES` 映射）+ 右侧按需显示的格式数。不要往回加标语式文案。
-- **按钮**：`.btn-primary` 是实心青绿 + 深色字，无渐变无辉光；`.btn` 是 `--panel-2` 描边次要钮。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（lyrics.js 两种都见过，CSS 已同时支持）。
-- **内嵌页面**：`.embed-frame` 撑满视口剩余高度（`calc(100vh - 216px)`），iframe 背景与站点一致。
+- **导航**：侧栏每项都是「16px 线性图标 + 文字」（图标是 `index.html` 顶部的 SVG sprite，`<use href="#i-xxx">`，stroke=currentColor，加新图标就往 sprite 里加 symbol）；激活项 = 强调色底 + 左侧 2px 竖条 + 图标变亮。侧栏底部是 `.side-status` 状态条（绿点 + 版本号）。早期版本的编号角标和 featured 高亮插队已移除——它们制造噪音还打乱分组。
+- **移动端（≤900px）**：侧栏默认收起，顶栏左侧出现 `#nav-toggle` 汉堡按钮，点开是 `body.nav-open`；切页时 `main.js` 自动收菜单。新增移动端样式记得写在 `@media (max-width: 900px)` 块里。
+- **顶栏**：只放当前页中文标题（`main.js` 的 `TITLES` 映射）+ 右侧按需显示的格式数（胶囊 chip）。不要往回加标语式文案。
+- **按钮**：`.btn-primary` 是实心青绿 + 深色字 + 顶部内高光，无渐变无辉光；`.btn` 是 `--panel-2` 描边次要钮。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（lyrics.js 两种都见过，CSS 已同时支持）。
+- **提示条**：`.note` 是信息（青绿左边条），`.note note-warn` 是警告（琥珀色左边条，用于「要下载大文件」「有版权/实验性风险」这类需要用户停下来看一眼的话）。
+- **表格**：`.ftable` 是唯一表格样式；格式扩展名一律用 `.fmt-chip` 小胶囊（等宽、描边），不要直接堆一串空格分隔的文本。
+- **内嵌页面**：`.embed-frame` 撑满视口剩余高度（`calc(100vh - 220px)`），iframe 背景与站点一致。
+- **原生控件**：`:root` 有 `color-scheme: dark`，下拉/日期等原生弹窗才是暗色；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），

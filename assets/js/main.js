@@ -29,6 +29,10 @@
     document.querySelectorAll('.nav-item').forEach(function (a) {
       a.classList.toggle('active', a.getAttribute('data-route') === route);
     });
+    // 窄屏：切页后自动收起导航菜单
+    document.body.classList.remove('nav-open');
+    var nt = document.getElementById('nav-toggle');
+    if (nt) nt.setAttribute('aria-expanded', 'false');
     var t = document.getElementById('top-title');
     if (t) t.textContent = TITLES[route] || '';
     if (lyricsAlias) {
@@ -57,6 +61,15 @@
     showPage(location.hash.replace('#', '') || 'music');
   });
   showPage(location.hash.replace('#', '') || 'music');
+
+  // 窄屏导航菜单开关
+  var navToggle = document.getElementById('nav-toggle');
+  if (navToggle) {
+    navToggle.addEventListener('click', function () {
+      var open = document.body.classList.toggle('nav-open');
+      navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
 
   /* Alt + 1..9 切换工具 */
   document.addEventListener('keydown', function (e) {
