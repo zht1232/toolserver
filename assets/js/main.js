@@ -6,15 +6,15 @@
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
-    music: 'MUSIC / DECRYPT + LYRICS', musicdl: 'MUSIC / DOWNLOAD', syncer: 'MUSIC / SYNC EDITOR',
-    lrc: 'MUSIC / LRC SHIFT', image: 'FORMAT / IMAGE', json: 'FORMAT / JSON',
-    encode: 'FORMAT / CODEC', csvjson: 'FORMAT / CSV-JSON', markdown: 'FORMAT / MARKDOWN',
-    regex: 'DEV / REGEX', jwt: 'DEV / JWT', cron: 'DEV / CRON', radix: 'DEV / RADIX',
-    generator: 'DEV / GENERATOR', diff: 'DEV / DIFF', reference: 'DEV / REFERENCE',
-    text: 'TEXT / PROCESS', hash: 'TEXT / HASH',
-    timestamp: 'TEXT / TIMESTAMP', color: 'TEXT / COLOR', about: 'INFO / PRIVACY', feedback: 'INFO / FEEDBACK'
+    music: '音乐解密与歌词', musicdl: '多源音乐下载', syncer: '歌词打轴器',
+    lrc: 'LRC 时间轴', image: '图片转换压缩', json: 'JSON 格式化',
+    encode: '编解码', csvjson: 'CSV / JSON 互转', markdown: 'Markdown 预览',
+    regex: '正则表达式测试', jwt: 'JWT 解析器', cron: 'Cron 表达式', radix: '进制转换 / 位运算',
+    generator: 'UUID / 密码生成', diff: '文本 Diff 对比', reference: '速查表',
+    text: '文本处理', hash: '哈希校验',
+    timestamp: '时间戳转换', color: '颜色转换', about: '隐私与部署', feedback: '建议与反馈'
   };
-  TITLES.watermark = 'FORMAT / FULL-IMAGE WATERMARK';
+  TITLES.watermark = '整图 AI 去水印';
 
   function showPage(route) {
     var watermarkAlias = route === 'watermark';
@@ -149,7 +149,7 @@
     setTimeout(function () {
       if (!window.MusicDecrypt) return;
       var list = MusicDecrypt.supported();
-      setText('top-format-count', list.length + ' FORMATS');
+      setText('top-format-count', list.length + ' 种加密格式');
       setText('rail-formats', String(list.length));
       setText('music-formats', '支持 ' + list.map(function (e) { return '.' + e; }).join('  '));
     }, 0);
