@@ -39,6 +39,41 @@ _P3_TO_709 = np.array([
 _SRGB_ICC = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
+def _heif_has_container_transform(data):
+    """True if the HEIF container carries irot (nonzero) or imir.
+
+    libheif/pillow-heif applies these transforms while decoding, so applying
+    EXIF orientation on top would rotate 90/270-degree shots twice.
+    """
+    containers = {b"meta": 4, b"iprp": 0, b"ipco": 0}
+
+    def walk(start, end, depth):
+        p = start
+        while p + 8 <= end:
+            size = int.from_bytes(data[p:p + 4], "big")
+            typ = data[p + 4:p + 8]
+            header = 8
+            if size == 1:
+                size = int.from_bytes(data[p + 8:p + 16], "big")
+                header = 16
+            elif size == 0:
+                size = end - p
+            if size < header or p + size > end:
+                break
+            if typ == b"irot":
+                if data[p + header] & 0x03:
+                    return True
+            elif typ == b"imir":
+                return True
+            elif typ in containers and depth < 6:
+                if walk(p + header + containers[typ], p + size, depth + 1):
+                    return True
+            p += size
+        return False
+
+    return walk(0, len(data), 0)
+
+
 class HifError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
@@ -124,7 +159,7 @@ def _source_label(primaries, transfer, bit_depth):
     return "%s/%s/%s-bit" % (primaries_name, transfer_name, bit_depth)
 
 
-def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
+def convert_heif_to_jpeg(data, quality=JPEG_QUALITY, exposure_ev=0.0):
     """Return (jpeg_bytes, metadata). Raises HifError on invalid input."""
     if not isinstance(data, (bytes, bytearray)):
         raise HifError("上传内容无效")
@@ -136,6 +171,7 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
     if len(data) > MAX_UPLOAD_BYTES:
         raise HifError("文件超过 %d MB 上限" % (MAX_UPLOAD_BYTES // 1048576), 413)
     quality = max(70, min(100, int(quality)))
+    gain = 2.0 ** max(-4.0, min(4.0, float(exposure_ev)))
 
     try:
         heif = open_heif(data, convert_hdr_to_8bit=False)
@@ -174,7 +210,7 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
         sample = array[::8, ::8].astype(np.float32) / scale
         sample_linear = _pq_eotf(sample) if transfer == 16 else _hlg_to_nits(sample)
         sample_709 = _to_709(sample_linear, primaries)
-        peak = float(_luminance(sample_709).max())
+        peak = float(_luminance(sample_709).max()) * gain
         if not np.isfinite(peak) or peak <= 0:
             raise HifError("HDR 亮度解析失败", 422)
 
@@ -188,7 +224,7 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
                 linear = _pq_eotf(value)
             else:
                 linear = _hlg_to_nits(value)
-            linear = _to_709(linear, primaries)
+            linear = _to_709(linear, primaries) * gain
             y = _luminance(linear)
             target = _tone_luminance(y, peak)
             ratio = np.where(y > 1e-6, target / np.maximum(y, 1e-6), 0.0)
@@ -202,7 +238,7 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
                 linear = value
             else:
                 raise HifError("不支持的 SDR 传输曲线（%s）" % transfer, 415)
-            linear = _to_709(linear, primaries)
+            linear = _to_709(linear, primaries) * gain
         out[y0:y1] = (np.clip(_srgb_oetf(linear), 0.0, 1.0) * 255.0 + 0.5).astype(
             np.uint8
         )
@@ -211,8 +247,9 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
     image = Image.fromarray(out, "RGB")
     if exif_bytes:
         image.info["exif"] = exif_bytes
-        image = ImageOps.exif_transpose(image)
-        exif_bytes = image.info.get("exif")
+        if not _heif_has_container_transform(data):
+            image = ImageOps.exif_transpose(image)
+            exif_bytes = image.info.get("exif")
     exif = Image.Exif()
     if exif_bytes:
         try:
@@ -248,5 +285,6 @@ def convert_heif_to_jpeg(data, quality=JPEG_QUALITY):
         "hdr": hdr,
         "peak": round(peak, 1) if hdr else None,
         "quality": quality,
+        "exposureEv": round(float(exposure_ev), 2),
     }
     return output.getvalue(), meta

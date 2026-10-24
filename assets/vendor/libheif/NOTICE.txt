@@ -1,0 +1,26 @@
+libheif-js 1.19.8 (Emscripten build)
+====================================
+
+This directory contains the unmodified `libheif-wasm` bundle from the
+`libheif-js` npm package:
+
+  https://www.npmjs.com/package/libheif-js
+  https://github.com/catdad-experiments/libheif-js
+
+The bundle embeds an Emscripten build of:
+
+  libheif 1.23.5
+    https://github.com/strukturag/libheif
+    License: GNU Lesser General Public License v3.0 (library)
+
+  libde265 (HEVC decoder)
+    https://github.com/strukturag/libde265
+    License: GNU Lesser General Public License v3.0
+
+The full LGPL-3.0 text is in LICENSE.txt. The WASM is served unmodified as a
+separate file from the site and is used only in the visitor's browser for
+local HIF/HEIF decoding. No HIF files are sent to the server by this code.
+
+To replace the bundled decoder with a build of your own, rebuild libheif-js
+from the sources above and replace libheif-bundle.js; keep this notice and
+the license text with the new file.

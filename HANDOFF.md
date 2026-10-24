@@ -1,8 +1,8 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。
-`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 转换，以及 `/music/*` 到本机 music-dl 服务的反向代理）。纯静态部署（无 Python 后端）时以上服务器 API、HIF 转换与音乐下载页不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 转换是唯一接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
+前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。
+`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换，以及 `/music/*` 到本机 music-dl 服务的反向代理）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与音乐下载页不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
 ```
@@ -14,8 +14,10 @@ python3 server.py 8000
 - `index.html` — 单页应用外壳，侧边栏导航 + 23 个 `<section class="page">`，hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + `/api/hif/convert` + 浏览器 AI 模型/运行库下发 + `/music/*` 反向代理
-- `hif_convert.py` — HIF/HEIF 10-bit HDR 解码、PQ/HLG → sRGB 映射、JPEG 输出
+- `assets/js/hif-worker.js` — HIF 浏览器本地转换 Worker：nclx/pixi 解析、libheif 16-bit 解码、PQ/HLG/SDR → sRGB 色调映射
+- `assets/vendor/libheif/` — libheif-js 1.19.8 WASM bundle（未修改）与 LGPL-3.0 许可证/来源说明；仅在 HIF 页首次转换时按需加载
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发 + `/music/*` 反向代理
+- `hif_convert.py` — HIF/HEIF 10-bit HDR 解码、PQ/HLG → sRGB 映射、JPEG 输出（服务器兜底用）
 - `requirements.txt` — 仅 HIF 转换需要的可选依赖（Pillow / pillow-heif / NumPy）
 - `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
 - 浏览器 AI 模型和 ONNX Runtime Web 文件 — 单独安装在站点目录之外，路径配置位于 `server.py`
@@ -29,7 +31,7 @@ python3 server.py 8000
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
-| 格式 | HIF / HEIF 转 JPEG | hif.js + server.py `/api/hif/convert` + hif_convert.py |
+| 格式 | HIF / HEIF 转 JPEG | hif.js + hif-worker.js + assets/vendor/libheif/（浏览器本地）；server.py `/api/hif/convert` + hif_convert.py（兜底） |
 | 格式 | JSON 格式化 / 编解码 | tools.js |
 | 格式 | CSV / JSON / Markdown 表格互转 | csvjson.js |
 | 格式 | Markdown 实时预览 | markdown.js（内置手写 Markdown 解析器） |
@@ -50,14 +52,16 @@ python3 server.py 8000
 
 运行时文件和模型默认位于 `/home/zht/localtools-models/`（可用 `LOCALTOOLS_AI_MODEL_DIR` 覆盖）：`watermark_detector.onnx`、`migan_pipeline_v2.onnx`，以及 `onnxruntime-web-1.30.0/` 下的 `ort.webgpu.min.js`、`ort-wasm-simd-threaded.jsep.mjs`、`ort-wasm-simd-threaded.jsep.wasm`。AI 检测器模型的 AGPL-3.0 条款见 `THIRD_PARTY_NOTICES.md`。
 
-## HIF / HEIF 转 JPEG（服务端）
+## HIF / HEIF 转 JPEG（浏览器本地 + 服务端兜底）
 
-浏览器侧无法可靠解码相机 10-bit HDR HEIF，所以这一页把文件上传到 `server.py`，由 `hif_convert.py` 转换后直接返回 JPEG。**这是站内唯一接收用户图片的接口**；文件只在内存中处理，不写临时文件、不落盘，响应完成后释放。
+HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libde265）解码 10-bit HEIF，再由 `hif-worker.js` 做与服务端一致的色彩管线。图片不上传；首次转换按需加载约 1.4 MB 解码器（`assets/vendor/libheif/libheif-bundle.js`，长缓存）。纯静态部署也能使用这一页。
 
-- **色彩链路**：nclx 读取 BT.2020/BT.709/P3、PQ/HLG/SDR；PQ 走 ST 2084 EOTF，HLG 走 BT.2100 OETF + OOTF；线性光下转 BT.709，以 203 nit 为 SDR 参考白，0.85 以上做对数高光肩部压缩，最后 sRGB 编码。输出嵌入 sRGB ICC，EXIF ColorSpace 改为 1。
-- **接口**：`POST /api/hif/convert?name=文件名&q=96`，请求体是原始文件字节（`Content-Length` 必填），返回 `image/jpeg`，并带 `X-Output-Width/Height`、`X-Source-Color`、`X-Source-HDR` 供前端显示。错误返回 JSON `{"error": "..."}`。
-- **限制**：单张 ≤ 80 MB、≤ 6000 万像素；仅 HEIF/HIF 品牌（不接受 AVIF）；JPEG 质量 70–100。服务端全局串行转换（`threading.BoundedSemaphore(1)`），排队 45 秒仍无空位则 503；上传槽位 2 个、单次读取超时 120 秒；按 IP 每分钟 60 次、每小时 240 次（`_HIF_RATE`）。前端批量上限 30 张 / 500 MB，逐张串行上传，避免服务器同时解多张 32 MP 图。
-- **依赖与部署**：需要 Python 3.10+；`requirements.txt` 固定 `pillow-heif==1.8.1`，Pillow / NumPy 用兼容范围；Linux aarch64 有 wheel。未安装时 `server.py` 仍能启动，`/api/ping` 的 `hifConvert.ready=false`，前端只显示服务未就绪。安装建议：
+- **浏览器链路**：Worker 解析 HEIF `meta/iprp/ipco` 中的 `nclx`（原色/传输曲线）与 `pixi`（位深），用 `heif_js_decode_image2(..., RGB, RRGGBB_LE)` 拿到 10-bit RGB；PQ 走 ST 2084 EOTF，HLG 走 BT.2100 OETF + OOTF；线性光下转 BT.709，以 203 nit 为 SDR 参考白，0.85 以上做对数高光肩部压缩，最后 sRGB 编码。色调映射后的 RGBA 与服务端 JPEG 逐像素对比 MAE ≈ 0.96/255（99 分位 4），肉眼无差异。
+- **Worker 与内存**：每次转换创建一个 Worker，解码后把 16-bit 平面复制出 WASM 堆并释放 HEIF image，输出 RGBA 后 transfer 回主线程；主线程用 canvas 编码 JPEG，随后 `worker.terminate()` 释放 WASM 内存。32 MP 图像实测（Windows/Node WASM）：解码 ~4.7 s、色调映射 ~1.1 s；浏览器总耗时取决于设备，移动端可能更慢或内存不足。
+- **编码差异**：浏览器用 canvas `toBlob('image/jpeg', q/100)` 输出 sRGB JPEG，**不保留 EXIF/ICC**，且通常为 4:2:0 子采样，文件比服务端 4:4:4 输出略小；需要保留相机 EXIF/ICC 时应走服务器兜底。
+- **服务器兜底**：页面复选框「浏览器无法解码时自动改用本站服务器」默认开启；仅当本地解码失败或内存不足时才调用 `POST /api/hif/convert?name=&q=`（请求体是原始文件字节，`Content-Length` 必填）。服务器只在内存处理、不落盘，返回 `image/jpeg` 与 `X-Output-*`/`X-Source-*` 头，输出嵌入 sRGB ICC，EXIF ColorSpace 改为 1。
+- **服务端限制**：单张 ≤ 80 MB、≤ 6000 万像素；仅 HEIF/HIF 品牌（不接受 AVIF）；JPEG 质量 70–100。服务端全局串行转换（`threading.BoundedSemaphore(1)`），排队 45 秒仍无空位则 503；上传槽位 2 个、单次读取超时 120 秒；按 IP 每分钟 60 次、每小时 240 次（`_HIF_RATE`）。前端批量上限 30 张 / 500 MB，逐张串行。
+- **服务器依赖**：需要 Python 3.10+；`requirements.txt` 固定 `pillow-heif==1.8.1`，Pillow / NumPy 用兼容范围；Linux aarch64 有 wheel。未安装时 `server.py` 仍能启动，`/api/ping` 的 `hifConvert.ready=false`，浏览器本地转换不受影响。安装建议：
   ```
   cd /home/zht/toolserver
   python3 -m venv .venv
@@ -66,8 +70,8 @@ python3 server.py 8000
   # 用该 venv 的 python 重启现有服务（或把 systemd ExecStart 指向 .venv/bin/python）
   ```
   若 systemd 直接用系统 Python，需要确认 PEP 668 是否允许 pip；推荐 venv。更新代码后重启服务即可。
-- **验证**：用 Canon EOS R7 的 `452A0021.HIF`（BT.2020/PQ/10-bit）做过端到端测试：6960×4640、约 11 MB JPEG、ICC/EXIF 正确，与本地色彩管线逐像素对比 MAE ≈ 0.0001；浏览器批量 2 张与 ZIP 打包通过。HLG 路径按 BT.2100 实现，但没有真实 HLG 样张做端到端验证，上线后应补测索尼/尼康 HLG。
-- **隐私文案**：页面顶部有上传警告；`index.html` 的「隐私与部署」、`README.md` 和 `THIRD_PARTY_NOTICES.md` 都记录了该例外，不要删。
+- **验证**：用 Canon EOS R7 的 `452A0021.HIF`（BT.2020/PQ/10-bit，6960×4640）验证：浏览器 WASM 解码 + JS 色调映射输出与服务端结果 MAE ≈ 0.96/255；浏览器批量、ZIP、服务器兜底均需在真实浏览器里复测。HLG 路径按 BT.2100 实现，但没有真实 HLG 样张做端到端验证，上线后应补测索尼/尼康 HLG。
+- **隐私文案**：页面顶部说明默认本地、兜底会上传；`index.html` 的「隐私与部署」、`README.md` 和 `THIRD_PARTY_NOTICES.md` 都记录了该例外，不要删。浏览器解码器为未修改的 libheif-js 1.19.8，许可证与来源见 `assets/vendor/libheif/`。
 
 ## 多源音乐下载（go-music-dl）部署约定
 
@@ -99,6 +103,8 @@ python3 server.py 8000
 - **原生控件**：`:root` 有 `color-scheme: dark`，下拉/日期等原生弹窗才是暗色；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
+**HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；上线后应用竖拍 HIF 补测。
+
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），
 不存在半成品或占位页面。原因：要求纯本地手写完整 QR 编码标准（ISO/IEC 18004）算法，
 复杂度远超其他工具，之前两次尝试（委托给子任务）都未能在合理时间内产出可用结果。
@@ -108,13 +114,14 @@ python3 server.py 8000
    跑通之后再逐步扩展，降低单次任务的复杂度和出错概率。
 2. 识别（扫码解码）比生成更难，若时间有限，可以优先用浏览器原生 `BarcodeDetector` API
    （Chrome/Edge 支持，无需手写解码算法），不支持的浏览器再考虑是否要兜底方案或直接提示换浏览器。
-3. 二维码功能应避免依赖在线生成 API。HIF 转换是站内唯一上传用户图片的功能，仅在服务器内存处理。
+3. 二维码功能应避免依赖在线生成 API。HIF 默认在浏览器本地转换；仅用户开启服务器兜底且本地失败时才会在服务器内存处理。
 
 ## 其它说明
-- 音频、常规图片转换和文本在浏览器本地处理；AI 水印修补也在浏览器本地运行。HIF 转换是唯一上传用户图片的功能，服务器仅内存处理、不落盘。
+- 音频、常规图片转换和文本在浏览器本地处理；AI 水印修补也在浏览器本地运行。HIF 默认在浏览器本地转换；只有用户开启服务器兜底且本地解码失败时才会上传，服务器仅内存处理、不落盘。
 - 代码风格统一为 ES5（`var`、`function`、无箭头函数/class/let/const/模板字符串），
-  是为了兼容老旧设备/浏览器，新增代码请保持一致。
+  是为了兼容老旧设备/浏览器，新增代码请保持一致。`hif-worker.js` 允许使用 Promise（仅在支持 Worker + WebAssembly 的浏览器里运行）。
 - 已做过的验证：`node --check` 全部 JS 文件语法通过；全部 23 个路由无 `Uncaught` JS 运行时错误；
   HIF 转换用 Canon EOS R7 的 BT.2020/PQ HIF 做过 API、浏览器批量 2 张与 ZIP 打包测试。
-  未做过的验证：真实移动设备/老旧浏览器的实机测试、真实 HLG 样张、各音乐解密格式的实机端到端测试。
+  2026-10-24 浏览器本地路线：用 Node 的 libheif-js WASM 对 32 MP HIF 实测解码 ~4.7 s、色调映射 ~1.1 s，色彩与服务端输出 MAE ≈ 0.96/255；仍需在真实 Chrome/Edge/Safari 和移动端复测 canvas 编码与内存。
+  未做过的验证：真实移动设备/老旧浏览器的实机测试、真实 HLG 样张、竖拍 EXIF 方向、各音乐解密格式的实机端到端测试。
 - 2026-10-18 视觉精修的验证方式：`html.parser` 全量标签配对检查（0 错误）+ agent-browser 无头浏览器实测。

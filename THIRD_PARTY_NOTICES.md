@@ -8,13 +8,23 @@ Both projects are licensed under **GNU Affero General Public License v3.0**. The
 
 ## HIF / HEIF conversion libraries
 
+### Browser-local decoder (default path)
+
+The default HIF/HEIF conversion runs entirely in the browser using the **libheif-js 1.19.8** Emscripten/WASM bundle vendored at `assets/vendor/libheif/libheif-bundle.js`:
+
+- [libheif-js](https://github.com/catdad-experiments/libheif-js) — npm wrapper/bundle; the bundle embeds [libheif](https://github.com/strukturag/libheif) 1.23.5 and [libde265](https://github.com/strukturag/libde265) for HEVC decoding. Both libraries are licensed under **LGPL-3.0**.
+- The bundle is served unmodified from this site and executed in the visitor's browser. HIF files decoded by this path never leave the device and are not sent to the server.
+- The full LGPL-3.0 text and attribution are included in [`assets/vendor/libheif/LICENSE.txt`](assets/vendor/libheif/LICENSE.txt) and [`assets/vendor/libheif/NOTICE.txt`](assets/vendor/libheif/NOTICE.txt). To exercise the LGPL relinking right, rebuild libheif-js from the upstream sources above and replace `libheif-bundle.js`; the rest of the site has no compiled linkage to the WASM.
+
+### Optional server-side fallback
+
 The optional server-side HIF/HEIF converter uses the following Python packages, installed from PyPI and not vendored into this repository:
 
 - [Pillow](https://python-pillow.org/) — MIT-CMU / HPND license ([source](https://github.com/python-pillow/Pillow)).
 - [pillow-heif](https://github.com/bigcat88/pillow_heif) — BSD-3-Clause license; its wheels include [libheif](https://github.com/strukturag/libheif) (LGPL-3.0) and may include libde265 (LGPL-3.0) for HEVC decoding.
 - [NumPy](https://numpy.org/) — BSD-3-Clause license.
 
-These libraries run only on the self-hosted server. Uploaded HIF files are decoded in memory, not written to disk, and are not redistributed. If you redistribute a server image containing these libraries, comply with the LGPL-3.0 terms for libheif/libde265, including providing the corresponding source or a written offer as required.
+These libraries run only on the self-hosted server when the visitor explicitly enables the fallback and local decoding fails. Uploaded HIF files are decoded in memory, not written to disk, and are not redistributed. If you redistribute a server image containing these libraries, comply with the LGPL-3.0 terms for libheif/libde265, including providing the corresponding source or a written offer as required.
 
 ## MI-GAN image inpainting model
 

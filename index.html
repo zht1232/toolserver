@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
-<meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。仅 AI 去水印与 HIF HDR 转换会发送用户主动选择的图片。">
+<meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
 <link rel="stylesheet" href="assets/style.css?v=20261024-01">
 </head>
 <body>
@@ -401,7 +401,7 @@
           <p class="lede">批量把相机 HDR HIF 转成 sRGB 照片，按 203 nit 参考白压缩高光，避免发灰和偏色。</p>
         </div>
         <div class="note note-warn hif-note">
-          <b>与其他图片工具不同：</b>HIF/HEIF 的 10-bit HDR 解码在服务器完成，所选文件会临时上传到本站，仅在内存中转换、不写入磁盘，返回后立即释放。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。
+          <b>默认在浏览器本地完成：</b>HIF/HEIF 的 10-bit HDR 解码与色彩映射由 WebAssembly 在你的浏览器里完成，图片不会上传；首次转换需加载约 1.4 MB 解码器（之后会缓存）。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。浏览器无法解码时可选择回退到本站服务器（会上传文件，仅内存处理、不落盘）。
         </div>
         <div class="dropzone" id="hif-drop">
           <svg class="dz-icon" aria-hidden="true"><use href="#i-camera"/></svg>
@@ -423,6 +423,9 @@
             <button class="btn" id="hif-clear" type="button" disabled>清空列表</button>
             <span class="mono muted" id="hif-summary">未选择文件</span>
           </div>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="hif-fallback" checked>浏览器无法解码时自动改用本站服务器（会上传文件，仅内存处理）</label>
+          </div>
           <div class="wm-progress hidden" id="hif-progress">
             <div class="wm-progress-track" id="hif-progress-track" role="progressbar" aria-label="HIF 转换进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div class="wm-progress-fill" id="hif-progress-fill"></div>
@@ -433,7 +436,7 @@
         <div class="panel hidden" id="hif-files-panel">
           <div class="panel-cap">文件列表 <span class="mono" id="hif-result-count"></span></div>
           <div class="filerow-wrap" id="hif-list"></div>
-          <div class="note">输出为 sRGB JPEG，已嵌入 ICC 色彩配置；原始 HIF 不会被修改。HDR 高光会被压缩，这是 SDR JPEG 的物理限制。</div>
+          <div class="note">输出为 sRGB JPEG；浏览器本地转换不保留 EXIF，服务器兜底转换会保留 EXIF 与 ICC。原始 HIF 不会被修改；HDR 高光会被压缩，这是 SDR JPEG 的物理限制。</div>
         </div>
       </section>
 
@@ -862,20 +865,20 @@
       <section class="page hidden" id="page-about">
         <div class="page-head">
           <h1>隐私与部署</h1>
-          <p class="lede">除 AI 去水印与 HIF/HEIF 转换外，其余处理均在浏览器本地完成。</p>
+          <p class="lede">图片、音频和文本默认都在浏览器本地处理；只有你主动开启的 HIF 服务器兜底会上传所选文件。</p>
         </div>
         <div class="grid-2">
           <div class="panel panel-quiet">
             <div class="panel-cap">安全设计</div>
             <ul class="bullets">
               <li><b>本地处理</b>：音乐解密、常规图片转换压缩和文本工具在浏览器内存完成，服务器不接收这些文件。</li>
-              <li><b>HIF 转换</b>：HIF/HEIF 的 HDR 解码与色彩映射在服务器内存完成，文件不落盘；转换结果返回浏览器后立即释放。</li>
+              <li><b>HIF 转换</b>：10-bit HDR 解码与色彩映射默认在浏览器本地（WebAssembly）完成；仅当你在页面上勾选服务器兜底且本地解码失败时，所选 HIF 才会临时上传到本站服务器，仅内存处理、不落盘。</li>
               <li><b>AI 修补</b>：模型下载并缓存在当前浏览器；检测、修补时图片和遮罩不离开设备。</li>
-              <li><b>可离线</b>：除歌词检索与 HIF 转换外，所有工具断网可用。</li>
+              <li><b>可离线</b>：除歌词检索、AI 模型首次下载与可选的 HIF 服务器兜底外，所有工具断网可用。</li>
               <li><b>依赖与模型</b>：AI 去水印会按需载入 ONNX Runtime Web 与 MI-GAN / YOLO11 模型；未运行时不下载。</li>
               <li><b>模型许可</b>：YOLO11 检测模型标注 AGPL-3.0；模型来源和权重信息见 <a href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">第三方声明</a>。</li>
-              <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转、HIF 转换，以及保存用户主动提交的文字反馈。</li>
-              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载、用户主动提交的反馈，以及用户主动选择的 HIF 文件（仅转换期间，内存处理）。</li>
+              <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转、可选的 HIF 兜底转换，以及保存用户主动提交的文字反馈。</li>
+              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型与 HIF 解码器下载、用户主动提交的反馈，以及仅在本地解码失败且你允许兜底时上传的 HIF 文件。</li>
             </ul>
           </div>
           <div class="panel panel-quiet">
@@ -884,8 +887,8 @@
             <pre class="code mono">cd toolbox
 python3 -m pip install -r requirements.txt
 python3 server.py 8000</pre>
-            <p class="para">不安装 <code>requirements.txt</code> 时，其余工具仍可用；HIF 转换页会显示“服务未就绪”。首次启动会把 <code>assets/kugou_key.xz</code>（94 KB）解压为 70 MB 密钥表，供新版酷狗文件按需分片读取。</p>
-            <p class="para">方式 B · 纯静态托管：整个目录交给 Nginx / Caddy / IIS 即可。歌词自动回退 LRCLIB；HIF 转换不可用；超 64 MiB 的酷狗新版文件会提示按需加载 12 MB 压缩密钥表。</p>
+            <p class="para">不安装 <code>requirements.txt</code> 时，其余工具仍可用；HIF 页的浏览器本地转换不依赖服务器，只有服务器兜底会显示不可用。首次启动会把 <code>assets/kugou_key.xz</code>（94 KB）解压为 70 MB 密钥表，供新版酷狗文件按需分片读取。</p>
+            <p class="para">方式 B · 纯静态托管：整个目录交给 Nginx / Caddy / IIS 即可。歌词自动回退 LRCLIB；HIF 浏览器本地转换可用（首次加载约 1.4 MB 解码器），服务器兜底不可用；超 64 MiB 的酷狗新版文件会提示按需加载 12 MB 压缩密钥表。</p>
             <pre class="code mono">server {
   listen 80;
   root /var/www/toolbox;
@@ -943,7 +946,7 @@ python3 server.py 8000</pre>
     </div>
     <div class="rail-block">
       <div class="rail-cap">说明 / NOTE</div>
-      <p class="para muted">常规音频、图片、文本在浏览器内存处理；HIF 转换在服务器内存处理、不落盘，刷新即清空。批量转换建议单次不超过 30 个文件。</p>
+      <p class="para muted">常规音频、图片、文本在浏览器内存处理；HIF 默认在浏览器本地转换，只有你允许兜底且本地失败时才会在服务器内存处理、不落盘。批量转换建议单次不超过 30 个文件。</p>
     </div>
   </aside>
 
@@ -951,7 +954,7 @@ python3 server.py 8000</pre>
 
 <script src="assets/js/main.js?v=20261024-01"></script>
 <script src="assets/js/zip.js?v=20261024-01"></script>
-<script src="assets/js/hif.js?v=20261024-01"></script>
+<script src="assets/js/hif.js?v=20261024-04"></script>
 <script src="assets/js/music.js?v=20261024-01"></script>
 <script src="assets/js/ncm.js?v=20261024-01"></script>
 <script src="assets/js/kgm.js?v=20261024-01"></script>

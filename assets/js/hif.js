@@ -1,4 +1,4 @@
-/* HIF / HEIF -> sRGB JPEG，批量上传到本站服务器内存转换 */
+/* HIF / HEIF -> sRGB JPEG：优先在浏览器本地解码与色调映射，失败时可选服务器兜底 */
 (function () {
   'use strict';
 
@@ -12,6 +12,7 @@
   var zipBtn = document.getElementById('hif-zip');
   var clearBtn = document.getElementById('hif-clear');
   var qualitySel = document.getElementById('hif-quality');
+  var fallbackCheck = document.getElementById('hif-fallback');
   var summary = document.getElementById('hif-summary');
   var statusEl = document.getElementById('hif-status');
   var progress = document.getElementById('hif-progress');
@@ -22,11 +23,18 @@
   var MAX_FILES = 30;
   var MAX_FILE_BYTES = 80 * 1024 * 1024;
   var MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+  var WORKER_URL = 'assets/js/hif-worker.js?v=20261024-04';
 
   var files = [];
   var usedNames = {};
   var running = false;
   var serverReady = false;
+  var browserReady = !!(typeof Worker !== 'undefined' && typeof WebAssembly === 'object' &&
+    typeof FileReader !== 'undefined' && typeof ImageData !== 'undefined' &&
+    typeof Uint8Array !== 'undefined');
+  var worker = null;
+  var currentJob = null;
+  var jobSeq = 0;
 
   function fmtSize(n) { return TB.formatSize(n); }
 
@@ -82,11 +90,12 @@
     resultCount.textContent = files.length ? done + ' / ' + files.length + ' 完成' : '';
     panel.classList.toggle('hidden', !files.length);
 
-    convertBtn.disabled = running || !serverReady || !files.length || pending === 0;
+    convertBtn.disabled = running || !files.length || pending === 0 || (!browserReady && !serverReady);
     convertBtn.textContent = files.length && pending === 0 ? '全部已转换' : '开始批量转换';
     zipBtn.disabled = running || done === 0;
     clearBtn.disabled = running || !files.length;
     input.disabled = running;
+    if (fallbackCheck) fallbackCheck.disabled = running;
   }
 
   function setItemState(item, text, cls) {
@@ -225,15 +234,193 @@
     item.downloadBtn.disabled = true;
   }
 
-  function convertOne(item, done) {
+  function finishItem(item, blob, meta, engine) {
+    item.blob = blob;
+    item.outName = uniqueOutputName(item.file.name);
+    item.width = meta.width || 0;
+    item.height = meta.height || 0;
+    item.state = 'done';
+    item.row.classList.remove('is-error');
+    item.cover.textContent = 'JPG';
+    item.cover.classList.add('is-done');
+    setItemState(item, '完成', 'is-done');
+    item.metaEl.textContent = fmtSize(item.file.size) + ' → ' + fmtSize(blob.size) +
+      (item.width ? ' · ' + item.width + '×' + item.height : '') +
+      ' · sRGB' + (engine ? ' · ' + engine : '');
+    item.metaEl.removeAttribute('title');
+    item.downloadBtn.disabled = false;
+  }
+
+  function cleanupWorker() {
+    if (worker) {
+      worker.terminate();
+      worker = null;
+    }
+    currentJob = null;
+  }
+
+  function encodeJpeg(item, result, done) {
+    var canvas = document.createElement('canvas');
+    canvas.width = result.width;
+    canvas.height = result.height;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) {
+      done(false, '浏览器不支持 Canvas 编码');
+      return;
+    }
+    try {
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(result.rgba), result.width, result.height), 0, 0);
+    } catch (err) {
+      canvas.width = 0;
+      canvas.height = 0;
+      done(false, '浏览器内存不足，无法绘制这张图片');
+      return;
+    }
+    var quality = parseInt(qualitySel.value, 10) || 96;
+    var finished = false;
+    function finish(blob) {
+      if (finished) return;
+      finished = true;
+      canvas.width = 0;
+      canvas.height = 0;
+      if (!blob) {
+        done(false, '浏览器内存不足，无法生成 JPEG');
+        return;
+      }
+      done(true, blob, result.meta);
+    }
+    try {
+      canvas.toBlob(finish, 'image/jpeg', quality / 100);
+    } catch (err) {
+      finish(null);
+    }
+  }
+
+  function startWorker(item, buffer, jobId, done) {
+    var finished = false;
+    function finish(ok, blob, meta, message, code) {
+      if (finished) return;
+      finished = true;
+      cleanupWorker();
+      if (ok) {
+        finishItem(item, blob, meta || { width: item.width, height: item.height }, '本地');
+        done(true);
+        return;
+      }
+      if (fallbackCheck && fallbackCheck.checked && serverReady && code !== 'too-large') {
+        setStatus('浏览器无法处理这张图片，改用服务器（会上传）…');
+        item.metaEl.textContent = '浏览器无法处理，改用服务器转换…';
+        item.state = 'busy';
+        setItemState(item, '改用服务器…', 'is-busy');
+        serverConvertOne(item, function (okServer) {
+          done(okServer);
+        });
+        return;
+      }
+      failItem(item, message || '浏览器转换失败');
+      if (code === 'too-large') setStatus('图片超过浏览器转换上限（6000 万像素）。');
+      done(false);
+    }
+
+    try {
+      worker = new Worker(WORKER_URL);
+    } catch (err) {
+      finish(false, null, null, '本地解码器启动失败', 'worker');
+      return;
+    }
+    currentJob = { id: jobId, item: item, finish: finish };
+
+    worker.onmessage = function (event) {
+      var msg = event.data || {};
+      if (!currentJob || msg.id !== currentJob.id) return;
+      if (msg.type === 'progress') {
+        if (msg.width && msg.height) {
+          item.width = msg.width;
+          item.height = msg.height;
+        }
+        if (msg.stage === 'engine') {
+          setItemState(item, '加载解码器…', 'is-busy');
+        } else if (msg.stage === 'decode') {
+          setItemState(item, msg.value < 35 ? '解码中…' : '解码完成', 'is-busy');
+          if (msg.width) item.metaEl.textContent = msg.width + '×' + msg.height + ' · 浏览器本地解码';
+        } else if (msg.stage === 'tone') {
+          setItemState(item, '色彩映射 ' + msg.value + '%', 'is-busy');
+        }
+        return;
+      }
+      if (msg.type === 'error') {
+        finish(false, null, null, msg.message || '浏览器解码失败', msg.code || 'decode');
+        return;
+      }
+      if (msg.type === 'done') {
+        setItemState(item, '生成 JPEG…', 'is-busy');
+        item.metaEl.textContent = msg.width + '×' + msg.height + ' · 浏览器本地编码中…';
+        encodeJpeg(item, msg, function (ok, blob, meta) {
+          if (!ok) {
+            finish(false, null, null, '浏览器无法生成 JPEG', 'encode');
+            return;
+          }
+          finish(true, blob, meta);
+        });
+      }
+    };
+    worker.onerror = function (event) {
+      var message = event && event.message ? event.message : '本地解码器运行失败';
+      finish(false, null, null, message, 'worker');
+    };
+    try {
+      worker.postMessage({ type: 'convert', id: jobId, buffer: buffer, name: item.file.name }, [buffer]);
+    } catch (err) {
+      finish(false, null, null, '无法把文件交给本地解码器', 'worker');
+    }
+  }
+
+  function convertInBrowser(item, done) {
     item.state = 'busy';
     item.row.classList.remove('is-error');
     item.cover.textContent = fileExt(item.file.name);
     item.cover.classList.remove('is-done');
-    item.metaEl.textContent = fmtSize(item.file.size) + ' · ' + fileExt(item.file.name) + ' · 转换中';
+    item.metaEl.textContent = fmtSize(item.file.size) + ' · ' + fileExt(item.file.name) + ' · 浏览器本地转换';
+    item.metaEl.removeAttribute('title');
+    item.downloadBtn.disabled = true;
+    setItemState(item, '读取文件…', 'is-busy');
+
+    var jobId = ++jobSeq;
+    var reader = new FileReader();
+    reader.onload = function () {
+      startWorker(item, reader.result, jobId, done);
+    };
+    reader.onerror = function () {
+      failItem(item, '读取文件失败');
+      done(false);
+    };
+    reader.onabort = function () {
+      failItem(item, '读取文件已取消');
+      done(false);
+    };
+    try {
+      reader.readAsArrayBuffer(item.file);
+    } catch (err) {
+      failItem(item, '读取文件失败');
+      done(false);
+    }
+  }
+
+  function serverConvertOne(item, done) {
+    item.state = 'busy';
+    item.row.classList.remove('is-error');
+    item.cover.textContent = fileExt(item.file.name);
+    item.cover.classList.remove('is-done');
+    item.metaEl.textContent = fmtSize(item.file.size) + ' · ' + fileExt(item.file.name) + ' · 服务器转换中';
     item.metaEl.removeAttribute('title');
     item.downloadBtn.disabled = true;
     setItemState(item, '上传中', 'is-busy');
+
+    if (!serverReady) {
+      failItem(item, '服务器转换不可用');
+      done(false);
+      return;
+    }
 
     var xhr = new XMLHttpRequest();
     var url = 'api/hif/convert?name=' + encodeURIComponent(item.file.name) +
@@ -241,6 +428,18 @@
     xhr.open('POST', url, true);
     xhr.responseType = 'arraybuffer';
     xhr.timeout = 240000;
+    var finished = false;
+    function finish(ok, blob, meta, message) {
+      if (finished) return;
+      finished = true;
+      if (ok) {
+        finishItem(item, blob, meta, '服务器');
+        done(true);
+        return;
+      }
+      failItem(item, message || '服务器转换失败');
+      done(false);
+    }
 
     xhr.upload.onprogress = function (e) {
       if (e.lengthComputable) {
@@ -254,36 +453,44 @@
     xhr.onload = function () {
       if (xhr.status === 200 && xhr.response && xhr.response.byteLength) {
         var blob = new Blob([xhr.response], { type: 'image/jpeg' });
-        item.blob = blob;
-        item.outName = uniqueOutputName(item.file.name);
-        item.width = parseInt(xhr.getResponseHeader('X-Output-Width'), 10) || 0;
-        item.height = parseInt(xhr.getResponseHeader('X-Output-Height'), 10) || 0;
-        item.state = 'done';
-        setItemState(item, '完成', 'is-done');
-        item.cover.textContent = 'JPG';
-        item.cover.classList.add('is-done');
-        item.metaEl.textContent = fmtSize(item.file.size) + ' → ' + fmtSize(blob.size) +
-          (item.width ? ' · ' + item.width + '×' + item.height : '') + ' · sRGB';
-        item.downloadBtn.disabled = false;
-        done(true);
+        finish(true, blob, {
+          width: parseInt(xhr.getResponseHeader('X-Output-Width'), 10) || 0,
+          height: parseInt(xhr.getResponseHeader('X-Output-Height'), 10) || 0
+        });
         return;
       }
-      failItem(item, parseError(xhr.response, xhr.status));
-      done(false);
+      finish(false, null, null, parseError(xhr.response, xhr.status));
     };
     xhr.onerror = function () {
-      failItem(item, '网络中断或服务器不可达');
-      done(false);
+      finish(false, null, null, '网络中断或服务器不可达');
     };
     xhr.ontimeout = function () {
-      failItem(item, '转换超时（超过 4 分钟）');
-      done(false);
+      finish(false, null, null, '转换超时（超过 4 分钟）');
     };
     xhr.onabort = function () {
-      failItem(item, '请求已取消');
-      done(false);
+      finish(false, null, null, '请求已取消');
     };
     xhr.send(item.file);
+  }
+
+  function convertOne(item, done) {
+    var finished = false;
+    function finish(ok) {
+      if (finished) return;
+      finished = true;
+      done(ok);
+    }
+
+    if (browserReady) {
+      convertInBrowser(item, finish);
+      return;
+    }
+    if (serverReady) {
+      serverConvertOne(item, finish);
+      return;
+    }
+    failItem(item, '当前浏览器不支持本地转换，服务器也不可用');
+    finish(false);
   }
 
   function startBatch() {
@@ -362,13 +569,22 @@
     usedNames = {};
     listEl.innerHTML = '';
     hideProgress();
-    setStatus(serverReady ? '已清空。选择 HIF 文件开始转换。' : '服务未就绪。');
+    setStatus(browserReady ? '已清空。图片只在浏览器本地转换。' : '服务未就绪。');
     refresh();
   });
 
   qualitySel.addEventListener('change', function () {
     if (!running) setStatus('JPEG 质量已设为 ' + qualitySel.value + '；仅影响之后转换的文件。');
   });
+
+  if (fallbackCheck) {
+    fallbackCheck.addEventListener('change', function () {
+      if (running) return;
+      setStatus(fallbackCheck.checked
+        ? '已开启服务器兜底：浏览器无法解码时会上传文件到本站服务器（仅内存处理）。'
+        : '已关闭服务器兜底：图片不会上传，浏览器无法解码时会直接报错。');
+    });
+  }
 
   input.addEventListener('change', function () {
     addFiles(input.files);
@@ -379,24 +595,38 @@
   });
   TB.bindDropzone(drop, addFiles);
 
+  window.addEventListener('unload', function () {
+    cleanupWorker();
+  });
+
   refresh();
+  setStatus(browserReady
+    ? '浏览器本地转换就绪（图片不会上传）；首次转换需加载约 1.4 MB 解码器。'
+    : '正在检测转换能力…');
+
   fetch('api/ping', { cache: 'no-store' }).then(function (response) {
     return response.ok ? response.json() : null;
   }).then(function (info) {
     var hif = info && info.hifConvert;
     serverReady = !!(hif && hif.ready);
-    if (serverReady) {
-      setStatus('服务器就绪：选择 HIF 文件开始，单张上限 ' +
-        (hif.maxUploadMB || 80) + ' MB。');
+    if (browserReady) {
+      setStatus('浏览器本地转换就绪（图片不会上传）' +
+        (serverReady ? '；浏览器无法解码时可回退服务器（默认开启）。' : '。'));
+    } else if (serverReady) {
+      setStatus('当前浏览器不支持本地解码，将使用服务器转换（会上传文件）。');
     } else if (hif && hif.error) {
-      setStatus('HIF 转换依赖未安装：请在服务器执行 pip install -r requirements.txt。');
+      setStatus('浏览器不支持本地转换，服务器也未安装 HIF 依赖。');
     } else {
-      setStatus('当前未连接转换服务器：HIF 功能需要自带 server.py，纯静态托管不可用。');
+      setStatus('浏览器不支持本地转换，且当前没有可用的服务器。');
     }
     refresh();
   }).catch(function () {
     serverReady = false;
-    setStatus('当前未连接转换服务器：HIF 功能需要自带 server.py。');
+    if (browserReady) {
+      setStatus('浏览器本地转换就绪（图片不会上传）；服务器兜底不可用。');
+    } else {
+      setStatus('当前浏览器不支持本地转换，且服务器不可用。');
+    }
     refresh();
   });
 })();
