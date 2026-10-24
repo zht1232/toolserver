@@ -75,15 +75,27 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 
 ## 多源音乐下载（go-music-dl）部署约定
 
-「多源音乐下载」页不是本站代码，而是把开源项目 [go-music-dl](https://github.com/guohuiyuan/go-music-dl)（AGPL-3.0，v1.1.2 起接入）的 Web UI 通过 `/music/*` 反向代理进来。接入方式与运维约定：
+「多源音乐下载」页不是本站代码，而是把开源项目 [go-music-dl](https://github.com/guohuiyuan/go-music-dl)（AGPL-3.0，v1.1.3 起为当前版本）的 Web UI 通过 `/music/*` 反向代理进来。接入方式与运维约定：
 
-- **独立服务**：服务器上另跑 systemd 单元 `music-dl.service`，`ExecStart=/home/zht/music-dl/music-dl web --port 8080 --desktop --no-browser`。`--desktop` 是上游为「内嵌在别的程序后面」提供的模式：只监听 `127.0.0.1:8080`、免管理员登录、挂载在 `/music` 前缀下。二进制从 GitHub Releases 下载 `go-music-dl_linux_arm64.tar.gz`（服务器是 aarch64），不需要 Go 工具链。
+- **独立服务**：服务器上另跑 systemd 单元 `music-dl.service`，`ExecStart=/home/zht/music-dl/music-dl web --port 8080 --desktop --no-browser`。`--desktop` 是上游为「内嵌在别的程序后面」提供的模式：只监听 `127.0.0.1:8080`、免管理员登录、挂载在 `/music` 前缀下。二进制从 GitHub Releases 下载 `go-music-dl_linux_arm64.tar.gz`（服务器是 aarch64），不需要 Go 工具链；盒子直连 GitHub 慢时用 `https://edgeone.gh-proxy.com/https://github.com/...` 前缀加速（本机直连也常超时，实测代理一次就成）。
 - **数据目录**：`WorkingDirectory=/home/zht/music-dl`，下载文件与 SQLite 索引都落在其 `data/` 子目录（`data/downloads`、`data/video_output`）。要改下载位置就在 UI「设置」里改。
 - **代理**：`server.py` 的 `proxy_music_dl()` 把 `/music` 与 `/music/*` 流式转发到 `127.0.0.1:8080`。对齐 go-music-dl README 的 Nginx 反代约定：透传原始 `Host`、`X-Forwarded-For/Proto`、`X-Real-IP`（取 `CF-Connecting-IP`）、`X-Requested-With`、`Origin`、`Sec-Fetch-*`、`Range`、`Cookie`、`Referer`——`X-Requested-With` 是上游区分 XHR/JSON 与整页导航的依据，`Host`+`Origin` 是它同源写校验（`allowSameOriginWrite`，收藏到本地歌单等写操作）的依据，缺了会 403。响应头用黑名单过滤 hop-by-hop 头后其余全透传（`Content-Disposition` 下载文件名、多值 `Set-Cookie` 都要），上游未给 `Cache-Control` 时注入 `no-cache`。上游不可达时返回 503 提示页。
 - **依赖**：服务器需安装 `ffmpeg`（`apt install ffmpeg`），用于非 MP3 格式的元数据内嵌与视频生成；普通搜索/MP3/FLAC 下载不依赖它。
 - **能力探测**：`/api/ping` 的 `musicDl.reachable` 会探测 8080 端口；iframe 的 src 由 `main.js` 在首次进入 `#musicdl` 路由时懒加载。
 - **合规**：AGPL-3.0 是强 Copyleft，通过网络提供修改版服务必须公开对应源码；目前运行的是官方未修改二进制，详见 `THIRD_PARTY_NOTICES.md`。音乐版权风险由使用者自行承担。
 - **升级**：换版本时替换 `/home/zht/music-dl/music-dl` 二进制后 `systemctl restart music-dl`；`data/` 目录保留即保留歌单与设置。
+
+## 下载速度：为什么慢、三条路的实测结论（2026-10-24 实测）
+
+「多源音乐下载」的字节链路是 **CDN → 盒子（WiFi）→ cloudflared → Cloudflare 边缘 → 用户**，cloudflared 注册到的边缘固定在 `lax`（洛杉矶，RTT 170ms；`--region` 只支持 `us`，无法钉到亚太）。家庭宽带到 LAX 的上行实测聚合上限 **≈6.3 Mbps**（4 并发 769KB/s），单流 322KB/s。盒子 TCP 已是 BBR，无更多可挤。三条替代路径的实测：
+
+| 路径 | 实测速度 | 说明 |
+|---|---|---|
+| 浏览器直连网易云 CDN | **43~52 MB/s** | 网易云 CDN 返回 `Access-Control-Allow-Origin: *` 且支持 HTTPS，跨域直取成立（已在真实 Edge 验证 10.5MB 全量取回） |
+| 局域网直连 `http://192.168.3.124:8000` | **1.99 MB/s** | 完全绕开 Cloudflare；防火墙默认放行 8000，在家首选 |
+| 公网隧道（现状） | 0.32 MB/s | 受家庭宽带国际上行限制，架构层面无法再快 |
+
+由此有了「网易云直连下载」页（`#musicfast`，`musicfast.js`）：`/api/nc/url?id=&br=` 服务端只解析直链（http 会强制改写为 https，避免混合内容拦截），浏览器 `fetch(mode:'cors')` 流式拉取 → Blob → `a[download]` 保存为「歌名 - 歌手.格式」。任何失败（版权无直链、CORS 被网络环境拦、网络错误）自动回落到 `/music/download` 代理下载。仅网易云可用——其余音源 CDN 要求特定 Referer/UA（见 go-music-dl `core.BuildSourceRequest`），浏览器无法伪造。搜索走既有 `/api/nc/search`，网易云限流（code 406「操作频繁」）时会如实提示。
 
 ## 视觉规范（2026-10 视觉打磨版）
 

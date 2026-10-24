@@ -389,6 +389,18 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- 网易云直连下载 ---------- */
+.mf-row {
+  display: flex; gap: 12px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 10px 13px; margin-bottom: 8px; box-shadow: var(--sheen);
+}
+.mf-row:hover { border-color: var(--line-2); }
+.mf-main { flex: 1; min-width: 0; }
+.mf-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-sub { color: var(--ink-3); font-size: 12px; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- 打轴器 ---------- */
 .lines { max-height: 480px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); }
 .line { display: flex; gap: 10px; align-items: baseline; padding: 6px 11px; border-bottom: 1px solid var(--line); font-size: 13.5px; }

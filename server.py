@@ -14,6 +14,7 @@
   GET /api/kgm/key?start=&len=      按字节区间返回酷狗公钥表（分片解密用）
   GET /api/nc/search?s=关键词        网易云音乐搜索中转
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
+  GET /api/nc/url?id=&br=            网易云直链解析（直连下载页用，服务器只回 URL 不转发字节）
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/feedback                用户主动提交建议反馈
@@ -656,6 +657,47 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             url = "https://music.163.com/api/song/lyric?id=%s&lv=1&kv=1&tlyric=1&tv=-1" % song_id
             self.proxy_json(url)
+            return
+
+        if path == "/api/nc/url":
+            # 解析歌曲直链，用于「网易云直连下载」页：服务器只返回一个 URL，
+            # 音频字节由用户浏览器直接从 CDN 取走，不再经本机转发（绕开 Cloudflare 隧道的带宽瓶颈）。
+            song_id = (qs.get("id") or [""])[0].strip()
+            if not song_id.isdigit():
+                self.send_json({"error": "歌曲 ID 无效"}, 400)
+                return
+            br = (qs.get("br") or ["320000"])[0].strip()
+            if br not in ("128000", "192000", "320000", "999000"):
+                br = "320000"
+            ids = urllib.parse.quote("[" + song_id + "]", safe="[]")
+            url = ("https://music.163.com/api/song/enhance/player/url"
+                   "?id=%s&ids=%s&br=%s" % (song_id, ids, br))
+            try:
+                raw = json.loads(http_get(url).decode("utf-8"))
+            except Exception as e:
+                self.send_json({"error": "上游请求失败：%s" % e}, 502)
+                return
+            items = (raw.get("data") or []) if isinstance(raw, dict) else []
+            item = items[0] if items and isinstance(items[0], dict) else None
+            link = (item or {}).get("url") or ""
+            if not link:
+                # 版权受限 / 需会员 / 已下架：明确告知前端，由前端回落到代理下载
+                self.send_json({"code": -1, "error": "该歌曲暂未提供直链（版权或会员限制）"}, 200)
+                return
+            # CDN 返回的常是 http，页面是 https，必须转成 https 否则浏览器按混合内容拦截
+            if link.startswith("http://"):
+                link = "https://" + link[len("http://"):]
+            ext = (item.get("type") or "mp3").lower()
+            self.send_json({
+                "code": 200,
+                "url": link,
+                "br": item.get("br") or int(br),
+                "size": item.get("size") or 0,
+                "ext": ext,
+                "md5": item.get("md5") or "",
+                # 直链有效期（秒），默认 20 分钟，过期需重新解析
+                "expi": item.get("expi") or 1200,
+            })
             return
 
         super().do_GET()
