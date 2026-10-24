@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
-<meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩与 AI 去水印、格式转换及开发者工具。仅主动运行服务器 AI 去水印时会发送所选图片和遮罩。">
-<link rel="stylesheet" href="assets/style.css?v=20261018-03">
+<meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。仅 AI 去水印与 HIF HDR 转换会发送用户主动选择的图片。">
+<link rel="stylesheet" href="assets/style.css?v=20261024-01">
 </head>
 <body>
 <!-- 线性图标 sprite：16px stroke=currentColor，供导航与拖放区复用 -->
@@ -15,6 +15,7 @@
   <symbol id="i-wave" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.7L19.5 10.5l-5.7 1.8L12 18l-1.8-5.7L4.5 10.5l5.7-1.8z"/></symbol>
   <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1"/><path d="M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
@@ -65,6 +66,7 @@
       <a class="nav-item" data-route="lrc" href="#lrc"><svg class="nav-ico" aria-hidden="true"><use href="#i-clock"/></svg><span>LRC 时间轴</span></a>
       <div class="nav-cap">格式</div>
       <a class="nav-item" data-route="image" href="#image"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg><span>图片转换压缩</span></a>
+      <a class="nav-item" data-route="hif" href="#hif"><svg class="nav-ico" aria-hidden="true"><use href="#i-camera"/></svg><span>HIF / HEIF 转 JPEG</span></a>
       <a class="nav-item" data-route="watermark" href="#watermark"><svg class="nav-ico" aria-hidden="true"><use href="#i-spark"/></svg><span>整图 AI 去水印</span></a>
       <a class="nav-item" data-route="json" href="#json"><svg class="nav-ico" aria-hidden="true"><use href="#i-braces"/></svg><span>JSON 格式化</span></a>
       <a class="nav-item" data-route="encode" href="#encode"><svg class="nav-ico" aria-hidden="true"><use href="#i-code"/></svg><span>编解码</span></a>
@@ -96,7 +98,7 @@
       </div>
       <div class="kv"><span>运行位置</span><b id="env-mode">检测中</b></div>
       <div class="kv"><span>酷狗密钥表</span><b id="env-key">检测中</b></div>
-      <div class="kv"><span>文件处理</span><b>默认本地</b></div>
+      <div class="kv"><span>文件处理</span><b>本地 / HIF 例外</b></div>
     </div>
   </aside>
 
@@ -389,6 +391,49 @@
               <div class="wm-progress-fill" id="img-wm-progress-fill"></div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- ===== HIF / HEIF 转 JPEG ===== -->
+      <section class="page hidden" id="page-hif">
+        <div class="page-head">
+          <h1>HIF / HEIF 转 JPEG</h1>
+          <p class="lede">批量把相机 HDR HIF 转成 sRGB 照片，按 203 nit 参考白压缩高光，避免发灰和偏色。</p>
+        </div>
+        <div class="note note-warn hif-note">
+          <b>与其他图片工具不同：</b>HIF/HEIF 的 10-bit HDR 解码在服务器完成，所选文件会临时上传到本站，仅在内存中转换、不写入磁盘，返回后立即释放。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。
+        </div>
+        <div class="dropzone" id="hif-drop">
+          <svg class="dz-icon" aria-hidden="true"><use href="#i-camera"/></svg>
+          <div class="dz-title">拖入 HIF / HEIC 文件</div>
+          <div class="dz-sub">或 <label class="link">选择文件<input type="file" id="hif-input" accept=".hif,.heic,.heif,image/heic,image/heif" multiple hidden></label></div>
+          <div class="dz-meta mono">支持佳能 / 索尼 / 尼康 / 富士等相机的 HEIF；输出 sRGB JPEG</div>
+        </div>
+        <div class="panel">
+          <div class="row hif-actions-row">
+            <label class="field">JPEG 质量
+              <select id="hif-quality" class="input">
+                <option value="96" selected>96 · 推荐</option>
+                <option value="92">92 · 更小</option>
+                <option value="98">98 · 更大</option>
+              </select>
+            </label>
+            <button class="btn btn-primary" id="hif-convert" type="button" disabled>开始批量转换</button>
+            <button class="btn" id="hif-zip" type="button" disabled>打包下载 ZIP</button>
+            <button class="btn" id="hif-clear" type="button" disabled>清空列表</button>
+            <span class="mono muted" id="hif-summary">未选择文件</span>
+          </div>
+          <div class="wm-progress hidden" id="hif-progress">
+            <div class="wm-progress-track" id="hif-progress-track" role="progressbar" aria-label="HIF 转换进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="wm-progress-fill" id="hif-progress-fill"></div>
+            </div>
+          </div>
+          <div class="logline mono" id="hif-status" role="status" aria-live="polite">正在检测服务器转换能力…</div>
+        </div>
+        <div class="panel hidden" id="hif-files-panel">
+          <div class="panel-cap">文件列表 <span class="mono" id="hif-result-count"></span></div>
+          <div class="filerow-wrap" id="hif-list"></div>
+          <div class="note">输出为 sRGB JPEG，已嵌入 ICC 色彩配置；原始 HIF 不会被修改。HDR 高光会被压缩，这是 SDR JPEG 的物理限制。</div>
         </div>
       </section>
 
@@ -817,28 +862,30 @@
       <section class="page hidden" id="page-about">
         <div class="page-head">
           <h1>隐私与部署</h1>
-          <p class="lede">所有处理均在浏览器本地完成，AI 模型按需下载并缓存。</p>
+          <p class="lede">除 AI 去水印与 HIF/HEIF 转换外，其余处理均在浏览器本地完成。</p>
         </div>
         <div class="grid-2">
           <div class="panel panel-quiet">
             <div class="panel-cap">安全设计</div>
             <ul class="bullets">
               <li><b>本地处理</b>：音乐解密、常规图片转换压缩和文本工具在浏览器内存完成，服务器不接收这些文件。</li>
+              <li><b>HIF 转换</b>：HIF/HEIF 的 HDR 解码与色彩映射在服务器内存完成，文件不落盘；转换结果返回浏览器后立即释放。</li>
               <li><b>AI 修补</b>：模型下载并缓存在当前浏览器；检测、修补时图片和遮罩不离开设备。</li>
-              <li><b>可离线</b>：除歌词检索外，所有工具断网可用。</li>
+              <li><b>可离线</b>：除歌词检索与 HIF 转换外，所有工具断网可用。</li>
               <li><b>依赖与模型</b>：AI 去水印会按需载入 ONNX Runtime Web 与 MI-GAN / YOLO11 模型；未运行时不下载。</li>
               <li><b>模型许可</b>：YOLO11 检测模型标注 AGPL-3.0；模型来源和权重信息见 <a href="THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">第三方声明</a>。</li>
-              <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转，以及保存用户主动提交的文字反馈。</li>
-              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载和用户主动提交的反馈；水印处理不会上传图片。</li>
+              <li><b>服务器职责</b>：静态文件、酷狗密钥表分片、歌词中转、HIF 转换，以及保存用户主动提交的文字反馈。</li>
+              <li><b>对外请求清单</b>：歌词检索（歌名/歌手名）、密钥表分片、AI 模型下载、用户主动提交的反馈，以及用户主动选择的 HIF 文件（仅转换期间，内存处理）。</li>
             </ul>
           </div>
           <div class="panel panel-quiet">
             <div class="panel-cap">部署</div>
-            <p class="para">方式 A · 自带服务器（推荐，仅需 Python 3 标准库）：</p>
+            <p class="para">方式 A · 自带服务器（基础功能仅需 Python 3 标准库；HIF 转换需安装可选依赖）：</p>
             <pre class="code mono">cd toolbox
+python3 -m pip install -r requirements.txt
 python3 server.py 8000</pre>
-            <p class="para">首次启动会把 <code>assets/kugou_key.xz</code>（94 KB）解压为 70 MB 密钥表，供新版酷狗文件按需分片读取，无需用户下载整表。</p>
-            <p class="para">方式 B · 纯静态托管：整个目录交给 Nginx / Caddy / IIS 即可。歌词自动回退 LRCLIB；超 64 MiB 的酷狗新版文件会提示按需加载 12 MB 压缩密钥表。</p>
+            <p class="para">不安装 <code>requirements.txt</code> 时，其余工具仍可用；HIF 转换页会显示“服务未就绪”。首次启动会把 <code>assets/kugou_key.xz</code>（94 KB）解压为 70 MB 密钥表，供新版酷狗文件按需分片读取。</p>
+            <p class="para">方式 B · 纯静态托管：整个目录交给 Nginx / Caddy / IIS 即可。歌词自动回退 LRCLIB；HIF 转换不可用；超 64 MiB 的酷狗新版文件会提示按需加载 12 MB 压缩密钥表。</p>
             <pre class="code mono">server {
   listen 80;
   root /var/www/toolbox;
@@ -896,35 +943,36 @@ python3 server.py 8000</pre>
     </div>
     <div class="rail-block">
       <div class="rail-cap">说明 / NOTE</div>
-      <p class="para muted">页面内所有音频、图片、文本均在内存中处理，刷新即清空。批量转换建议单次不超过 30 个文件，避免老旧设备内存吃紧。</p>
+      <p class="para muted">常规音频、图片、文本在浏览器内存处理；HIF 转换在服务器内存处理、不落盘，刷新即清空。批量转换建议单次不超过 30 个文件。</p>
     </div>
   </aside>
 
 </div>
 
-<script src="assets/js/main.js?v=20261018-03"></script>
-<script src="assets/js/zip.js?v=20261018-03"></script>
-<script src="assets/js/music.js?v=20261018-03"></script>
-<script src="assets/js/ncm.js?v=20261018-03"></script>
-<script src="assets/js/kgm.js?v=20261018-03"></script>
-<script src="assets/js/kwm.js?v=20261018-03"></script>
-<script src="assets/js/qmc.js?v=20261018-03"></script>
-<script src="assets/js/xm.js?v=20261018-03"></script>
-<script src="assets/js/lyrics.js?v=20261018-03"></script>
-<script src="assets/js/syncer.js?v=20261018-03"></script>
-<script src="assets/js/watermark-local.js?v=20261018-03"></script>
-<script src="assets/js/tools.js?v=20261018-03"></script>
-<script src="assets/js/text.js?v=20261018-03"></script>
-<script src="assets/js/color.js?v=20261018-03"></script>
-<script src="assets/js/csvjson.js?v=20261018-03"></script>
-<script src="assets/js/markdown.js?v=20261018-03"></script>
-<script src="assets/js/regex.js?v=20261018-03"></script>
-<script src="assets/js/jwt.js?v=20261018-03"></script>
-<script src="assets/js/cron.js?v=20261018-03"></script>
-<script src="assets/js/radix.js?v=20261018-03"></script>
-<script src="assets/js/generator.js?v=20261018-03"></script>
-<script src="assets/js/diff.js?v=20261018-03"></script>
-<script src="assets/js/reference.js?v=20261018-03"></script>
-<script src="assets/js/feedback.js?v=20261018-03"></script>
+<script src="assets/js/main.js?v=20261024-01"></script>
+<script src="assets/js/zip.js?v=20261024-01"></script>
+<script src="assets/js/hif.js?v=20261024-01"></script>
+<script src="assets/js/music.js?v=20261024-01"></script>
+<script src="assets/js/ncm.js?v=20261024-01"></script>
+<script src="assets/js/kgm.js?v=20261024-01"></script>
+<script src="assets/js/kwm.js?v=20261024-01"></script>
+<script src="assets/js/qmc.js?v=20261024-01"></script>
+<script src="assets/js/xm.js?v=20261024-01"></script>
+<script src="assets/js/lyrics.js?v=20261024-01"></script>
+<script src="assets/js/syncer.js?v=20261024-01"></script>
+<script src="assets/js/watermark-local.js?v=20261024-01"></script>
+<script src="assets/js/tools.js?v=20261024-01"></script>
+<script src="assets/js/text.js?v=20261024-01"></script>
+<script src="assets/js/color.js?v=20261024-01"></script>
+<script src="assets/js/csvjson.js?v=20261024-01"></script>
+<script src="assets/js/markdown.js?v=20261024-01"></script>
+<script src="assets/js/regex.js?v=20261024-01"></script>
+<script src="assets/js/jwt.js?v=20261024-01"></script>
+<script src="assets/js/cron.js?v=20261024-01"></script>
+<script src="assets/js/radix.js?v=20261024-01"></script>
+<script src="assets/js/generator.js?v=20261024-01"></script>
+<script src="assets/js/diff.js?v=20261024-01"></script>
+<script src="assets/js/reference.js?v=20261024-01"></script>
+<script src="assets/js/feedback.js?v=20261024-01"></script>
 </body>
 </html>

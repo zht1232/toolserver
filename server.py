@@ -17,6 +17,7 @@
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/feedback                用户主动提交建议反馈
+  POST /api/hif/convert?name=&q=    HIF/HEIF -> sRGB JPEG（HDR 色彩管理，仅内存处理）
   *    /music  /music/*             反向代理到本机 music-dl（go-music-dl Web 服务，多源音乐下载）
 
 用法：
@@ -24,7 +25,8 @@
     python3 server.py 8080             # 指定端口
     python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
 
-说明：音频解密、图片处理与 AI 水印推理都在用户浏览器本地完成；服务器只按需下发模型和运行库。
+说明：音频解密、常规图片处理与 AI 水印推理在用户浏览器本地完成；服务器只按需下发模型和运行库。
+HIF/HEIF 的 HDR 解码是例外：文件上传后仅在服务器内存中转换、不落盘（见 hif_convert.py）。
 /music/* 代理到 go-music-dl（12 个音源的搜索 / 试听 / 下载 Web 服务，AGPL-3.0，见 THIRD_PARTY_NOTICES.md）。
 """
 import json
@@ -32,11 +34,19 @@ import ipaddress
 import os
 import socket
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+try:
+    import hif_convert
+    _HIF_IMPORT_ERROR = ""
+except Exception as _hif_exc:  # Optional feature: the rest of the site still runs.
+    hif_convert = None
+    _HIF_IMPORT_ERROR = "%s: %s" % (type(_hif_exc).__name__, _hif_exc)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KEY_XZ = os.path.join(BASE_DIR, "assets", "kugou_key.xz")
@@ -50,6 +60,14 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 _key_state = {"expanding": False}
 _feedback_state = {}
+
+# HIF conversion is CPU/RAM heavy, so requests are serialised and rate limited.
+_HIF_MAX_UPLOAD = getattr(hif_convert, "MAX_UPLOAD_BYTES", 80 * 1024 * 1024)
+_HIF_MAX_PIXELS = getattr(hif_convert, "MAX_PIXELS", 60000000)
+_HIF_SEMAPHORE = threading.BoundedSemaphore(1)
+_HIF_UPLOAD_SEMAPHORE = threading.BoundedSemaphore(2)
+_HIF_RATE_LOCK = threading.Lock()
+_HIF_RATE = {}
 AI_MODEL_DIR = os.environ.get(
     "LOCALTOOLS_AI_MODEL_DIR",
     os.path.join(os.path.dirname(BASE_DIR), "localtools-models"),
@@ -221,6 +239,122 @@ class Handler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    # ---------- HIF / HEIF 转换（HDR -> sRGB，仅内存处理） ----------
+    def hif_rate_ok(self):
+        now = time.time()
+        client = self.rate_limit_key()
+        with _HIF_RATE_LOCK:
+            history = [t for t in _HIF_RATE.get(client, ()) if now - t < 3600]
+            per_minute = sum(1 for t in history if now - t < 60)
+            if per_minute >= 60 or len(history) >= 240:
+                _HIF_RATE[client] = history
+                return False
+            history.append(now)
+            _HIF_RATE[client] = history
+        return True
+
+    def handle_hif_convert(self, qs):
+        if hif_convert is None:
+            self.send_json({
+                "error": "HIF 转换依赖未安装，请运行 pip install -r requirements.txt",
+                "detail": _HIF_IMPORT_ERROR,
+            }, 503)
+            return
+        if not self.hif_rate_ok():
+            self.send_json({"error": "转换请求过于频繁，请稍后再试"}, 429)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self.send_json({"error": "缺少上传内容"}, 411)
+            return
+        if length > _HIF_MAX_UPLOAD:
+            self.send_json({
+                "error": "文件超过 %d MB 上限" % (_HIF_MAX_UPLOAD // 1048576),
+            }, 413)
+            return
+
+        if not _HIF_UPLOAD_SEMAPHORE.acquire(timeout=5):
+            self.send_json({"error": "服务器正在接收其他文件，请稍后再试"}, 503)
+            return
+        remaining = length
+        chunks = []
+        try:
+            try:
+                self.connection.settimeout(120)
+            except OSError:
+                pass
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 1024 * 1024))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except (ConnectionError, OSError):
+            self.close_connection = True
+            return
+        finally:
+            _HIF_UPLOAD_SEMAPHORE.release()
+        if remaining:
+            self.send_json({"error": "上传中断"}, 400)
+            return
+
+        try:
+            quality = int((qs.get("q") or ["96"])[0])
+        except ValueError:
+            quality = 96
+        name = (qs.get("name") or ["converted.hif"])[0]
+        name = os.path.basename(name.replace("\\", "/"))[:200]
+        base = os.path.splitext(name)[0] or "converted"
+
+        if not _HIF_SEMAPHORE.acquire(timeout=45):
+            self.send_json({"error": "服务器正在处理其他图片，请稍后再试"}, 503)
+            return
+        started = time.time()
+        try:
+            jpeg, meta = hif_convert.convert_heif_to_jpeg(b"".join(chunks), quality)
+        except hif_convert.HifError as exc:
+            self.send_json({"error": str(exc)}, exc.status)
+            return
+        except Exception as exc:
+            sys.stderr.write("[hif] conversion failed: %s: %s\n" % (type(exc).__name__, exc))
+            self.send_json({"error": "转换失败，请换一张图片重试"}, 500)
+            return
+        finally:
+            _HIF_SEMAPHORE.release()
+
+        out_name = base + "_sdr.jpg"
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(jpeg)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename=\"converted.jpg\"; filename*=UTF-8''%s"
+            % urllib.parse.quote(out_name, safe=""),
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Output-Width", str(meta["width"]))
+        self.send_header("X-Output-Height", str(meta["height"]))
+        self.send_header("X-Source-Color", meta["source"])
+        self.send_header("X-Source-HDR", "1" if meta["hdr"] else "0")
+        self.send_header("X-Output-Quality", str(meta["quality"]))
+        self.send_header(
+            "Access-Control-Expose-Headers",
+            "X-Output-Width, X-Output-Height, X-Source-Color, X-Source-HDR, X-Output-Quality",
+        )
+        self._cache_set = True
+        self.end_headers()
+        try:
+            self.wfile.write(jpeg)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        sys.stderr.write(
+            "[hif] %s -> %dx%d, %d -> %d bytes, %.2fs\n"
+            % (name, meta["width"], meta["height"], length, len(jpeg), time.time() - started)
+        )
+
     # ---------- 音乐下载反向代理（/music -> 127.0.0.1:8080） ----------
     def send_music_unavailable(self, reason):
         """music-dl 未运行时给浏览器一个可读的提示页（iframe 内直接可见）"""
@@ -357,9 +491,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
         if parsed.path == MUSIC_DL_PREFIX or parsed.path.startswith(MUSIC_DL_PREFIX + "/"):
             self._cache_set = True
             self.proxy_music_dl("POST")
+            return
+        if parsed.path == "/api/hif/convert":
+            self.handle_hif_convert(qs)
             return
         if parsed.path == "/api/watermark/inpaint":
             self.close_connection = True
@@ -455,6 +593,12 @@ class Handler(SimpleHTTPRequestHandler):
                 "lyricsProxy": True,
                 "feedback": True,
                 "browserWatermarkAi": browser_ai,
+                "hifConvert": {
+                    "ready": hif_convert is not None,
+                    "maxUploadMB": _HIF_MAX_UPLOAD // 1048576,
+                    "maxPixels": _HIF_MAX_PIXELS,
+                    "error": _HIF_IMPORT_ERROR[:300],
+                },
                 "musicDl": {
                     "proxied": True,
                     "path": MUSIC_DL_PREFIX,
@@ -546,6 +690,8 @@ def main():
     print("本地工具箱已启动: http://0.0.0.0:%d" % port)
     print("静态目录: %s" % BASE_DIR)
     print("密钥表: %s" % ("已就绪" if os.path.exists(KEY_BIN) else "缺失（酷狗新版格式将不可用）"))
+    print("HIF 转换: %s" % ("就绪" if hif_convert else
+                            "未安装依赖（pip install -r requirements.txt）"))
     print("按 Ctrl+C 停止")
     try:
         server.serve_forever()

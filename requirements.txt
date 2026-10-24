@@ -1,0 +1,6 @@
+# Optional dependencies for the server-side HIF/HEIF -> JPEG converter.
+# The rest of the site runs on the Python standard library alone.
+# Python 3.10+ and the aarch64/x86_64 manylinux wheels are supported.
+Pillow>=10.4,<14
+pillow-heif==1.8.1
+numpy>=1.26,<3
