@@ -14,12 +14,21 @@
   var qualitySel = document.getElementById('hif-quality');
   var exposureSel = document.getElementById('hif-exposure');
   var fallbackCheck = document.getElementById('hif-fallback');
-  var summary = document.getElementById('hif-summary');
+  var queueSub = document.getElementById('hif-queue-sub');
   var statusEl = document.getElementById('hif-status');
   var progress = document.getElementById('hif-progress');
   var progressTrack = document.getElementById('hif-progress-track');
   var progressFill = document.getElementById('hif-progress-fill');
   var resultCount = document.getElementById('hif-result-count');
+  var railServer = document.getElementById('hif-rail-server');
+  var railFiles = document.getElementById('hif-rail-files');
+  var railMb = document.getElementById('hif-rail-mb');
+  var railSecs = document.getElementById('hif-rail-secs');
+  var railBar = document.getElementById('hif-rail-bar');
+  var railNote = document.getElementById('hif-rail-note');
+  var allToolsBtn = document.getElementById('hif-all-tools');
+  var sessionStart = 0;
+  var sessionSeconds = 0;
 
   var MAX_FILES = 30;
   var MAX_FILE_BYTES = 80 * 1024 * 1024;
@@ -80,28 +89,86 @@
     return files.filter(function (item) { return item.state === 'done' && item.blob; });
   }
 
+  function updateRail() {
+    var totalBytes = 0;
+    files.forEach(function (item) { totalBytes += item.file.size; });
+    var done = doneFiles().length;
+    var secs = sessionSeconds;
+    if (running && sessionStart) secs = Math.round((Date.now() - sessionStart) / 1000);
+    if (railFiles) railFiles.textContent = String(files.length);
+    if (railMb) railMb.textContent = files.length
+      ? (totalBytes / 1048576).toFixed(totalBytes < 10 * 1048576 ? 2 : 1)
+      : '0';
+    if (railSecs) railSecs.textContent = String(secs);
+    if (railBar) railBar.style.width = files.length ? Math.round(done / files.length * 100) + '%' : '0%';
+    if (railNote) {
+      railNote.textContent = !files.length ? '还没有转换任务'
+        : running ? '正在转换 · 完成 ' + done + ' / ' + files.length
+          : '完成 ' + done + ' / ' + files.length + (sessionSeconds ? ' · 用时 ' + sessionSeconds + ' 秒' : '');
+    }
+  }
+
+  function setRailServer(ok) {
+    if (!railServer) return;
+    railServer.textContent = ok ? '可用' : '不可用';
+    railServer.className = ok ? 'rail-ok' : 'rail-off';
+  }
+
   function refresh() {
     var totalBytes = 0;
     files.forEach(function (item) { totalBytes += item.file.size; });
     var done = doneFiles().length;
     var pending = files.filter(function (item) { return item.state !== 'done'; }).length;
 
-    if (!files.length) summary.textContent = '未选择文件';
-    else summary.textContent = '已选 ' + files.length + ' 张 · ' + fmtSize(totalBytes) + (done ? ' · 已完成 ' + done : '');
+    if (queueSub) {
+      queueSub.textContent = !files.length ? '暂无文件 · 浏览器本地引擎'
+        : files.length + ' 个文件 · ' + fmtSize(totalBytes) + ' · ' + done + ' 完成' +
+          (running ? ' · 转换中' : '') + ' · 浏览器本地引擎';
+    }
     resultCount.textContent = files.length ? done + ' / ' + files.length + ' 完成' : '';
     panel.classList.toggle('hidden', !files.length);
 
     convertBtn.disabled = running || !files.length || pending === 0 || (!browserReady && !serverReady);
-    convertBtn.textContent = files.length && pending === 0 ? '全部已转换' : '开始批量转换';
+    convertBtn.textContent = files.length && pending === 0 ? '全部已转换' : '开始转换';
     zipBtn.disabled = running || done === 0;
     clearBtn.disabled = running || !files.length;
     input.disabled = running;
     if (fallbackCheck) fallbackCheck.disabled = running;
+    files.forEach(function (item) {
+      if (item.removeBtn) item.removeBtn.disabled = running;
+    });
+    updateRail();
   }
 
   function setItemState(item, text, cls) {
     item.stateEl.textContent = text;
     item.stateEl.className = 'hif-state' + (cls ? ' ' + cls : '');
+  }
+
+  function setItemProgress(item, percent, visible) {
+    if (!item.progressEl) return;
+    if (visible === false) {
+      item.progressEl.classList.add('hidden');
+      return;
+    }
+    item.progressEl.classList.remove('hidden');
+    var value = Math.max(0, Math.min(100, Number(percent) || 0));
+    item.progressFill.style.width = value + '%';
+  }
+
+  function removeItem(item) {
+    if (running) return;
+    var index = files.indexOf(item);
+    if (index === -1) return;
+    files.splice(index, 1);
+    item.row.remove();
+    if (!files.length) {
+      sessionStart = 0;
+      sessionSeconds = 0;
+      hideProgress();
+    }
+    setStatus('已移除：' + item.file.name);
+    refresh();
   }
 
   function makeRow(item) {
@@ -124,7 +191,15 @@
     metaEl.textContent = fmtSize(item.file.size) + ' · ' + fileExt(item.file.name) + ' · 等待转换';
     main.appendChild(nameEl);
     main.appendChild(metaEl);
+    var itemProgress = document.createElement('div');
+    itemProgress.className = 'hif-item-progress hidden';
+    itemProgress.setAttribute('aria-hidden', 'true');
+    var itemProgressFill = document.createElement('span');
+    itemProgress.appendChild(itemProgressFill);
+    main.appendChild(itemProgress);
     item.metaEl = metaEl;
+    item.progressEl = itemProgress;
+    item.progressFill = itemProgressFill;
 
     var actions = document.createElement('div');
     actions.className = 'filerow-actions hif-row-actions';
@@ -139,10 +214,17 @@
     btn.addEventListener('click', function () {
       if (item.blob) TB.download(item.blob, item.outName);
     });
+    var removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-ghost hif-remove-btn';
+    removeBtn.textContent = '移除';
+    removeBtn.addEventListener('click', function () { removeItem(item); });
     actions.appendChild(stateEl);
     actions.appendChild(btn);
+    actions.appendChild(removeBtn);
     item.stateEl = stateEl;
     item.downloadBtn = btn;
+    item.removeBtn = removeBtn;
 
     row.appendChild(cover);
     row.appendChild(main);
@@ -233,6 +315,7 @@
     item.metaEl.textContent = '失败：' + message;
     item.metaEl.title = message;
     item.downloadBtn.disabled = true;
+    setItemProgress(item, 0, false);
   }
 
   function finishItem(item, blob, meta, engine) {
@@ -250,6 +333,7 @@
       ' · sRGB' + (engine ? ' · ' + engine : '');
     item.metaEl.removeAttribute('title');
     item.downloadBtn.disabled = false;
+    setItemProgress(item, 100, false);
   }
 
   function cleanupWorker() {
@@ -341,11 +425,14 @@
         }
         if (msg.stage === 'engine') {
           setItemState(item, '加载解码器…', 'is-busy');
+          setItemProgress(item, 8, true);
         } else if (msg.stage === 'decode') {
           setItemState(item, msg.value < 35 ? '解码中…' : '解码完成', 'is-busy');
+          setItemProgress(item, msg.value, true);
           if (msg.width) item.metaEl.textContent = msg.width + '×' + msg.height + ' · 浏览器本地解码';
         } else if (msg.stage === 'tone') {
           setItemState(item, '色彩映射 ' + msg.value + '%', 'is-busy');
+          setItemProgress(item, msg.value, true);
         }
         return;
       }
@@ -355,6 +442,7 @@
       }
       if (msg.type === 'done') {
         setItemState(item, '生成 JPEG…', 'is-busy');
+        setItemProgress(item, 96, true);
         item.metaEl.textContent = msg.width + '×' + msg.height + ' · 浏览器本地编码中…';
         encodeJpeg(item, msg, function (ok, blob, meta) {
           if (!ok) {
@@ -385,6 +473,7 @@
     item.metaEl.removeAttribute('title');
     item.downloadBtn.disabled = true;
     setItemState(item, '读取文件…', 'is-busy');
+    setItemProgress(item, 3, true);
 
     var jobId = ++jobSeq;
     var reader = new FileReader();
@@ -416,6 +505,7 @@
     item.metaEl.removeAttribute('title');
     item.downloadBtn.disabled = true;
     setItemState(item, '上传中', 'is-busy');
+    setItemProgress(item, 2, true);
 
     if (!serverReady) {
       failItem(item, '服务器转换不可用');
@@ -447,10 +537,12 @@
       if (e.lengthComputable) {
         var percent = Math.round(e.loaded / e.total * 100);
         setItemState(item, '上传 ' + percent + '%', 'is-busy');
+        setItemProgress(item, Math.max(2, Math.round(percent * 0.5)), true);
       }
     };
     xhr.upload.onload = function () {
       setItemState(item, '服务器转换中…', 'is-busy');
+      setItemProgress(item, 55, true);
     };
     xhr.onload = function () {
       if (xhr.status === 200 && xhr.response && xhr.response.byteLength) {
@@ -503,15 +595,18 @@
       return;
     }
     running = true;
+    if (!sessionStart) sessionStart = Date.now();
     refresh();
     setProgress(0, false);
     var index = 0, ok = 0, failed = 0;
 
     function next() {
       if (index >= queue.length) {
+        sessionSeconds = sessionStart ? Math.round((Date.now() - sessionStart) / 1000) : 0;
         running = false;
         refresh();
         setProgress(100, false);
+        setTimeout(function () { if (!running) hideProgress(); }, 800);
         setStatus('处理完成：成功 ' + ok + ' 张' +
           (failed ? '，失败 ' + failed + ' 张；可再次点击转换重试失败项。' : '。'),
           failed ? '' : 'status-ok');
@@ -570,6 +665,8 @@
     files = [];
     usedNames = {};
     listEl.innerHTML = '';
+    sessionStart = 0;
+    sessionSeconds = 0;
     hideProgress();
     setStatus(browserReady ? '已清空。图片只在浏览器本地转换。' : '服务未就绪。');
     refresh();
@@ -603,6 +700,20 @@
   });
   TB.bindDropzone(drop, addFiles);
 
+  if (allToolsBtn) {
+    allToolsBtn.addEventListener('click', function () {
+      var search = document.getElementById('tool-search');
+      if (!search) return;
+      window.scrollTo(0, 0);
+      search.focus();
+      search.select();
+    });
+  }
+
+  setInterval(function () {
+    if (running) updateRail();
+  }, 1000);
+
   window.addEventListener('unload', function () {
     cleanupWorker();
   });
@@ -617,6 +728,7 @@
   }).then(function (info) {
     var hif = info && info.hifConvert;
     serverReady = !!(hif && hif.ready);
+    setRailServer(serverReady);
     if (browserReady) {
       setStatus('浏览器本地转换就绪（图片不会上传）' +
         (serverReady ? '；浏览器无法解码时可回退服务器（默认开启）。' : '。'));
@@ -630,6 +742,7 @@
     refresh();
   }).catch(function () {
     serverReady = false;
+    setRailServer(false);
     if (browserReady) {
       setStatus('浏览器本地转换就绪（图片不会上传）；服务器兜底不可用。');
     } else {

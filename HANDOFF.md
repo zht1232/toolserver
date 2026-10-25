@@ -94,13 +94,14 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **两级面板**：`.panel` 是主操作区（白底 + 描边 + 轻投影）；`.panel panel-quiet` 是说明/参考区（近白底、细描边、无投影，视觉退后）。新增面板先想清楚是「干活」还是「看说明」。
 - **页头**：`.page-head` 是 flex 行，`<h1>`（21px/500，前面带 7–8px 深青绿方块，中文不加 letter-spacing）与一行 `.lede`（13px）同行排布。lede 只写一句话，详细说明放面板或 `.note`。
 - **字号阶梯**：正文 13.5px；次要 12px；面板说明 12px；表格/日志 12px；等宽 `--mono` 12.5px；最小不小于 11px。中文标题一律不加 letter-spacing；标题与按钮用 500，不用 600/700。
-- **导航**：侧栏每项是「16px 线性图标 + 文字」（图标是 `index.html` 顶部 SVG sprite）；激活项 = 浅薄荷底 + 左侧 2px 深青绿竖条 + 图标变深。侧栏底部是 `.local-first` 本地优先卡 + `.side-status` 状态与版本。新增 `#nav-empty` 用于顶栏搜索无结果提示。
-- **顶栏**：白色 sticky 56px；左侧「工具 / 当前页」面包屑；右侧 `.tool-search` 全局工具搜索（`Ctrl/Cmd+K` 聚焦、回车跳到第一个匹配）、`.top-status` 本地运行状态、`#top-format-count` 胶囊。搜索逻辑在 `main.js`：过滤 `.nav-item`，搜索时隐藏 `.nav-cap`，切页自动清空。
-- **移动端（≤900px）**：侧栏收起，`#nav-toggle` 汉堡按钮；顶栏换行，`.tool-search` 占满一行；切页自动收菜单。新增移动端样式写在 `@media (max-width: 900px)` 块里。
+- **导航**：侧栏每项是「16px 线性图标 + 文字」（图标是 `index.html` 顶部 SVG sprite）；激活项 = 浅薄荷底 + 左侧 2px 深青绿竖条 + 图标变深。顶部 `#nav-all-tools`（全部工具 / 23）聚焦顶栏搜索；底部是 `.local-first` 卡、`.side-status` 状态与 `.side-meta` 版本/断网可用。`#nav-empty` 用于顶栏搜索无结果提示。
+- **顶栏**：白色 sticky 56px；左侧「工具 / 分组 / 当前页」三级面包屑（分组由 `main.js` 的 `GROUPS` 映射，≤900px 隐藏分组）；右侧 `.tool-search` 全局工具搜索（`Ctrl/Cmd+K` 聚焦、回车跳到第一个匹配）、`#top-tool-count` 工具数胶囊、`#top-format-count` 格式数胶囊、`.top-status` 本地运行状态、`.top-help` 帮助入口。搜索逻辑在 `main.js`：过滤 `.nav-item`，搜索时隐藏 `.nav-cap`，切页自动清空。
+- **移动端（≤900px）**：侧栏收起，`#nav-toggle` 汉堡按钮；顶栏换行，`.tool-search` 占满一行；分组、工具数/格式数、帮助按钮隐藏；切页自动收菜单。新增移动端样式写在 `@media (max-width: 900px)` 块里。
 - **按钮**：`.btn-primary` 是深青绿底 + 白字；`.btn` 是白底描边次要钮；focus 用 2px 青绿 ring。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（CSS 同时支持）。
 - **提示条**：`.note` 是浅薄荷信息条，`.note note-warn` 是浅琥珀警告条（用于「会上传文件」「有版权/实验性风险」这类需要停一下看的话）。
 - **表格**：`.ftable` 是唯一表格样式；格式扩展名用 `.fmt-chip` 小胶囊（等宽、描边），不要堆空格分隔文本。
-- **右信息栏与页脚**：≥1400px 显示右侧 rail，rail 区块用白卡；`main` 底部有 `.site-foot` 一行「LOCALTOOLS / 浏览器本地处理」。
+- **HIF 页**：`.hif-converter-panel` 把「转换队列」标题/统计/清空/本地标识、拖放区、控制条、每文件进度、文件列表和面板脚注收进同一张白卡；控制条 `.hif-controls` 单行时「开始转换」靠右，≤600px 堆叠并让主按钮占满。右栏 `.rail-hif` 只在 `body.route-hif` 显示，包含解码器状态、本次会话统计、最近使用和 EXIF 提示；统计/最近使用由 `hif.js` 与 `main.js` 实时更新，页面切换通过 `showPage()` 挂 `body.route-hif`。
+- **右信息栏与页脚**：≥1400px 显示右侧 rail，非 HIF 页用 `.rail-generic`，HIF 页用 `.rail-hif`；rail 区块用白卡。`main` 底部有 `.site-foot` 一行「LOCALTOOLS · 23 个工具 / 浏览器本地处理」。
 - **原生控件**：`:root` 用 `color-scheme: light`；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 深色内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项

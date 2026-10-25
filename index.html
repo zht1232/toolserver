@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261025-04">
+<link rel="stylesheet" href="assets/style.css?v=20261025-07">
 </head>
 <body>
 <!-- 线性图标 sprite：16px stroke=currentColor，供导航与拖放区复用 -->
@@ -32,6 +32,9 @@
   <symbol id="i-type" viewBox="0 0 24 24"><polyline points="5 7 5 4.5 19 4.5 19 7"/><line x1="9.5" y1="19.5" x2="14.5" y2="19.5"/><line x1="12" y1="4.5" x2="12" y2="19.5"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 21.5s7.5-3.8 7.5-9.5V5.2L12 2.5 4.5 5.2v6.8c0 5.7 7.5 9.5 7.5 9.5z"/><polyline points="9 11.5 11.2 13.7 15.2 9.7"/></symbol>
   <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 14.5a2 2 0 0 1-2 2H8l-4 3.5V5.5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
   <symbol id="i-history" viewBox="0 0 24 24"><polyline points="2.5 4 2.5 9.5 8 9.5"/><path d="M4.2 15.2a8.5 8.5 0 1 0 2-8.7L2.5 9.5"/></symbol>
   <symbol id="i-droplet" viewBox="0 0 24 24"><path d="M12 2.8l5.6 5.6a8 8 0 1 1-11.2 0z"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2L4.8 13.8h5.9L9.6 22l9.6-12.2h-6.2z"/></symbol>
@@ -55,6 +58,9 @@
     </div>
 
     <nav class="nav">
+      <button class="nav-item nav-home" id="nav-all-tools" type="button">
+        <svg class="nav-ico" aria-hidden="true"><use href="#i-grid"/></svg><span>全部工具</span><span class="nav-count">23</span>
+      </button>
       <div class="nav-cap">音乐</div>
       <a class="nav-item" data-route="music" href="#music"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg><span>音乐解密 / 歌词</span></a>
       <a class="nav-item" data-route="musicfast" href="#musicfast"><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg><span>多源音乐下载</span></a>
@@ -96,11 +102,11 @@
       <div class="side-status">
         <span class="dot"></span>
         <span id="side-status-text">服务运行正常</span>
-        <b class="mono" id="side-version">v2026.10</b>
       </div>
       <div class="kv"><span>运行位置</span><b id="env-mode">检测中</b></div>
       <div class="kv"><span>酷狗密钥表</span><b id="env-key">检测中</b></div>
       <div class="kv"><span>文件处理</span><b>本地 / HIF 例外</b></div>
+      <div class="side-meta"><span>v2026.10</span><span>断网可用</span></div>
     </div>
   </aside>
 
@@ -113,6 +119,8 @@
         </button>
         <span class="crumb-prefix">工具</span>
         <span class="crumb-sep" aria-hidden="true">/</span>
+        <span id="top-group" class="crumb-group"></span>
+        <span class="crumb-sep crumb-group-sep" aria-hidden="true">/</span>
         <span id="top-title">音乐解密与歌词</span>
       </div>
       <div class="topbar-right">
@@ -121,8 +129,10 @@
           <input id="tool-search" type="search" placeholder="搜索工具、格式或快捷键" aria-label="搜索工具" autocomplete="off">
           <kbd>Ctrl K</kbd>
         </div>
-        <span class="top-status"><span class="dot" aria-hidden="true"></span>本地运行</span>
+        <span id="top-tool-count" class="top-tool-count">23 个工具</span>
         <span id="top-format-count"></span>
+        <span class="top-status"><span class="dot" aria-hidden="true"></span>本地运行</span>
+        <a class="top-help" href="#about" aria-label="使用说明与隐私" title="隐私与部署"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9a3 3 0 0 1 5.6 1.3c0 1.9-2.8 2.4-2.8 4.2"/><path d="M12 17h.01"/></svg></a>
       </div>
     </header>
 
@@ -455,17 +465,29 @@
           <span><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg>首次加载 1.4 MB 解码器</span>
           <span><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg>批量 / ZIP 下载</span>
         </div>
-        <div class="note note-warn hif-note">
-          <b>默认在浏览器本地完成：</b>HIF/HEIF 的 10-bit HDR 解码与色彩映射由 WebAssembly 在你的浏览器里完成，图片不会上传；首次转换需加载约 1.4 MB 解码器（之后会缓存）。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。浏览器无法解码时可选择回退到本站服务器（会上传文件，仅内存处理、不落盘）。暗图可用「曝光补偿」提亮；不同设备与查看器的显示亮度会有差异。
-        </div>
-        <div class="dropzone" id="hif-drop">
-          <svg class="dz-icon" aria-hidden="true"><use href="#i-camera"/></svg>
-          <div class="dz-title">拖入 HIF / HEIC 文件</div>
-          <div class="dz-sub">或 <label class="link">选择文件<input type="file" id="hif-input" accept=".hif,.heic,.heif,image/heic,image/heif" multiple hidden></label></div>
-          <div class="dz-meta mono">支持佳能 / 索尼 / 尼康 / 富士等相机的 HEIF；输出 sRGB JPEG</div>
-        </div>
-        <div class="panel">
-          <div class="row hif-actions-row">
+        <section class="panel hif-converter-panel" aria-labelledby="hif-queue-title">
+          <div class="hif-panel-head">
+            <div>
+              <h2 id="hif-queue-title">转换队列</h2>
+              <p class="hif-panel-sub" id="hif-queue-sub">暂无文件 · 浏览器本地引擎</p>
+            </div>
+            <div class="hif-panel-actions">
+              <button class="linkbtn" id="hif-zip" type="button" disabled>打包 ZIP</button>
+              <button class="linkbtn" id="hif-clear" type="button" disabled>清空列表</button>
+              <span class="badge-chip badge-chip-mint"><svg class="nav-ico" aria-hidden="true"><use href="#i-check"/></svg>本地</span>
+            </div>
+          </div>
+
+          <div class="dropzone hif-drop" id="hif-drop">
+            <span class="hif-drop-icon" aria-hidden="true"><svg class="nav-ico"><use href="#i-camera"/></svg></span>
+            <div class="hif-drop-copy">
+              <div class="hif-drop-title">拖入 HIF / HEIC 文件</div>
+              <div class="hif-drop-sub">或 <label class="link">选择文件<input type="file" id="hif-input" accept=".hif,.heic,.heif,image/heic,image/heif" multiple hidden></label> · 支持佳能 / 索尼 / 尼康 / 富士等相机</div>
+            </div>
+            <div class="hif-drop-meta mono">单张 ≤ 80 MB<br>最多 30 张 / 500 MB</div>
+          </div>
+
+          <div class="hif-controls">
             <label class="field">JPEG 质量
               <select id="hif-quality" class="input">
                 <option value="96" selected>96 · 推荐</option>
@@ -481,33 +503,43 @@
                 <option value="1.5">+1.5 EV</option>
               </select>
             </label>
-            <label class="check"><input type="checkbox" id="hif-fallback" checked>浏览器无法解码时自动改用本站服务器（会上传文件，仅内存处理）</label>
-            <button class="btn btn-primary" id="hif-convert" type="button" disabled>开始批量转换</button>
-            <button class="btn" id="hif-zip" type="button" disabled>打包下载 ZIP</button>
-            <button class="btn" id="hif-clear" type="button" disabled>清空列表</button>
-            <span class="mono muted" id="hif-summary">未选择文件</span>
+            <label class="check hif-fallback-check" title="浏览器无法解码时上传到本站服务器，仅内存处理、不落盘"><input type="checkbox" id="hif-fallback" checked><span>失败时回退服务器<em>（会上传）</em></span></label>
+            <span class="hif-limit mono">30 张 / 500 MB 上限</span>
+            <div class="hif-start-group">
+              <button class="btn btn-primary hif-start" id="hif-convert" type="button" disabled>开始转换</button>
+            </div>
           </div>
+
           <div class="wm-progress hidden" id="hif-progress">
             <div class="wm-progress-track" id="hif-progress-track" role="progressbar" aria-label="HIF 转换进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div class="wm-progress-fill" id="hif-progress-fill"></div>
             </div>
           </div>
-          <div class="logline mono" id="hif-status" role="status" aria-live="polite">正在检测服务器转换能力…</div>
-        </div>
-        <div class="panel hidden" id="hif-files-panel">
-          <div class="panel-cap">文件列表 <span class="mono" id="hif-result-count"></span></div>
-          <div class="filerow-wrap" id="hif-list"></div>
-          <div class="note">输出为 sRGB JPEG；浏览器本地转换不保留 EXIF，服务器兜底转换会保留 EXIF 与 ICC。原始 HIF 不会被修改；HDR 高光会被压缩，这是 SDR JPEG 的物理限制。</div>
-        </div>
-        <div class="hif-common">
-          <div class="hif-common-head"><span>常用工具</span><span class="muted">快速入口</span></div>
-          <div class="hif-common-strip">
-            <a class="hif-tool" href="#image"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg><span>图片转换压缩</span></a>
-            <a class="hif-tool" href="#musicfast"><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg><span>多源音乐下载</span></a>
-            <a class="hif-tool" href="#json"><svg class="nav-ico" aria-hidden="true"><use href="#i-braces"/></svg><span>JSON 格式化</span></a>
-            <a class="hif-tool" href="#color"><svg class="nav-ico" aria-hidden="true"><use href="#i-droplet"/></svg><span>颜色转换</span></a>
+          <div class="logline mono hif-status" id="hif-status" role="status" aria-live="polite">正在检测服务器转换能力…</div>
+
+          <div class="hif-files hidden" id="hif-files-panel">
+            <div class="hif-list-head"><span>文件列表</span><span class="mono" id="hif-result-count"></span></div>
+            <div class="filerow-wrap" id="hif-list"></div>
           </div>
-        </div>
+
+          <div class="hif-panel-foot">
+            <svg class="nav-ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span>浏览器输出纯 sRGB JPEG，不保留相机 EXIF；需要 EXIF / ICC 可用服务器兜底。默认图片不上传，只有勾选兜底且本地失败时才会上传，服务器仅内存处理、不落盘。</span>
+          </div>
+        </section>
+
+        <section class="hif-common" aria-labelledby="hif-common-title">
+          <div class="hif-common-head">
+            <h2 id="hif-common-title">常用工具</h2>
+            <button class="linkbtn" id="hif-all-tools" type="button">全部 23 个工具 →</button>
+          </div>
+          <div class="hif-common-strip">
+            <a class="hif-tool" href="#image"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg></span><span>图片转换压缩</span></a>
+            <a class="hif-tool" href="#music"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg></span><span>音乐解密 / 歌词</span></a>
+            <a class="hif-tool" href="#json"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-braces"/></svg></span><span>JSON 格式化</span></a>
+            <a class="hif-tool" href="#color"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-droplet"/></svg></span><span>颜色转换</span></a>
+          </div>
+        </section>
       </section>
 
       <!-- ===== 06 JSON ===== -->
@@ -999,37 +1031,67 @@ python3 server.py 8000</pre>
 
     </div>
     <footer class="site-foot">
-      <span>LOCALTOOLS · 本地优先工具箱</span>
+      <span>LOCALTOOLS · 23 个工具</span>
       <span>浏览器本地处理 · 图片不上传</span>
     </footer>
   </main>
 
   <!-- ============ 右侧信息栏（宽屏显示） ============ -->
   <aside class="rail">
-    <div class="rail-block">
-      <div class="rail-cap">状态</div>
-      <div class="kv"><span>运行模式</span><b id="rail-mode">检测中</b></div>
-      <div class="kv"><span>酷狗密钥表</span><b id="rail-key">检测中</b></div>
-      <div class="kv"><span>解密格式数</span><b id="rail-formats">—</b></div>
+    <div class="rail-generic" id="rail-generic">
+      <div class="rail-block">
+        <div class="rail-cap">状态</div>
+        <div class="kv"><span>运行模式</span><b id="rail-mode">检测中</b></div>
+        <div class="kv"><span>酷狗密钥表</span><b id="rail-key">检测中</b></div>
+        <div class="kv"><span>解密格式数</span><b id="rail-formats">—</b></div>
+      </div>
+      <div class="rail-block">
+        <div class="rail-cap">快捷键</div>
+        <div class="kv"><span>歌词打轴</span><b class="mono">空格</b></div>
+        <div class="kv"><span>撤销打轴</span><b class="mono">Ctrl+Z</b></div>
+        <div class="kv"><span>切换工具</span><b class="mono">Alt+1…9</b></div>
+      </div>
+      <div class="rail-block">
+        <div class="rail-cap">说明 / NOTE</div>
+        <p class="para muted">常规音频、图片、文本在浏览器内存处理；HIF 默认在浏览器本地转换，只有你允许兜底且本地失败时才会在服务器内存处理、不落盘。批量转换建议单次不超过 30 个文件。</p>
+      </div>
     </div>
-    <div class="rail-block">
-      <div class="rail-cap">快捷键</div>
-      <div class="kv"><span>歌词打轴</span><b class="mono">空格</b></div>
-      <div class="kv"><span>撤销打轴</span><b class="mono">Ctrl+Z</b></div>
-      <div class="kv"><span>切换工具</span><b class="mono">Alt+1…9</b></div>
-    </div>
-    <div class="rail-block">
-      <div class="rail-cap">说明 / NOTE</div>
-      <p class="para muted">常规音频、图片、文本在浏览器内存处理；HIF 默认在浏览器本地转换，只有你允许兜底且本地失败时才会在服务器内存处理、不落盘。批量转换建议单次不超过 30 个文件。</p>
+
+    <div class="rail-hif" id="rail-hif">
+      <div class="rail-head"><span>运行状态</span><span class="rail-live"><span class="dot" aria-hidden="true"></span>正常</span></div>
+      <div class="rail-card">
+        <div class="rail-title"><svg class="nav-ico" aria-hidden="true"><use href="#i-monitor"/></svg><h3>WebAssembly 解码器</h3></div>
+        <p class="rail-desc">libheif 1.23 · libde265 · 首次加载 1.4 MB</p>
+        <div class="rail-meter" aria-hidden="true"><span></span></div>
+        <div class="rail-kv"><span>色彩管线</span><b>BT.2020/PQ → sRGB</b></div>
+        <div class="rail-kv"><span>参考白</span><b>203 nit</b></div>
+        <div class="rail-kv"><span>服务器兜底</span><b id="hif-rail-server" class="rail-ok">检测中</b></div>
+      </div>
+      <div class="rail-card">
+        <div class="rail-title"><svg class="nav-ico" aria-hidden="true"><use href="#i-clock"/></svg><h3>本次会话</h3></div>
+        <div class="rail-stats">
+          <div class="rail-stat"><b id="hif-rail-files">0</b><span>文件</span></div>
+          <div class="rail-stat"><b id="hif-rail-mb">0</b><span>MB</span></div>
+          <div class="rail-stat"><b id="hif-rail-secs">0</b><span>秒</span></div>
+        </div>
+        <div class="rail-session-bar" aria-hidden="true"><span id="hif-rail-bar"></span></div>
+        <p class="rail-note" id="hif-rail-note">还没有转换任务</p>
+      </div>
+      <div class="rail-card">
+        <div class="rail-title"><svg class="nav-ico" aria-hidden="true"><use href="#i-history"/></svg><h3>最近使用</h3></div>
+        <div class="rail-mini-list" id="rail-recent-list"></div>
+      </div>
+      <div class="rail-tip"><svg class="nav-ico" aria-hidden="true"><use href="#i-info"/></svg><div><b>EXIF 提示</b>浏览器输出为纯 sRGB，不嵌入相机 EXIF；需要保留拍摄信息时请使用服务器兜底。</div></div>
+      <div class="rail-foot"><span>本地优先</span><span>v2026.10</span></div>
     </div>
   </aside>
 
 </div>
 
-<script src="assets/js/main.js?v=20261025-03"></script>
+<script src="assets/js/main.js?v=20261025-06"></script>
 <script src="assets/js/musicfast.js?v=20261025-04"></script>
 <script src="assets/js/zip.js?v=20261024-05"></script>
-<script src="assets/js/hif.js?v=20261025-01"></script>
+<script src="assets/js/hif.js?v=20261025-07"></script>
 <script src="assets/js/music.js?v=20261024-05"></script>
 <script src="assets/js/ncm.js?v=20261024-05"></script>
 <script src="assets/js/kgm.js?v=20261024-05"></script>

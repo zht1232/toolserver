@@ -15,6 +15,91 @@
     timestamp: '时间戳转换', color: '颜色转换', about: '隐私与部署', feedback: '建议与反馈'
   };
   TITLES.watermark = '整图 AI 去水印';
+  var GROUPS = {
+    music: '音乐', musicfast: '音乐', syncer: '音乐', lrc: '音乐',
+    image: '格式', hif: '格式', watermark: '格式', json: '格式', encode: '格式',
+    csvjson: '格式', markdown: '格式',
+    regex: '开发', jwt: '开发', cron: '开发', radix: '开发', generator: '开发',
+    diff: '开发', reference: '开发',
+    text: '文本', hash: '文本', timestamp: '文本', color: '文本',
+    about: '信息', feedback: '信息'
+  };
+
+  var RECENT_KEY = 'localtools-recent-v1';
+
+  function readRecent() {
+    try {
+      var list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+      if (!Array.isArray(list)) return [];
+      return list.filter(function (item) {
+        return item && typeof item.route === 'string' && TITLES[item.route] && typeof item.ts === 'number';
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function writeRecent(list) {
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) { /* private mode */ }
+  }
+
+  function relTime(ts) {
+    var diff = Date.now() - ts;
+    if (!isFinite(diff) || diff < 0) return '';
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+    if (diff < 172800000) return '昨天';
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function recentIcon(route) {
+    var use = document.querySelector('.nav-item[data-route="' + route + '"] use');
+    return use ? use.getAttribute('href') : '#i-book';
+  }
+
+  function renderRecent() {
+    var box = document.getElementById('rail-recent-list');
+    if (!box) return;
+    var list = readRecent().slice(0, 3);
+    box.innerHTML = '';
+    if (!list.length) {
+      var empty = document.createElement('p');
+      empty.className = 'rail-empty';
+      empty.textContent = '还没有使用记录。';
+      box.appendChild(empty);
+      return;
+    }
+    list.forEach(function (item) {
+      var a = document.createElement('a');
+      a.className = 'rail-mini';
+      a.href = '#' + item.route;
+      a.title = TITLES[item.route];
+      var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'nav-ico');
+      svg.setAttribute('aria-hidden', 'true');
+      var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      use.setAttribute('href', recentIcon(item.route));
+      svg.appendChild(use);
+      var label = document.createElement('span');
+      label.textContent = TITLES[item.route];
+      var time = document.createElement('time');
+      time.textContent = relTime(item.ts);
+      a.appendChild(svg);
+      a.appendChild(label);
+      a.appendChild(time);
+      box.appendChild(a);
+    });
+  }
+
+  function recordRecent(route) {
+    if (!TITLES[route]) return;
+    var list = readRecent().filter(function (item) { return item.route !== route; });
+    list.unshift({ route: route, ts: Date.now() });
+    writeRecent(list.slice(0, 6));
+    renderRecent();
+  }
 
   function showPage(route) {
     var watermarkAlias = route === 'watermark';
@@ -36,6 +121,12 @@
     if (nt) nt.setAttribute('aria-expanded', 'false');
     var t = document.getElementById('top-title');
     if (t) t.textContent = TITLES[route] || '';
+    var groupEl = document.getElementById('top-group');
+    var groupSep = document.querySelector('.crumb-group-sep');
+    if (groupEl) groupEl.textContent = GROUPS[route] || '';
+    if (groupSep) groupSep.classList.toggle('hidden', !GROUPS[route]);
+    document.body.classList.toggle('route-hif', route === 'hif');
+    recordRecent(route);
     if (lyricsAlias) {
       if (location.hash === '#lyrics' && window.history && history.replaceState) history.replaceState(null, '', '#music');
       var lyricsPanel = document.getElementById('music-lyrics-panel');
@@ -64,6 +155,17 @@
     navToggle.addEventListener('click', function () {
       var open = document.body.classList.toggle('nav-open');
       navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  var allToolsNav = document.getElementById('nav-all-tools');
+  if (allToolsNav) {
+    allToolsNav.addEventListener('click', function () {
+      var search = document.getElementById('tool-search');
+      if (!search) return;
+      window.scrollTo(0, 0);
+      search.focus();
+      search.select();
     });
   }
 
@@ -208,7 +310,10 @@
     setText('rail-mode', mode);
     setText('rail-key', key);
 
-    // 格式统计（此时各解密模块已完成注册）
+    var toolCount = document.getElementById('top-tool-count');
+  if (toolCount) toolCount.textContent = ROUTES.length + ' 个工具';
+
+  // 格式统计（此时各解密模块已完成注册）
     setTimeout(function () {
       if (!window.MusicDecrypt) return;
       var list = MusicDecrypt.supported();
