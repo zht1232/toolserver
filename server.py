@@ -15,12 +15,10 @@
   GET /api/nc/search?s=关键词        网易云音乐搜索中转
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
   GET /api/nc/url?id=&br=            网易云直链解析（直连下载页用，服务器只回 URL 不转发字节）
-  GET /api/nc/stream?id=&br=&name=   网易云代理流（直连失败兜底，服务器流式转发、不落盘）
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/feedback                用户主动提交建议反馈
   POST /api/hif/convert?name=&q=&ev=  HIF/HEIF -> sRGB JPEG（HDR 色彩管理，仅内存处理；ev 为曝光补偿）
-  *    /music  /music/*             反向代理到本机 music-dl（go-music-dl Web 服务，多源音乐下载）
 
 用法：
     python3 server.py                  # 默认 0.0.0.0:8000
@@ -29,17 +27,13 @@
 
 说明：音频解密、常规图片处理与 AI 水印推理在用户浏览器本地完成；服务器只按需下发模型和运行库。
 HIF/HEIF 的 HDR 解码是例外：文件上传后仅在服务器内存中转换、不落盘（见 hif_convert.py）。
-/music/* 代理到 go-music-dl（12 个音源的搜索 / 试听 / 下载 Web 服务，AGPL-3.0，见 THIRD_PARTY_NOTICES.md）。
 """
 import json
 import ipaddress
 import os
-import re
-import socket
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -71,11 +65,6 @@ _HIF_SEMAPHORE = threading.BoundedSemaphore(1)
 _HIF_UPLOAD_SEMAPHORE = threading.BoundedSemaphore(2)
 _HIF_RATE_LOCK = threading.Lock()
 _HIF_RATE = {}
-# 网易云直连/代理下载：代理流只用于浏览器直连失败时兜底，限制并发与频率。
-_NC_BRS = ("128000", "192000", "320000", "999000")
-_NC_STREAM_SEMAPHORE = threading.BoundedSemaphore(2)
-_NC_STREAM_RATE_LOCK = threading.Lock()
-_NC_STREAM_RATE = {}
 AI_MODEL_DIR = os.environ.get(
     "LOCALTOOLS_AI_MODEL_DIR",
     os.path.join(os.path.dirname(BASE_DIR), "localtools-models"),
@@ -90,29 +79,6 @@ AI_RUNTIME_FILES = {
     "ort-wasm-simd-threaded.jsep.mjs": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.mjs"), "text/javascript; charset=utf-8"),
     "ort-wasm-simd-threaded.jsep.wasm": (os.path.join(AI_RUNTIME_DIR, "ort-wasm-simd-threaded.jsep.wasm"), "application/wasm"),
 }
-
-# 多源音乐下载服务（go-music-dl Web 模式，systemd: music-dl.service，仅监听 127.0.0.1:8080）。
-# 本站把 /music 与 /music/* 反向代理到它，对外只暴露 8000 一个端口。
-MUSIC_DL_ORIGIN = "http://127.0.0.1:8080"
-MUSIC_DL_PREFIX = "/music"
-# 透传给上游的请求头。X-Requested-With / Origin / Sec-Fetch-* 是 go-music-dl 区分 XHR 与
-# 整页导航、做同源写校验的依据，必须原样透传；Accept-Encoding 不透传（上游不做压缩，
-# 透传反而会让流式回写复杂化）。
-_MUSIC_DL_REQ_HEADERS = ("range", "content-type", "cookie", "accept", "user-agent",
-                         "x-requested-with", "origin", "referer",
-                         "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest")
-# 响应头回写黑名单：hop-by-hop 头与 Server/Date 不回写（后者由 http.server 自己生成）。
-# Content-Disposition（下载文件名）等其余头部全部透传。
-_MUSIC_DL_SKIP_RESP_HEADERS = frozenset([
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailer", "transfer-encoding", "upgrade", "server", "date",
-])
-
-
-def _http_header_name(h):
-    """range -> Range，content-type -> Content-Type"""
-    return "-".join(p.capitalize() for p in h.split("-"))
-
 
 def expand_key(force=False):
     """把 kugou_key.xz 解压为原始密钥表（惰性，仅一次）"""
@@ -150,6 +116,9 @@ def http_get(url, timeout=15):
         return resp.read()
 
 
+_NC_BRS = ("128000", "192000", "320000", "999000")
+
+
 def resolve_nc_url(song_id, br="320000"):
     """解析网易云歌曲的签名 CDN 直链；只返回元数据，不转发音频字节。"""
     if br not in _NC_BRS:
@@ -178,15 +147,6 @@ def resolve_nc_url(song_id, br="320000"):
         # 直链有效期（秒），默认 20 分钟，过期需重新解析
         "expi": item.get("expi") or 1200,
     }
-
-
-def music_dl_reachable(timeout=0.5):
-    """探测 music-dl 是否在本机 8080 监听（用于 /api/ping 能力上报）"""
-    try:
-        with socket.create_connection(("127.0.0.1", 8080), timeout=timeout):
-            return True
-    except OSError:
-        return False
 
 
 class Server(ThreadingHTTPServer):
@@ -289,18 +249,6 @@ class Handler(SimpleHTTPRequestHandler):
                 return False
             history.append(now)
             _HIF_RATE[client] = history
-        return True
-
-    def nc_stream_rate_ok(self):
-        now = time.time()
-        client = self.rate_limit_key()
-        with _NC_STREAM_RATE_LOCK:
-            history = [t for t in _NC_STREAM_RATE.get(client, ()) if now - t < 3600]
-            if len(history) >= 60:
-                _NC_STREAM_RATE[client] = history
-                return False
-            history.append(now)
-            _NC_STREAM_RATE[client] = history
         return True
 
     def handle_hif_convert(self, qs):
@@ -412,127 +360,6 @@ class Handler(SimpleHTTPRequestHandler):
             % (name, meta["width"], meta["height"], length, len(jpeg), time.time() - started)
         )
 
-    # ---------- 音乐下载反向代理（/music -> 127.0.0.1:8080） ----------
-    def send_music_unavailable(self, reason):
-        """music-dl 未运行时给浏览器一个可读的提示页（iframe 内直接可见）"""
-        body = (
-            "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            "<title>音乐下载服务未就绪</title></head>"
-            "<body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-            "background:#F2F5F0;color:#16221E;font-family:Inter,'MiSans','HarmonyOS Sans SC','PingFang SC',"
-            "'Microsoft YaHei',-apple-system,'Segoe UI',sans-serif;font-size:13.5px;line-height:1.65\">"
-            "<div style=\"max-width:420px;padding:32px;text-align:center\">"
-            "<div style=\"width:46px;height:46px;margin:0 auto 12px;border-radius:12px;background:#E2F3ED;"
-            "display:flex;align-items:center;justify-content:center\">"
-            "<svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#0C7A69\" "
-            "stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
-            "<path d=\"M9 18V5l12-2v13\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"18\" cy=\"16\" r=\"3\"/>"
-            "</svg></div>"
-            "<h1 style=\"font-size:18px;font-weight:500;margin:0 0 10px\">音乐下载服务未就绪</h1>"
-            "<p style=\"color:#536159;margin:0 0 8px\">本机 127.0.0.1:8080 上的 music-dl 服务没有响应，"
-            "可能正在启动或已停止。</p>"
-            "<p style=\"color:#6C7A72;margin:0 0 16px;font-size:12px\">%s</p>"
-            "<a href=\"/music/\" style=\"display:inline-block;padding:8px 22px;border-radius:8px;"
-            "background:#0C7A69;color:#fff;text-decoration:none;font-weight:500\">重试</a>"
-            "</div></body></html>"
-        ) % (reason or "connection refused")
-        body = body.encode("utf-8")
-        self.send_response(503)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self._cache_set = True
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-
-    def proxy_music_dl(self, method):
-        """把 /music 与 /music/* 请求流式代理到本机 go-music-dl Web 服务。
-
-        对齐 go-music-dl README 里的 Nginx 反代约定：转发原始 Host、X-Forwarded-*、
-        X-Requested-With / Origin / Sec-Fetch-*，使上游的 XHR 判别与同源写校验正常工作。
-        响应按 64 KB 分块流式回写，大文件（FLAC 整专打包）不会堆在内存里。
-        """
-        parsed = urllib.parse.urlparse(self.path)
-        upstream = MUSIC_DL_ORIGIN + parsed.path
-        if parsed.query:
-            upstream += "?" + parsed.query
-
-        body = None
-        if method == "POST":
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError:
-                length = 0
-            if length > 0:
-                body = self.rfile.read(min(length, 32 * 1024 * 1024))
-
-        client_ip = self.client_address[0] if self.client_address else ""
-
-        req = urllib.request.Request(upstream, data=body, method=method)
-        # 原始 Host 必须透传：上游用请求 Host 与 Origin 做同源校验
-        if self.headers.get("Host"):
-            req.add_header("Host", self.headers.get("Host"))
-        for h in _MUSIC_DL_REQ_HEADERS:
-            v = self.headers.get(h)
-            if v:
-                req.add_header(_http_header_name(h), v)
-        # 反代标准转发头（保留 Cloudflare 已写入的真实客户端信息）
-        if self.headers.get("X-Forwarded-For"):
-            req.add_header("X-Forwarded-For", self.headers.get("X-Forwarded-For"))
-        elif client_ip:
-            req.add_header("X-Forwarded-For", client_ip)
-        real_ip = self.headers.get("CF-Connecting-IP") or client_ip
-        if real_ip:
-            req.add_header("X-Real-IP", real_ip)
-        proto = self.headers.get("X-Forwarded-Proto") or ("https" if self.headers.get("CF-Visitor") else "http")
-        req.add_header("X-Forwarded-Proto", proto)
-
-        try:
-            resp = urllib.request.urlopen(req, timeout=300)
-        except urllib.error.HTTPError as e:
-            resp = e  # 上游的 4xx/5xx 也原样透传
-        except Exception as e:
-            self.send_music_unavailable(str(e))
-            return
-
-        try:
-            self.send_response(resp.status)
-            has_length, has_cache = False, False
-            for name, value in resp.headers.items():
-                lname = name.lower()
-                if lname in _MUSIC_DL_SKIP_RESP_HEADERS:
-                    continue
-                if lname == "content-length":
-                    has_length = True
-                if lname == "cache-control":
-                    has_cache = True
-                self.send_header(name, value)
-            if not has_cache:
-                # 上游未指定缓存策略：要求每次重新验证，避免 music-dl 升级后
-                # 浏览器拿着启发式缓存的旧 UI / 旧 JSON
-                self.send_header("Cache-Control", "no-cache")
-            if not has_length:
-                # 上游未给出长度（chunked 已被 urllib 解包）：关闭 keep-alive，
-                # 依靠连接结束向客户端标识 body 结尾
-                self.close_connection = True
-            self.end_headers()
-            if method == "HEAD":
-                return
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # 客户端中途断开（用户切页 / 取消下载），静默结束
-        finally:
-            try:
-                resp.close()
-            except Exception:
-                pass
-
     # ---------- 路由 ----------
     def do_HEAD(self):
         # 接口路径用 GET 处理，HEAD 也要给出正确响应（供探针 / CDN 校验使用）
@@ -544,20 +371,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
-        if parsed.path == MUSIC_DL_PREFIX or parsed.path.startswith(MUSIC_DL_PREFIX + "/"):
-            self._cache_set = True
-            self.proxy_music_dl("HEAD")
-            return
         self._cache_set = False
         super().do_HEAD()
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == MUSIC_DL_PREFIX or parsed.path.startswith(MUSIC_DL_PREFIX + "/"):
-            self._cache_set = True
-            self.proxy_music_dl("POST")
-            return
         if parsed.path == "/api/hif/convert":
             self.handle_hif_convert(qs)
             return
@@ -613,11 +432,6 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
 
-        if path == MUSIC_DL_PREFIX or path.startswith(MUSIC_DL_PREFIX + "/"):
-            self._cache_set = True
-            self.proxy_music_dl("GET")
-            return
-
         if path.startswith("/api/ai/models/"):
             name = path.rsplit("/", 1)[-1]
             entry = AI_MODEL_FILES.get(name)
@@ -660,11 +474,6 @@ class Handler(SimpleHTTPRequestHandler):
                     "maxUploadMB": _HIF_MAX_UPLOAD // 1048576,
                     "maxPixels": _HIF_MAX_PIXELS,
                     "error": _HIF_IMPORT_ERROR[:300],
-                },
-                "musicDl": {
-                    "proxied": True,
-                    "path": MUSIC_DL_PREFIX,
-                    "reachable": music_dl_reachable(),
                 },
             })
             return
@@ -734,86 +543,6 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "上游请求失败：%s" % e}, 502)
                 return
             self.send_json(info, 200)
-            return
-
-        if path == "/api/nc/stream":
-            # 浏览器直连 CDN 失败时的服务器兜底：解析直链后由服务器流式转发。
-            # 不落盘、不缓存；速度受服务器上行限制，仅作兜底。
-            song_id = (qs.get("id") or [""])[0].strip()
-            if not song_id.isdigit():
-                self.send_json({"error": "歌曲 ID 无效"}, 400)
-                return
-            if not self.nc_stream_rate_ok():
-                self.send_json({"error": "代理下载请求过于频繁，请稍后再试"}, 429)
-                return
-            br = (qs.get("br") or ["320000"])[0].strip()
-            try:
-                info = resolve_nc_url(song_id, br)
-            except Exception as e:
-                self.send_json({"error": "上游直链解析失败：%s" % e}, 502)
-                return
-            if info.get("code") != 200 or not info.get("url"):
-                self.send_json(info, 409)
-                return
-
-            name = (qs.get("name") or [""])[0].strip()
-            artist = (qs.get("artist") or [""])[0].strip()
-            ext = re.sub(r"[^a-z0-9]", "", (info.get("ext") or "mp3").lower()) or "mp3"
-            base = name + (" - " + artist if artist else "") or "netease"
-            base = re.sub(r"[\\/:*?\"<>|\r\n]", "_", base)[:120] or "netease"
-            out_name = base + "." + ext
-            ascii_name = "netease." + ext
-            if not _NC_STREAM_SEMAPHORE.acquire(timeout=5):
-                self.send_json({"error": "代理下载并发已满，请稍后再试"}, 503)
-                return
-
-            upstream = None
-            started = False
-            try:
-                req = urllib.request.Request(info["url"], headers={"User-Agent": UA})
-                upstream = urllib.request.urlopen(req, timeout=30)
-                content_type = upstream.headers.get("Content-Type") or "audio/mpeg"
-                try:
-                    length = int(upstream.headers.get("Content-Length") or 0)
-                except ValueError:
-                    length = 0
-                if not length:
-                    length = int(info.get("size") or 0)
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                if length > 0:
-                    self.send_header("Content-Length", str(length))
-                else:
-                    self.close_connection = True
-                self.send_header(
-                    "Content-Disposition",
-                    "attachment; filename=\"%s\"; filename*=UTF-8''%s"
-                    % (ascii_name, urllib.parse.quote(out_name, safe="")),
-                )
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Audio-Ext", ext)
-                self.send_header("X-Audio-Source", "netease")
-                self._cache_set = True
-                self.end_headers()
-                started = True
-                while True:
-                    chunk = upstream.read(64 * 1024)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                self.close_connection = True
-            except Exception as e:
-                sys.stderr.write("[nc-stream] failed: %s: %s\n" % (type(e).__name__, e))
-                if not started:
-                    self.send_json({"error": "代理下载失败：%s" % e}, 502)
-            finally:
-                if upstream is not None:
-                    try:
-                        upstream.close()
-                    except Exception:
-                        pass
-                _NC_STREAM_SEMAPHORE.release()
             return
 
         super().do_GET()

@@ -1,8 +1,8 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 24 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。新增「网易云直连下载」页：服务器只解析直链，音频字节由浏览器直接从网易云 CDN 取回并保存到本机，不经服务器转发；浏览器直连失败时回落到 `/api/nc/stream` 服务器代理流（较慢、不落盘），无直链时明确提示。
-`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换，以及 `/music/*` 到本机 music-dl 服务的反向代理）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与音乐下载页不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
+前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「网易云直连下载」页：服务器只解析直链，音频字节由浏览器直接从网易云 CDN 取回并保存到本机；直连失败或无直链时明确报错。**不再内嵌 go-music-dl，也不做服务器端下载/存储**。
+`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换，）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与网易云直链解析不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
 ```
@@ -16,18 +16,17 @@ python3 server.py 8000
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
 - `assets/js/hif-worker.js` — HIF 浏览器本地转换 Worker：nclx/pixi 解析、libheif 16-bit 解码、PQ/HLG/SDR → sRGB 色调映射
 - `assets/vendor/libheif/` — libheif-js 1.19.8 WASM bundle（未修改）与 LGPL-3.0 许可证/来源说明；仅在 HIF 页首次转换时按需加载
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/*` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发 + `/music/*` 反向代理
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/search|lyric|url` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发
 - `hif_convert.py` — HIF/HEIF 10-bit HDR 解码、PQ/HLG → sRGB 映射、JPEG 输出（服务器兜底用）
 - `requirements.txt` — 仅 HIF 转换需要的可选依赖（Pillow / pillow-heif / NumPy）
 - `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
 - 浏览器 AI 模型和 ONNX Runtime Web 文件 — 单独安装在站点目录之外，路径配置位于 `server.py`
-- `THIRD_PARTY_NOTICES.md` — go-music-dl / music-lib（AGPL-3.0）、MI-GAN / YOLO11 模型与 ONNX Runtime Web 来源、许可说明
+- `THIRD_PARTY_NOTICES.md` — MI-GAN / YOLO11 模型与 ONNX Runtime Web 来源、许可说明
 
 ## 工具清单与对应 JS
 | 分组 | 页面 | JS 文件 |
 |---|---|---|
 | 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
-| 音乐 | 多源音乐下载 | 无本地 JS：`index.html` 内嵌 iframe（`/music/`，src 由 main.js 首次进入路由时懒加载），实际 UI 由服务器上的 go-music-dl 提供 |
 | 音乐 | 网易云直连下载 | musicfast.js + server.py `/api/nc/url`（只解析直链，浏览器直连 CDN 保存） |
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
@@ -75,29 +74,14 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **验证**：用 Canon EOS R7 的 `452A0021.HIF`（BT.2020/PQ/10-bit，6960×4640）验证：浏览器 WASM 解码 + JS 色调映射输出与服务端结果 MAE ≈ 0.96/255；浏览器批量、ZIP、服务器兜底均需在真实浏览器里复测。HLG 路径按 BT.2100 实现，但没有真实 HLG 样张做端到端验证，上线后应补测索尼/尼康 HLG。
 - **隐私文案**：页面顶部说明默认本地、兜底会上传；`index.html` 的「隐私与部署」、`README.md` 和 `THIRD_PARTY_NOTICES.md` 都记录了该例外，不要删。浏览器解码器为未修改的 libheif-js 1.19.8，许可证与来源见 `assets/vendor/libheif/`。
 
-## 多源音乐下载（go-music-dl）部署约定
+## 音乐下载（网易云直连，浏览器本地）
 
-「多源音乐下载」页不是本站代码，而是把开源项目 [go-music-dl](https://github.com/guohuiyuan/go-music-dl)（AGPL-3.0，v1.1.3 起为当前版本）的 Web UI 通过 `/music/*` 反向代理进来。接入方式与运维约定：
+只保留「网易云直连下载」（`#musicfast`，`musicfast.js`）：
 
-- **独立服务**：服务器上另跑 systemd 单元 `music-dl.service`，`ExecStart=/home/zht/music-dl/music-dl web --port 8080 --desktop --no-browser`。`--desktop` 是上游为「内嵌在别的程序后面」提供的模式：只监听 `127.0.0.1:8080`、免管理员登录、挂载在 `/music` 前缀下。二进制从 GitHub Releases 下载 `go-music-dl_linux_arm64.tar.gz`（服务器是 aarch64），不需要 Go 工具链；盒子直连 GitHub 慢时用 `https://edgeone.gh-proxy.com/https://github.com/...` 前缀加速（本机直连也常超时，实测代理一次就成）。
-- **数据目录**：`WorkingDirectory=/home/zht/music-dl`，下载文件与 SQLite 索引都落在其 `data/` 子目录（`data/downloads`、`data/video_output`）。要改下载位置就在 UI「设置」里改。
-- **代理**：`server.py` 的 `proxy_music_dl()` 把 `/music` 与 `/music/*` 流式转发到 `127.0.0.1:8080`。对齐 go-music-dl README 的 Nginx 反代约定：透传原始 `Host`、`X-Forwarded-For/Proto`、`X-Real-IP`（取 `CF-Connecting-IP`）、`X-Requested-With`、`Origin`、`Sec-Fetch-*`、`Range`、`Cookie`、`Referer`——`X-Requested-With` 是上游区分 XHR/JSON 与整页导航的依据，`Host`+`Origin` 是它同源写校验（`allowSameOriginWrite`，收藏到本地歌单等写操作）的依据，缺了会 403。响应头用黑名单过滤 hop-by-hop 头后其余全透传（`Content-Disposition` 下载文件名、多值 `Set-Cookie` 都要），上游未给 `Cache-Control` 时注入 `no-cache`。上游不可达时返回 503 提示页。
-- **依赖**：服务器需安装 `ffmpeg`（`apt install ffmpeg`），用于非 MP3 格式的元数据内嵌与视频生成；普通搜索/MP3/FLAC 下载不依赖它。
-- **能力探测**：`/api/ping` 的 `musicDl.reachable` 会探测 8080 端口；iframe 的 src 由 `main.js` 在首次进入 `#musicdl` 路由时懒加载。
-- **合规**：AGPL-3.0 是强 Copyleft，通过网络提供修改版服务必须公开对应源码；目前运行的是官方未修改二进制，详见 `THIRD_PARTY_NOTICES.md`。音乐版权风险由使用者自行承担。
-- **升级**：换版本时替换 `/home/zht/music-dl/music-dl` 二进制后 `systemctl restart music-dl`；`data/` 目录保留即保留歌单与设置。
-
-## 下载速度：为什么慢、三条路的实测结论（2026-10-24 实测）
-
-「多源音乐下载」的字节链路是 **CDN → 盒子（WiFi）→ cloudflared → Cloudflare 边缘 → 用户**，cloudflared 注册到的边缘固定在 `lax`（洛杉矶，RTT 170ms；`--region` 只支持 `us`，无法钉到亚太）。家庭宽带到 LAX 的上行实测聚合上限 **≈6.3 Mbps**（4 并发 769KB/s），单流 322KB/s。盒子 TCP 已是 BBR，无更多可挤。三条替代路径的实测：
-
-| 路径 | 实测速度 | 说明 |
-|---|---|---|
-| 浏览器直连网易云 CDN | **43~52 MB/s** | 网易云 CDN 返回 `Access-Control-Allow-Origin: *` 且支持 HTTPS，跨域直取成立（已在真实 Edge 验证 10.5MB 全量取回） |
-| 局域网直连 `http://192.168.3.124:8000` | **1.99 MB/s** | 完全绕开 Cloudflare；防火墙默认放行 8000，在家首选 |
-| 公网隧道（现状） | 0.32 MB/s | 受家庭宽带国际上行限制，架构层面无法再快 |
-
-由此有了「网易云直连下载」页（`#musicfast`，`musicfast.js`）：`/api/nc/url?id=&br=` 服务端只解析直链（http 会强制改写为 https，避免混合内容拦截），浏览器 `fetch(mode:'cors')` 流式拉取 → Blob → `a[download]` 保存为「歌名 - 歌手.格式」。浏览器直连被网络/CORS 拦住或取 URL 失败时，回落到 `/api/nc/stream?id=&br=&name=&artist=`：服务端重新解析直链后流式转发，不落盘，速度受家庭上行限制；无直链（版权/会员限制）时前端明确提示，不再跳到 `/music/download`（go-music-dl v1.1.3 对网易云常返回 404 `Failed to get URL`）。仅网易云可用——其余音源 CDN 要求特定 Referer/UA（见 go-music-dl `core.BuildSourceRequest`），浏览器无法伪造。搜索走既有 `/api/nc/search`，网易云限流（code 406「操作频繁」）时会如实提示。
+- `/api/nc/search` 搜索；`/api/nc/url?id=&br=` 只解析签名直链（http→https），服务器不转发音频字节、不落盘。
+- 浏览器 `fetch(mode:'cors')` 流式读取 → Blob → `a[download]`；网易云 CDN 允许 CORS，实测 43–52 MB/s。
+- 直连失败/无直链时明确报错（换歌/音质/重试），**不做服务器代理**；原 go-music-dl iframe、`/music/*` 代理与 `music-dl.service` 已移除/停止，服务器不再保存歌曲。
+- 仅支持网易云：其他音源需要特定 Referer/UA/解密，浏览器无法伪造；既然不落服务器，就不提供这些源。
 
 ## 视觉规范（2026-10-25 亮色主题版）
 
@@ -113,13 +97,10 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **按钮**：`.btn-primary` 是深青绿底 + 白字；`.btn` 是白底描边次要钮；focus 用 2px 青绿 ring。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（CSS 同时支持）。
 - **提示条**：`.note` 是浅薄荷信息条，`.note note-warn` 是浅琥珀警告条（用于「会上传文件」「有版权/实验性风险」这类需要停一下看的话）。
 - **表格**：`.ftable` 是唯一表格样式；格式扩展名用 `.fmt-chip` 小胶囊（等宽、描边），不要堆空格分隔文本。
-- **内嵌页面**：`.embed-frame` 用浅色外框；go-music-dl 的上游 UI 自身样式不受本站 CSS 控制，不能从本站改内部；需要原生体验用「网易云直连下载」页。`.embed-frame` 仍撑满视口剩余高度。
 - **右信息栏与页脚**：≥1400px 显示右侧 rail，rail 区块用白卡；`main` 底部有 `.site-foot` 一行「LOCALTOOLS / 浏览器本地处理」。
 - **原生控件**：`:root` 用 `color-scheme: light`；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 深色内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
-**多源音乐下载仍是服务器侧服务**：go-music-dl 的上游 UI 通过 iframe 内嵌，搜索与下载由服务器完成，文件落到服务器 `data/downloads`，速度受家庭上行限制；本站只能给外围页面做亮色适配，无法从 CSS 改上游 UI。网易云直连页解决了网易云的浏览器直连与下载位置；其余音源若也要直连，需逐源处理 CORS/Referer/UA，或继续走服务器代理。详见「下载速度」一节。
-
 **HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；Python 兜底路径已避免 irot 与 EXIF 重复旋转，上线后应用竖拍 HIF 补测。
 
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），

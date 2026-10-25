@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261025-01">
+<link rel="stylesheet" href="assets/style.css?v=20261025-02">
 </head>
 <body>
 <!-- 线性图标 sprite：16px stroke=currentColor，供导航与拖放区复用 -->
@@ -58,7 +58,6 @@
       <div class="nav-cap">音乐</div>
       <a class="nav-item" data-route="music" href="#music"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg><span>音乐解密 / 歌词</span></a>
       <a class="nav-item" data-route="musicfast" href="#musicfast"><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg><span>网易云直连下载</span></a>
-      <a class="nav-item" data-route="musicdl" href="#musicdl" title="服务器代理下载，文件保存在服务器"><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg><span>多源音乐下载</span></a>
       <a class="nav-item" data-route="syncer" href="#syncer"><svg class="nav-ico" aria-hidden="true"><use href="#i-wave"/></svg><span>歌词打轴器</span></a>
       <a class="nav-item" data-route="lrc" href="#lrc"><svg class="nav-ico" aria-hidden="true"><use href="#i-clock"/></svg><span>LRC 时间轴</span></a>
       <div class="nav-cap">格式</div>
@@ -231,19 +230,6 @@
         </div>
       </section>
 
-      <!-- ===== 02 多源音乐下载（go-music-dl 反向代理） ===== -->
-      <section class="page hidden" id="page-musicdl">
-        <div class="page-head">
-          <h1>多源音乐下载</h1>
-          <p class="lede">聚合 12 个音源搜索、试听与下载，支持 FLAC 无损、歌词封面与歌单解析；由服务器端 go-music-dl 驱动（AGPL-3.0），下载文件保存在服务器。</p>
-        </div>
-        <div class="embed-frame">
-          <iframe id="musicdl-frame" title="多源音乐下载" loading="lazy" referrerpolicy="no-referrer"></iframe>
-        </div>
-        <p class="note note-warn">这一页是服务器端 go-music-dl 的原始界面：搜索、解析和下载都由服务器完成，文件保存在服务器，速度受家庭上行的限制。需要浏览器直连、文件直接保存到本机，请使用「网易云直连下载」。</p>
-        <p class="note">如果页面显示“音乐下载服务未就绪”，说明服务器上的 music-dl 服务没有运行，稍等片刻刷新本页；持续失败请联系管理员执行 <code class="mono">systemctl status music-dl</code>。下载行为请遵守各平台版权规定，仅供个人学习使用。</p>
-      </section>
-
       <!-- ===== 02b 网易云直连下载（浏览器直连 CDN，不经服务器转发） ===== -->
       <section class="page hidden" id="page-musicfast">
         <div class="page-head">
@@ -270,7 +256,7 @@
               <div class="wm-progress-fill" id="mf-progress-fill"></div>
             </div>
           </div>
-          <div class="logline mono" id="mf-status">输入关键词开始。仅支持网易云，其余音源请用「多源音乐下载」。</div>
+          <div class="logline mono" id="mf-status">输入关键词开始。仅支持网易云；本站不做服务器端下载。</div>
         </div>
 
         <div class="panel">
@@ -281,10 +267,10 @@
         <div class="panel panel-quiet">
           <div class="panel-cap">速度为什么差这么多</div>
           <ul class="bullets">
-            <li>「多源音乐下载」是服务器代理：CDN → 这台机器 → Cloudflare → 你。隧道边缘落在洛杉矶，往返 170ms，实测单流约 0.3 MB/s，多线程上限约 0.77 MB/s。</li>
+            <li>本站已移除服务器端多源下载页：歌曲不落服务器、不经过慢速代理；只保留网易云浏览器直连。</li>
             <li>本页只向服务器要一个直链（几 KB），字节由你的浏览器直接向网易云 CDN 取走，实测可达数十 MB/s，快两个数量级。</li>
-            <li>取不到直链（版权或会员限制）时会明确提示，可再用「多源音乐下载」；浏览器直连被网络/CORS 拦截时，会自动回落到服务器代理流（较慢，字节经服务器、不落盘）。</li>
-            <li>仅支持网易云：其他音源的 CDN 大多要求特定 Referer / User-Agent，浏览器无法伪造，只能由服务器代取。</li>
+            <li>取不到直链（版权或会员限制）或直连失败时会明确提示；本站不做服务器代理/存储，请换一首/音质或稍后重试。</li>
+            <li>仅支持网易云：其他音源的 CDN 大多要求特定 Referer / User-Agent，浏览器无法伪造；既然不落服务器，这些源就不再提供。</li>
             <li>下载内容请仅作个人学习使用，遵守各平台版权规定。</li>
           </ul>
         </div>
@@ -453,9 +439,21 @@
 
       <!-- ===== HIF / HEIF 转 JPEG ===== -->
       <section class="page hidden" id="page-hif">
-        <div class="page-head">
-          <h1>HIF / HEIF 转 JPEG</h1>
-          <p class="lede">批量把相机 HDR HIF 转成 sRGB 照片，按 203 nit 参考白压缩高光，避免发灰和偏色。</p>
+        <div class="page-head hif-page-head">
+          <div class="page-head-main">
+            <div class="page-eyebrow">格式工具 · 05 <span class="eyebrow-dot" aria-hidden="true"></span> HIF CONVERTER</div>
+            <h1>HIF / HEIF 转 JPEG</h1>
+            <p class="lede">批量把相机 HDR HIF 转成 sRGB 照片，按 203 nit 参考白压缩高光，避免发灰和偏色。</p>
+          </div>
+          <div class="head-badges">
+            <span class="badge-chip badge-chip-mint"><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg>图片不上传</span>
+            <span class="badge-chip">10-bit HDR</span>
+          </div>
+        </div>
+        <div class="trust-row">
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg>WASM 本地解码</span>
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg>首次加载 1.4 MB 解码器</span>
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg>批量 / ZIP 下载</span>
         </div>
         <div class="note note-warn hif-note">
           <b>默认在浏览器本地完成：</b>HIF/HEIF 的 10-bit HDR 解码与色彩映射由 WebAssembly 在你的浏览器里完成，图片不会上传；首次转换需加载约 1.4 MB 解码器（之后会缓存）。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。浏览器无法解码时可选择回退到本站服务器（会上传文件，仅内存处理、不落盘）。暗图可用「曝光补偿」提亮；不同设备与查看器的显示亮度会有差异。
@@ -483,13 +481,11 @@
                 <option value="1.5">+1.5 EV</option>
               </select>
             </label>
+            <label class="check"><input type="checkbox" id="hif-fallback" checked>浏览器无法解码时自动改用本站服务器（会上传文件，仅内存处理）</label>
             <button class="btn btn-primary" id="hif-convert" type="button" disabled>开始批量转换</button>
             <button class="btn" id="hif-zip" type="button" disabled>打包下载 ZIP</button>
             <button class="btn" id="hif-clear" type="button" disabled>清空列表</button>
             <span class="mono muted" id="hif-summary">未选择文件</span>
-          </div>
-          <div class="row">
-            <label class="check"><input type="checkbox" id="hif-fallback" checked>浏览器无法解码时自动改用本站服务器（会上传文件，仅内存处理）</label>
           </div>
           <div class="wm-progress hidden" id="hif-progress">
             <div class="wm-progress-track" id="hif-progress-track" role="progressbar" aria-label="HIF 转换进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -502,6 +498,15 @@
           <div class="panel-cap">文件列表 <span class="mono" id="hif-result-count"></span></div>
           <div class="filerow-wrap" id="hif-list"></div>
           <div class="note">输出为 sRGB JPEG；浏览器本地转换不保留 EXIF，服务器兜底转换会保留 EXIF 与 ICC。原始 HIF 不会被修改；HDR 高光会被压缩，这是 SDR JPEG 的物理限制。</div>
+        </div>
+        <div class="hif-common">
+          <div class="hif-common-head"><span>常用工具</span><span class="muted">快速入口</span></div>
+          <div class="hif-common-strip">
+            <a class="hif-tool" href="#image"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg><span>图片转换压缩</span></a>
+            <a class="hif-tool" href="#musicfast"><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg><span>网易云直连</span></a>
+            <a class="hif-tool" href="#json"><svg class="nav-ico" aria-hidden="true"><use href="#i-braces"/></svg><span>JSON 格式化</span></a>
+            <a class="hif-tool" href="#color"><svg class="nav-ico" aria-hidden="true"><use href="#i-droplet"/></svg><span>颜色转换</span></a>
+          </div>
         </div>
       </section>
 
@@ -1021,8 +1026,8 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261025-01"></script>
-<script src="assets/js/musicfast.js?v=20261025-01"></script>
+<script src="assets/js/main.js?v=20261025-02"></script>
+<script src="assets/js/musicfast.js?v=20261025-02"></script>
 <script src="assets/js/zip.js?v=20261024-05"></script>
 <script src="assets/js/hif.js?v=20261025-01"></script>
 <script src="assets/js/music.js?v=20261024-05"></script>

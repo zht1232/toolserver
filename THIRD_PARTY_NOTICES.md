@@ -1,11 +1,5 @@
 # Third-party notices
 
-## go-music-dl (multi-source music download)
-
-The "多源音乐下载" page embeds the Web UI of [guohuiyuan/go-music-dl](https://github.com/guohuiyuan/go-music-dl) (v1.1.2), reverse-proxied by `server.py` under `/music/*` to a local `music-dl` service (systemd unit `music-dl.service`, listening on `127.0.0.1:8080` only). The platform search/download parsing logic lives in the upstream library [guohuiyuan/music-lib](https://github.com/guohuiyuan/music-lib).
-
-Both projects are licensed under **GNU Affero General Public License v3.0**. The binary is run unmodified on the self-hosted server; no source of go-music-dl or music-lib is vendored into this repository. Because the site offers network access to the software, the AGPL-3.0 copyleft terms apply to any modified version served over the network — keep the service unmodified, or publish the corresponding complete source. Downloading copyrighted music may violate platform terms and local law; the feature is intended for personal, non-commercial use only.
-
 ## HIF / HEIF conversion libraries
 
 ### Browser-local decoder (default path)

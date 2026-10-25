@@ -2,11 +2,11 @@
 (function () {
   'use strict';
 
-  var ROUTES = ['music', 'musicfast', 'musicdl', 'syncer', 'lrc', 'image', 'hif', 'json', 'encode', 'csvjson', 'markdown',
+  var ROUTES = ['music', 'musicfast', 'syncer', 'lrc', 'image', 'hif', 'json', 'encode', 'csvjson', 'markdown',
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
-    music: '音乐解密与歌词', musicdl: '多源音乐下载', musicfast: '网易云直连下载', syncer: '歌词打轴器',
+    music: '音乐解密与歌词', musicfast: '网易云直连下载', syncer: '歌词打轴器',
     lrc: 'LRC 时间轴', image: '图片转换压缩', hif: 'HIF / HEIF 转 JPEG', json: 'JSON 格式化',
     encode: '编解码', csvjson: 'CSV / JSON 互转', markdown: 'Markdown 预览',
     regex: '正则表达式测试', jwt: 'JWT 解析器', cron: 'Cron 表达式', radix: '进制转换 / 位运算',
@@ -42,11 +42,6 @@
       if (lyricsPanel) setTimeout(function () { lyricsPanel.scrollIntoView(); }, 0);
     }
     window.scrollTo(0, 0);
-    if (pageRoute === 'musicdl') {
-      // 首次打开多源下载页时才加载 go-music-dl 的 Web UI，避免拖慢首屏
-      var frame = document.getElementById('musicdl-frame');
-      if (frame && !frame.getAttribute('src')) frame.setAttribute('src', '/music/');
-    }
     if (watermarkAlias) setTimeout(function () {
       if (window.openWatermarkTool) window.openWatermarkTool();
       else {
