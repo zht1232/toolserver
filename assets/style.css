@@ -1119,8 +1119,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .mf-row.is-busy { border-color: var(--accent-line); }
 .mf-row.is-busy .mf-name { color: var(--accent-hover); }
 .mf-error { margin-top: 5px; color: var(--err); font-size: 12px; line-height: 1.55; word-break: break-word; }
+.mf-cover-wrap {
+  width: 46px; height: 46px; flex: none; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; border-radius: 9px;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.mf-cover {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block; background: var(--surface-2);
+}
+.mf-cover-wrap .mf-cover-ph { width: 17px; height: 17px; color: var(--ink-3); }
 @media (max-width: 600px) {
   .mf-row { flex-wrap: wrap; }
   .mf-row .mf-dl { flex: 1 1 100%; width: 100%; min-height: 34px; }
   .mf-sub { white-space: normal; }
+  .mf-cover-wrap { width: 42px; height: 42px; border-radius: 8px; }
 }

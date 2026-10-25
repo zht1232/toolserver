@@ -211,6 +211,12 @@
     return SOURCE_LABELS[key] || src || '未知音源';
   }
 
+  function coverOf(song) {
+    var url = trim(song && song.cover);
+    if (location.protocol === 'https:' && /^http:\/\//i.test(url)) url = 'https://' + url.slice(7);
+    return /^https?:\/\//i.test(url) ? url : '';
+  }
+
   function safeName(s) {
     var out = String(s == null ? '' : s)
       .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -459,7 +465,12 @@
       if (album) sub += ' · ' + esc(album);
       sub += ' · ' + esc(fmtDur(song.duration));
       var title = esc(song.name || '未命名');
+      var cover = coverOf(song);
       html.push('<div class="mf-row">' +
+        '<div class="mf-cover-wrap">' +
+          '<svg class="nav-ico mf-cover-ph" aria-hidden="true"><use href="#i-music"/></svg>' +
+          (cover ? '<img class="mf-cover" src="' + esc(cover) + '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">' : '') +
+        '</div>' +
         '<div class="mf-main">' +
           '<div class="mf-name" title="' + title + '">' + title + '</div>' +
           '<div class="mf-sub mono"><span class="fmt-chip mf-source">' + esc(sourceLabel(src)) + '</span>' + sub + '</div>' +
@@ -469,6 +480,11 @@
       '</div>');
     }
     box.innerHTML = html.join('');
+
+    var covers = box.querySelectorAll('.mf-cover');
+    for (var k = 0; k < covers.length; k++) {
+      covers[k].addEventListener('error', function () { this.style.display = 'none'; });
+    }
 
     var btns = box.querySelectorAll('button[data-idx]');
     for (var j = 0; j < btns.length; j++) {
