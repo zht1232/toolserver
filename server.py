@@ -7,6 +7,8 @@
 1. 托管本站静态文件（HTML / CSS / JS），替代 Nginx
 2. 托管大体积解密密钥表，并按需分片下发（浏览器无需下载整个 70 MB 密钥）
 3. 中转部分站点接口（网易云歌词搜索），解决浏览器跨域限制
+4. 多源音乐解析：把本机 go-music-dl 当作元数据 / 直链解析器（不代理其 UI，
+   不转发音频）；音频字节由浏览器直接向音源 CDN 请求并保存
 
 接口：
   GET /api/ping                     健康检查与能力探测，前端据此决定可用功能
@@ -14,7 +16,8 @@
   GET /api/kgm/key?start=&len=      按字节区间返回酷狗公钥表（分片解密用）
   GET /api/nc/search?s=关键词        网易云音乐搜索中转
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
-  GET /api/nc/url?id=&br=            网易云直链解析（直连下载页用，服务器只回 URL 不转发字节）
+  GET /api/music/search?s=&source=  多源音乐搜索（解析上游 HTML，返回 JSON 元数据）
+  GET /api/music/url?id=&source=&duration=&extra=  解析音源 CDN 直链（只回 URL，不转发字节）
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
   POST /api/feedback                用户主动提交建议反馈
@@ -26,11 +29,16 @@
     python3 server.py --expand-key     # 仅解压密钥表后退出（预热，避免首次请求等待）
 
 说明：音频解密、常规图片处理与 AI 水印推理在用户浏览器本地完成；服务器只按需下发模型和运行库。
+多源音乐由本机 go-music-dl（127.0.0.1:8080）解析，服务器只回元数据与 CDN URL，不接触音频字节；
+旧 /music/* UI 代理已删除，上游 UI 与下载接口不对外暴露。
 HIF/HEIF 的 HDR 解码是例外：文件上传后仅在服务器内存中转换、不落盘（见 hif_convert.py）。
 """
-import json
+import html.parser
 import ipaddress
+import json
 import os
+import re
+import socket
 import sys
 import threading
 import time
@@ -55,8 +63,30 @@ FEEDBACK_FILE = os.path.join(os.path.dirname(BASE_DIR), "localtools-feedback.jso
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
+# 多源音乐解析：本机 go-music-dl（systemd: music-dl.service，仅监听 127.0.0.1:8080）。
+# 只调用它的 /music/search（HTML）与 /music/inspect（JSON），把它当作元数据 / 直链解析器；
+# 不代理上游 UI、不代理 /music/download，服务器不转发也不保存音频字节。
+MUSIC_DL_HOST = "127.0.0.1"
+MUSIC_DL_PORT = 8080
+MUSIC_DL_ORIGIN = "http://%s:%d" % (MUSIC_DL_HOST, MUSIC_DL_PORT)
+# 仅列出 CDN 允许浏览器跨域读取的音源（网易云 / 酷狗 / QQ / 千千）；
+# 酷我、咪咕无 CORS，B 站需 Referer，汽水需解密，因此不对外提供。
+MUSIC_SOURCES = ("netease", "kugou", "qq", "qianqian")
+MUSIC_MAX_RESULTS = 20
+MUSIC_MAX_QUERY = 80
+MUSIC_MAX_ID = 200
+MUSIC_MAX_EXTRA = 4000
+MUSIC_TIMEOUT = 25
+MUSIC_MAX_HTML = 2 * 1024 * 1024
+MUSIC_MAX_JSON = 256 * 1024
+# 上游是单机解析器，按客户端 IP 做滑动窗口限流，避免被当成公开搜索代理刷爆。
+MUSIC_RATE_LIMITS = {"search": (30, 120), "inspect": (60, 240)}
+
 _key_state = {"expanding": False}
 _feedback_state = {}
+_MUSIC_RATE = {kind: {} for kind in MUSIC_RATE_LIMITS}
+_MUSIC_RATE_LOCK = threading.Lock()
+_MUSIC_RATE_MAX_CLIENTS = 4096
 
 # HIF conversion is CPU/RAM heavy, so requests are serialised and rate limited.
 _HIF_MAX_UPLOAD = getattr(hif_convert, "MAX_UPLOAD_BYTES", 80 * 1024 * 1024)
@@ -116,37 +146,187 @@ def http_get(url, timeout=15):
         return resp.read()
 
 
-_NC_BRS = ("128000", "192000", "320000", "999000")
+def music_dl_reachable(timeout=0.5):
+    """探测本机 music-dl 是否在 8080 监听（/api/ping 能力上报用，不发 HTTP 请求）。"""
+    try:
+        with socket.create_connection((MUSIC_DL_HOST, MUSIC_DL_PORT), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
-def resolve_nc_url(song_id, br="320000"):
-    """解析网易云歌曲的签名 CDN 直链；只返回元数据，不转发音频字节。"""
-    if br not in _NC_BRS:
-        br = "320000"
-    ids = urllib.parse.quote("[" + song_id + "]", safe="[]")
-    url = ("https://music.163.com/api/song/enhance/player/url"
-           "?id=%s&ids=%s&br=%s" % (song_id, ids, br))
-    raw = json.loads(http_get(url).decode("utf-8"))
-    items = (raw.get("data") or []) if isinstance(raw, dict) else []
-    item = items[0] if items and isinstance(items[0], dict) else None
-    link = (item or {}).get("url") or ""
-    if not link:
-        # 版权受限 / 需会员 / 已下架：明确告知前端，由前端回落到代理下载
-        return {"code": -1, "error": "该歌曲暂未提供直链（版权或会员限制）"}
-    # CDN 返回的常是 http，页面是 https，必须转成 https 否则浏览器按混合内容拦截
-    if link.startswith("http://"):
-        link = "https://" + link[len("http://"):]
-    ext = (item.get("type") or "mp3").lower()
-    return {
-        "code": 200,
-        "url": link,
-        "br": item.get("br") or int(br),
-        "size": item.get("size") or 0,
-        "ext": ext,
-        "md5": item.get("md5") or "",
-        # 直链有效期（秒），默认 20 分钟，过期需重新解析
-        "expi": item.get("expi") or 1200,
-    }
+def music_resolver_get(path, params, timeout=MUSIC_TIMEOUT, max_bytes=MUSIC_MAX_HTML):
+    """调用本机解析器的只读接口：带浏览器 UA，响应超过上限直接报错。"""
+    url = MUSIC_DL_ORIGIN + path + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("上游响应超过 %d 字节" % max_bytes)
+    return data
+
+
+def https_url(value):
+    """CDN 直链常是 http，页面是 https，必须升级，否则浏览器按混合内容拦截。"""
+    value = (value or "").strip()
+    if value[:7].lower() == "http://":
+        return "https://" + value[7:]
+    return value
+
+
+def is_web_url(value):
+    try:
+        parts = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    return parts.scheme.lower() in ("http", "https") and bool(parts.netloc)
+
+
+def as_int(value):
+    """把上游 JSON / HTML 属性转成非负整数，无法解析时返回 0。"""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_digits(value):
+    return bool(value) and value.isascii() and value.isdigit()
+
+
+def as_bytes(value):
+    """上游 size 可能是字节数或 '10.0 MB' 之类的可读文本，统一换算成字节。"""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0, int(value))
+    match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)I?B?\s*$",
+                     str(value or "").upper())
+    if not match:
+        return 0
+    scale = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4}[match.group(2)]
+    return int(round(float(match.group(1)) * (1024 ** scale)))
+
+
+def as_kbps(value):
+    """上游 bitrate 可能是数字或 '320 kbps'，统一成 kbps 整数。"""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0, int(value))
+    text = str(value or "").strip().lower()
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
+    if not match:
+        return 0
+    number = float(match.group(1))
+    if "mbps" in text:
+        number *= 1000
+    return max(0, int(round(number)))
+
+
+def music_error_text(exc):
+    """把上游异常压成一行可读文本（不含堆栈）。"""
+    code = getattr(exc, "code", None)
+    reason = getattr(exc, "reason", None)
+    if code:
+        text = "HTTP %s %s" % (code, reason or "")
+    else:
+        text = str(reason) if reason is not None else str(exc)
+    return (text.strip() or type(exc).__name__)[:200]
+
+
+def music_rate_allow(kind, client):
+    """按客户端 IP 的滑动窗口限流；kind 为 search / inspect。"""
+    per_minute, per_hour = MUSIC_RATE_LIMITS[kind]
+    now = time.time()
+    with _MUSIC_RATE_LOCK:
+        bucket = _MUSIC_RATE[kind]
+        history = [t for t in bucket.get(client, ()) if now - t < 3600]
+        if len(history) >= per_hour or sum(1 for t in history if now - t < 60) >= per_minute:
+            bucket[client] = history
+            return False
+        history.append(now)
+        bucket[client] = history
+        if len(bucket) > _MUSIC_RATE_MAX_CLIENTS:
+            # 偶尔清理已经过期的客户端，避免长期运行时字典无限增长
+            for key in [k for k, stamps in bucket.items() if not stamps or now - stamps[-1] >= 3600]:
+                bucket.pop(key, None)
+    return True
+
+
+class MusicCardParser(html.parser.HTMLParser):
+    """收集 go-music-dl 搜索页里的 <li class="song-card" data-*="..."> 属性。
+
+    html.parser 会反转义属性值中的 HTML 实体（&quot; / &#34; / &amp; 等），
+    因此 data-extra 拿到的就是上游原始 JSON 字符串，引号与 | 都不会丢。
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.cards = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "li":
+            return
+        data = {}
+        classes = ()
+        for name, value in attrs:
+            if name == "class":
+                classes = (value or "").split()
+            elif name.startswith("data-"):
+                data[name] = value or ""
+        if "song-card" in classes:
+            self.cards.append(data)
+
+
+def parse_music_results(html_text, source):
+    """把搜索结果页 HTML 规范化为前端 JSON 条目（最多 20 首）。"""
+    parser = MusicCardParser()
+    parser.feed(html_text)
+    parser.close()
+    songs = []
+    for card in parser.cards:
+        song_id = (card.get("data-id") or "").strip()
+        if not song_id or len(song_id) > MUSIC_MAX_ID:
+            continue
+        card_source = (card.get("data-source") or "").strip().lower()
+        if card_source and card_source not in MUSIC_SOURCES:
+            # 只暴露 CDN 允许浏览器直连的音源，其余来源即使上游混入也不下发
+            continue
+        if not card_source:
+            card_source = source
+        songs.append({
+            "id": song_id,
+            "source": card_source,
+            "name": (card.get("data-name") or "").strip(),
+            "artist": (card.get("data-artist") or "").strip(),
+            "album": (card.get("data-album") or "").strip(),
+            "duration": as_int(card.get("data-duration")),
+            "extra": card.get("data-extra") or "",
+            "cover": https_url(card.get("data-cover")),
+        })
+        if len(songs) >= MUSIC_MAX_RESULTS:
+            break
+    return songs
+
+
+def sanitize_music_inspect(info):
+    """只回传前端需要的字段；http 直链升级为 https，非 http(s) 一律视为无效。"""
+    song = info.get("song") if isinstance(info.get("song"), dict) else {}
+    url = https_url(info.get("url") or song.get("url"))
+    if bool(info.get("valid")) and is_web_url(url):
+        return {
+            "valid": True,
+            "url": url,
+            "size": as_bytes(info.get("size") or song.get("size")),
+            "bitrate": as_kbps(info.get("bitrate") or song.get("bitrate")),
+            "status": "valid",
+            "reason": "",
+        }
+    status = str(info.get("status") or "").strip()[:40] or "invalid"
+    reason = str(info.get("reason") or "").strip()[:200]
+    if info.get("valid"):
+        status, reason = "no_url", "上游未返回可用直链"
+    return {"valid": False, "status": status, "reason": reason, "url": "", "size": 0, "bitrate": 0}
 
 
 class Server(ThreadingHTTPServer):
@@ -360,6 +540,87 @@ class Handler(SimpleHTTPRequestHandler):
             % (name, meta["width"], meta["height"], length, len(jpeg), time.time() - started)
         )
 
+    # ---------- 多源音乐解析（go-music-dl 只做解析，音频由浏览器直连 CDN） ----------
+    def handle_music_search(self, qs):
+        keyword = (qs.get("s") or [""])[0].strip()
+        source = (qs.get("source") or [""])[0].strip().lower()
+        if not keyword:
+            self.send_json({"error": "缺少搜索关键词"}, 400)
+            return
+        if len(keyword) > MUSIC_MAX_QUERY:
+            self.send_json({"error": "搜索关键词过长（最多 %d 个字符）" % MUSIC_MAX_QUERY}, 400)
+            return
+        if source not in MUSIC_SOURCES:
+            self.send_json({"error": "不支持的音源（仅支持 %s）" % "、".join(MUSIC_SOURCES)}, 400)
+            return
+        if not music_rate_allow("search", self.rate_limit_key()):
+            self.send_json({"error": "搜索请求过于频繁，请稍后再试"}, 429)
+            return
+
+        params = {
+            "q": keyword,
+            "type": "song",
+            "page": "1",
+            "page_size": str(MUSIC_MAX_RESULTS),
+            "sources": source,
+        }
+        try:
+            raw = music_resolver_get("/music/search", params)
+        except Exception as exc:
+            sys.stderr.write("[music] search upstream failed: %s\n" % exc)
+            self.send_json({"error": "解析服务请求失败：%s" % music_error_text(exc)}, 502)
+            return
+        try:
+            songs = parse_music_results(raw.decode("utf-8", "replace"), source)
+        except Exception as exc:
+            sys.stderr.write("[music] search parse failed: %s\n" % exc)
+            self.send_json({"error": "解析服务返回内容异常，无法解析搜索结果"}, 502)
+            return
+        self.send_json({"ok": True, "source": source, "songs": songs})
+
+    def handle_music_inspect(self, qs):
+        source = (qs.get("source") or [""])[0].strip().lower()
+        song_id = (qs.get("id") or [""])[0].strip()
+        duration = (qs.get("duration") or [""])[0].strip()
+        extra = (qs.get("extra") or [""])[0]
+        if source not in MUSIC_SOURCES:
+            self.send_json({"error": "不支持的音源（仅支持 %s）" % "、".join(MUSIC_SOURCES)}, 400)
+            return
+        if not song_id:
+            self.send_json({"error": "缺少歌曲 ID"}, 400)
+            return
+        if len(song_id) > MUSIC_MAX_ID:
+            self.send_json({"error": "歌曲 ID 过长"}, 400)
+            return
+        if duration and not is_digits(duration):
+            self.send_json({"error": "时长参数无效"}, 400)
+            return
+        if len(extra) > MUSIC_MAX_EXTRA:
+            self.send_json({"error": "附加参数过长"}, 400)
+            return
+        if not music_rate_allow("inspect", self.rate_limit_key()):
+            self.send_json({"error": "解析请求过于频繁，请稍后再试"}, 429)
+            return
+
+        params = {"id": song_id, "source": source, "duration": duration}
+        if extra:
+            params["extra"] = extra
+        try:
+            # 只解析直链，绝不在此请求音频字节
+            raw = music_resolver_get("/music/inspect", params, max_bytes=MUSIC_MAX_JSON)
+        except Exception as exc:
+            sys.stderr.write("[music] inspect upstream failed: %s\n" % exc)
+            self.send_json({"error": "解析服务请求失败：%s" % music_error_text(exc)}, 502)
+            return
+        try:
+            info = json.loads(raw.decode("utf-8", "replace"))
+        except Exception:
+            info = None
+        if not isinstance(info, dict):
+            self.send_json({"error": "解析服务返回内容异常"}, 502)
+            return
+        self.send_json(sanitize_music_inspect(info))
+
     # ---------- 路由 ----------
     def do_HEAD(self):
         # 接口路径用 GET 处理，HEAD 也要给出正确响应（供探针 / CDN 校验使用）
@@ -468,6 +729,10 @@ class Handler(SimpleHTTPRequestHandler):
                 "kgmKeySize": KEY_SIZE,
                 "lyricsProxy": True,
                 "feedback": True,
+                "musicResolver": {
+                    "reachable": music_dl_reachable(),
+                    "sources": list(MUSIC_SOURCES),
+                },
                 "browserWatermarkAi": browser_ai,
                 "hifConvert": {
                     "ready": hif_convert is not None,
@@ -529,20 +794,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.proxy_json(url)
             return
 
-        if path == "/api/nc/url":
-            # 解析歌曲直链，用于「网易云直连下载」页：服务器只返回一个 URL，
-            # 音频字节由用户浏览器直接从 CDN 取走，不再经本机转发（绕开 Cloudflare 隧道的带宽瓶颈）。
-            song_id = (qs.get("id") or [""])[0].strip()
-            if not song_id.isdigit():
-                self.send_json({"error": "歌曲 ID 无效"}, 400)
-                return
-            br = (qs.get("br") or ["320000"])[0].strip()
-            try:
-                info = resolve_nc_url(song_id, br)
-            except Exception as e:
-                self.send_json({"error": "上游请求失败：%s" % e}, 502)
-                return
-            self.send_json(info, 200)
+        if path == "/api/music/search":
+            self.handle_music_search(qs)
+            return
+
+        if path == "/api/music/url":
+            self.handle_music_inspect(qs)
             return
 
         super().do_GET()

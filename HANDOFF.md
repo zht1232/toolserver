@@ -1,8 +1,8 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「网易云直连下载」页：服务器只解析直链，音频字节由浏览器直接从网易云 CDN 取回并保存到本机；直连失败或无直链时明确报错。**不再内嵌 go-music-dl，也不做服务器端下载/存储**。
-`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换，）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与网易云直链解析不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
+前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页：服务器用本机 go-music-dl 只做搜索与直链解析，音频字节由浏览器直连网易云 / 酷狗 / QQ / 千千 CDN，服务器不转发、不保存歌曲。
+`server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换、多源音乐搜索/直链解析）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与多源音乐解析不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
 ```
@@ -16,7 +16,7 @@ python3 server.py 8000
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
 - `assets/js/hif-worker.js` — HIF 浏览器本地转换 Worker：nclx/pixi 解析、libheif 16-bit 解码、PQ/HLG/SDR → sRGB 色调映射
 - `assets/vendor/libheif/` — libheif-js 1.19.8 WASM bundle（未修改）与 LGPL-3.0 许可证/来源说明；仅在 HIF 页首次转换时按需加载
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/search|lyric|url` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/search|lyric` + `/api/music/search|url` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发
 - `hif_convert.py` — HIF/HEIF 10-bit HDR 解码、PQ/HLG → sRGB 映射、JPEG 输出（服务器兜底用）
 - `requirements.txt` — 仅 HIF 转换需要的可选依赖（Pillow / pillow-heif / NumPy）
 - `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
@@ -27,7 +27,7 @@ python3 server.py 8000
 | 分组 | 页面 | JS 文件 |
 |---|---|---|
 | 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
-| 音乐 | 网易云直连下载 | musicfast.js + server.py `/api/nc/url`（只解析直链，浏览器直连 CDN 保存） |
+| 音乐 | 多源音乐下载 | musicfast.js + server.py `/api/music/search|url`（go-music-dl 仅解析元数据/直链；浏览器直连 CDN） |
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
@@ -74,14 +74,17 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **验证**：用 Canon EOS R7 的 `452A0021.HIF`（BT.2020/PQ/10-bit，6960×4640）验证：浏览器 WASM 解码 + JS 色调映射输出与服务端结果 MAE ≈ 0.96/255；浏览器批量、ZIP、服务器兜底均需在真实浏览器里复测。HLG 路径按 BT.2100 实现，但没有真实 HLG 样张做端到端验证，上线后应补测索尼/尼康 HLG。
 - **隐私文案**：页面顶部说明默认本地、兜底会上传；`index.html` 的「隐私与部署」、`README.md` 和 `THIRD_PARTY_NOTICES.md` 都记录了该例外，不要删。浏览器解码器为未修改的 libheif-js 1.19.8，许可证与来源见 `assets/vendor/libheif/`。
 
-## 音乐下载（网易云直连，浏览器本地）
+## 多源音乐下载（解析器 + 浏览器直连）
 
-只保留「网易云直连下载」（`#musicfast`，`musicfast.js`）：
+「多源音乐下载」页（`#musicfast`，`musicfast.js`）是本站原生 UI，不内嵌 go-music-dl 的页面或 CSS。服务器上的 go-music-dl（systemd `music-dl.service`，仅监听 127.0.0.1:8080）只作为**搜索/直链解析器**：
 
-- `/api/nc/search` 搜索；`/api/nc/url?id=&br=` 只解析签名直链（http→https），服务器不转发音频字节、不落盘。
-- 浏览器 `fetch(mode:'cors')` 流式读取 → Blob → `a[download]`；网易云 CDN 允许 CORS，实测 43–52 MB/s。
-- 直连失败/无直链时明确报错（换歌/音质/重试），**不做服务器代理**；原 go-music-dl iframe、`/music/*` 代理与 `music-dl.service` 已移除/停止，服务器不再保存歌曲。
-- 仅支持网易云：其他音源需要特定 Referer/UA/解密，浏览器无法伪造；既然不落服务器，就不提供这些源。
+- `/api/music/search?s=&source=` 调上游 `/music/search`（HTML）并解析 `.song-card`，返回歌曲元数据（id/source/name/artist/album/duration/extra）。
+- `/api/music/url?id=&source=&duration=&extra=` 调上游 `/music/inspect`（JSON），返回 CDN URL / size / bitrate；http→https。
+- 浏览器 `fetch(mode:'cors')` 直连 CDN 流式下载到本机；服务器不转发、不缓存、不落盘音频，也没有服务器下载兜底。
+- 可浏览器直连的源：网易云 / 酷狗 / QQ / 千千（CDN 实测返回 `Access-Control-Allow-Origin: *`）。酷我 / 咪咕无 CORS、B 站需 Referer、汽水需解密，故不列出。
+- 直连失败 / 无直链 / CORS 拦截时前端明确报错；解析服务不可用时 `/api/ping.musicResolver.reachable=false`。
+- 旧 `/music/*` UI 代理已删除，上游 UI 与 `/music/download` 不对外暴露；`music-dl.service` 只供本站 API 在本机调用。服务为未修改的 AGPL-3.0 二进制，详见 `THIRD_PARTY_NOTICES.md`。
+- **部署**：`music-dl.service` 需 `active` 且 `enabled`（只监听 127.0.0.1:8080）；`server.py` 的 `/api/music/*` 只调用它的 `/music/search` 与 `/music/inspect`，不调用 `/download`，不落盘音频。
 
 ## 视觉规范（2026-10-25 亮色主题版）
 

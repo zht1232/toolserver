@@ -1113,3 +1113,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   .hif-common-strip { grid-template-columns: 1fr; }
   .hif-actions-row .check { width: 100%; }
 }
+
+/* ---------- 多源音乐下载 ---------- */
+.mf-source { color: var(--accent-hover); background: var(--accent-bg); border-color: var(--accent-line); }
+.mf-row.is-busy { border-color: var(--accent-line); }
+.mf-row.is-busy .mf-name { color: var(--accent-hover); }
+.mf-error { margin-top: 5px; color: var(--err); font-size: 12px; line-height: 1.55; word-break: break-word; }
+@media (max-width: 600px) {
+  .mf-row { flex-wrap: wrap; }
+  .mf-row .mf-dl { flex: 1 1 100%; width: 100%; min-height: 34px; }
+  .mf-sub { white-space: normal; }
+}

@@ -1,5 +1,9 @@
 # Third-party notices
 
+## go-music-dl (internal metadata/URL resolver)
+
+The "多源音乐下载" page uses the unmodified [go-music-dl](https://github.com/guohuiyuan/go-music-dl) v1.1.3 binary on the self-hosted server (systemd `music-dl.service`, listening only on 127.0.0.1:8080). The site calls only its `/music/search` HTML and `/music/inspect` JSON endpoints to resolve metadata and CDN URLs; it does not embed or proxy the upstream UI and does not use the upstream download endpoint. Audio bytes are fetched by the visitor's browser directly from the source CDN and are never relayed or stored by the server. go-music-dl and its [music-lib](https://github.com/guohuiyuan/music-lib) are licensed under AGPL-3.0; the binary is unmodified. Downloading copyrighted music may violate platform terms and local law; personal, non-commercial use only.
+
 ## HIF / HEIF conversion libraries
 
 ### Browser-local decoder (default path)
