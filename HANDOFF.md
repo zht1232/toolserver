@@ -1,7 +1,7 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。
+前端工具箱 24 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页，内嵌 go-music-dl 的 Web UI（12 个音源聚合搜索 / 试听 / 下载，FLAC 无损、歌词封面、歌单 / 专辑解析、批量下载）。新增「网易云直连下载」页：服务器只解析直链，音频字节由浏览器直接从网易云 CDN 取回并保存到本机，不经服务器转发；浏览器直连失败时回落到 `/api/nc/stream` 服务器代理流（较慢、不落盘），无直链时明确提示。
 `server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换，以及 `/music/*` 到本机 music-dl 服务的反向代理）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与音乐下载页不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
@@ -28,6 +28,7 @@ python3 server.py 8000
 |---|---|---|
 | 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
 | 音乐 | 多源音乐下载 | 无本地 JS：`index.html` 内嵌 iframe（`/music/`，src 由 main.js 首次进入路由时懒加载），实际 UI 由服务器上的 go-music-dl 提供 |
+| 音乐 | 网易云直连下载 | musicfast.js + server.py `/api/nc/url`（只解析直链，浏览器直连 CDN 保存） |
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
@@ -61,6 +62,7 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **编码差异**：浏览器用 canvas `toBlob('image/jpeg', q/100)` 输出 sRGB JPEG，**不保留 EXIF/ICC**，且通常为 4:2:0 子采样，文件比服务端 4:4:4 输出略小；需要保留相机 EXIF/ICC 时应走服务器兜底。
 - **服务器兜底**：页面复选框「浏览器无法解码时自动改用本站服务器」默认开启；仅当本地解码失败或内存不足时才调用 `POST /api/hif/convert?name=&q=`（请求体是原始文件字节，`Content-Length` 必填）。服务器只在内存处理、不落盘，返回 `image/jpeg` 与 `X-Output-*`/`X-Source-*` 头，输出嵌入 sRGB ICC，EXIF ColorSpace 改为 1。
 - **服务端限制**：单张 ≤ 80 MB、≤ 6000 万像素；仅 HEIF/HIF 品牌（不接受 AVIF）；JPEG 质量 70–100。服务端全局串行转换（`threading.BoundedSemaphore(1)`），排队 45 秒仍无空位则 503；上传槽位 2 个、单次读取超时 120 秒；按 IP 每分钟 60 次、每小时 240 次（`_HIF_RATE`）。前端批量上限 30 张 / 500 MB，逐张串行。
+- **曝光补偿**：浏览器 Worker 与服务端 `hif_convert.convert_heif_to_jpeg(..., exposure_ev=)` 都支持 `-4..+4 EV`；页面下拉提供 0 / +0.5 / +1.0 / +1.5 EV，服务端接口为 `/api/hif/convert?...&ev=1`。用于暗图提亮；改变的是线性光增益，203 nit 参考白肩部仍生效。
 - **服务器依赖**：需要 Python 3.10+；`requirements.txt` 固定 `pillow-heif==1.8.1`，Pillow / NumPy 用兼容范围；Linux aarch64 有 wheel。未安装时 `server.py` 仍能启动，`/api/ping` 的 `hifConvert.ready=false`，浏览器本地转换不受影响。安装建议：
   ```
   cd /home/zht/toolserver
@@ -95,27 +97,30 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 | 局域网直连 `http://192.168.3.124:8000` | **1.99 MB/s** | 完全绕开 Cloudflare；防火墙默认放行 8000，在家首选 |
 | 公网隧道（现状） | 0.32 MB/s | 受家庭宽带国际上行限制，架构层面无法再快 |
 
-由此有了「网易云直连下载」页（`#musicfast`，`musicfast.js`）：`/api/nc/url?id=&br=` 服务端只解析直链（http 会强制改写为 https，避免混合内容拦截），浏览器 `fetch(mode:'cors')` 流式拉取 → Blob → `a[download]` 保存为「歌名 - 歌手.格式」。任何失败（版权无直链、CORS 被网络环境拦、网络错误）自动回落到 `/music/download` 代理下载。仅网易云可用——其余音源 CDN 要求特定 Referer/UA（见 go-music-dl `core.BuildSourceRequest`），浏览器无法伪造。搜索走既有 `/api/nc/search`，网易云限流（code 406「操作频繁」）时会如实提示。
+由此有了「网易云直连下载」页（`#musicfast`，`musicfast.js`）：`/api/nc/url?id=&br=` 服务端只解析直链（http 会强制改写为 https，避免混合内容拦截），浏览器 `fetch(mode:'cors')` 流式拉取 → Blob → `a[download]` 保存为「歌名 - 歌手.格式」。浏览器直连被网络/CORS 拦住或取 URL 失败时，回落到 `/api/nc/stream?id=&br=&name=&artist=`：服务端重新解析直链后流式转发，不落盘，速度受家庭上行限制；无直链（版权/会员限制）时前端明确提示，不再跳到 `/music/download`（go-music-dl v1.1.3 对网易云常返回 404 `Failed to get URL`）。仅网易云可用——其余音源 CDN 要求特定 Referer/UA（见 go-music-dl `core.BuildSourceRequest`），浏览器无法伪造。搜索走既有 `/api/nc/search`，网易云限流（code 406「操作频繁」）时会如实提示。
 
-## 视觉规范（2026-10 视觉打磨版）
+## 视觉规范（2026-10-25 亮色主题版）
 
 `assets/style.css` 是全站唯一样式源，改样式只改这里，不要在页面里写内联样式（既有少量内联是历史遗留，新代码用 class）。
 
-- **基调**：带蓝的深灰底（`--bg #0C0F16`，不是纯黑）+ 单一青绿强调色（`--accent #2DD4BF`，图标/文字用更亮的 `--accent-hi #5EEAD4`）。层级三件套：表面明度（bg < panel < panel-2）、1px 描边（`--line` / `--line-2`）、轻投影（`--shadow-1`）；面板另有一道 1px 顶部内高光（`--sheen`）做出实体感。刻意不要：渐变标题字、辉光 glow、玻璃拟态大面积背景（仅 topbar 用少量 translucency+blur）。
-- **两级面板**：`.panel` 是主操作区（实心 + 描边 + 轻投影，用户在这里干活）；`.panel panel-quiet` 是说明/参考区（近透明底 + 细描边、无投影，视觉退后）。新增面板先想清楚是「干活」还是「看说明」，再选层级。
-- **页头**：`.page-head` 是 flex 行，`<h1>`（20px/600，前面带 8px 强调色方块，中文不加 letter-spacing）与一行 `.lede`（13px）同行排布。lede 只写一句话，详细说明放面板或 `.note` 里。
-- **字号阶梯**：正文 14px；次要 13px；面板说明 12.5px；表格/日志 12.5px；等宽 `--mono` 12.5px；最小不小于 11px。中文标题一律不加 letter-spacing。
-- **导航**：侧栏每项都是「16px 线性图标 + 文字」（图标是 `index.html` 顶部的 SVG sprite，`<use href="#i-xxx">`，stroke=currentColor，加新图标就往 sprite 里加 symbol）；激活项 = 强调色底 + 左侧 2px 竖条 + 图标变亮。侧栏底部是 `.side-status` 状态条（绿点 + 版本号）。早期版本的编号角标和 featured 高亮插队已移除——它们制造噪音还打乱分组。
-- **移动端（≤900px）**：侧栏默认收起，顶栏左侧出现 `#nav-toggle` 汉堡按钮，点开是 `body.nav-open`；切页时 `main.js` 自动收菜单。新增移动端样式记得写在 `@media (max-width: 900px)` 块里。
-- **顶栏**：只放当前页中文标题（`main.js` 的 `TITLES` 映射）+ 右侧按需显示的格式数（胶囊 chip）。不要往回加标语式文案。
-- **按钮**：`.btn-primary` 是实心青绿 + 深色字 + 顶部内高光，无渐变无辉光；`.btn` 是 `--panel-2` 描边次要钮。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（lyrics.js 两种都见过，CSS 已同时支持）。
-- **提示条**：`.note` 是信息（青绿左边条），`.note note-warn` 是警告（琥珀色左边条，用于「要下载大文件」「有版权/实验性风险」这类需要用户停下来看一眼的话）。
-- **表格**：`.ftable` 是唯一表格样式；格式扩展名一律用 `.fmt-chip` 小胶囊（等宽、描边），不要直接堆一串空格分隔的文本。
-- **内嵌页面**：`.embed-frame` 撑满视口剩余高度（`calc(100vh - 220px)`），iframe 背景与站点一致。
-- **原生控件**：`:root` 有 `color-scheme: dark`，下拉/日期等原生弹窗才是暗色；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 内嵌 SVG 箭头，不要用浏览器默认样式。
+- **基调**：暖纸张底 + 白色工作面板 + 单一深青绿强调色。`--bg #F2F5F0`、`--bg-side #F7FAF4`、`--panel #FFFFFF`、`--ink #16221E`、`--ink-2 #536159`、`--ink-3 #6C7A72`、`--accent #0C7A69`、`--accent-bg #E2F3ED`、`--line #E1E7E0`。层级用表面明度、1px 描边和极轻投影；不要深色渐变、辉光、玻璃拟态大面积背景。
+- **两级面板**：`.panel` 是主操作区（白底 + 描边 + 轻投影）；`.panel panel-quiet` 是说明/参考区（近白底、细描边、无投影，视觉退后）。新增面板先想清楚是「干活」还是「看说明」。
+- **页头**：`.page-head` 是 flex 行，`<h1>`（21px/500，前面带 7–8px 深青绿方块，中文不加 letter-spacing）与一行 `.lede`（13px）同行排布。lede 只写一句话，详细说明放面板或 `.note`。
+- **字号阶梯**：正文 13.5px；次要 12px；面板说明 12px；表格/日志 12px；等宽 `--mono` 12.5px；最小不小于 11px。中文标题一律不加 letter-spacing；标题与按钮用 500，不用 600/700。
+- **导航**：侧栏每项是「16px 线性图标 + 文字」（图标是 `index.html` 顶部 SVG sprite）；激活项 = 浅薄荷底 + 左侧 2px 深青绿竖条 + 图标变深。侧栏底部是 `.local-first` 本地优先卡 + `.side-status` 状态与版本。新增 `#nav-empty` 用于顶栏搜索无结果提示。
+- **顶栏**：白色 sticky 56px；左侧「工具 / 当前页」面包屑；右侧 `.tool-search` 全局工具搜索（`Ctrl/Cmd+K` 聚焦、回车跳到第一个匹配）、`.top-status` 本地运行状态、`#top-format-count` 胶囊。搜索逻辑在 `main.js`：过滤 `.nav-item`，搜索时隐藏 `.nav-cap`，切页自动清空。
+- **移动端（≤900px）**：侧栏收起，`#nav-toggle` 汉堡按钮；顶栏换行，`.tool-search` 占满一行；切页自动收菜单。新增移动端样式写在 `@media (max-width: 900px)` 块里。
+- **按钮**：`.btn-primary` 是深青绿底 + 白字；`.btn` 是白底描边次要钮；focus 用 2px 青绿 ring。JS 生成的按钮注意用 `btn-primary` 或 `btn primary`（CSS 同时支持）。
+- **提示条**：`.note` 是浅薄荷信息条，`.note note-warn` 是浅琥珀警告条（用于「会上传文件」「有版权/实验性风险」这类需要停一下看的话）。
+- **表格**：`.ftable` 是唯一表格样式；格式扩展名用 `.fmt-chip` 小胶囊（等宽、描边），不要堆空格分隔文本。
+- **内嵌页面**：`.embed-frame` 用浅色外框；go-music-dl 的上游 UI 自身样式不受本站 CSS 控制，不能从本站改内部；需要原生体验用「网易云直连下载」页。`.embed-frame` 仍撑满视口剩余高度。
+- **右信息栏与页脚**：≥1400px 显示右侧 rail，rail 区块用白卡；`main` 底部有 `.site-foot` 一行「LOCALTOOLS / 浏览器本地处理」。
+- **原生控件**：`:root` 用 `color-scheme: light`；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 深色内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
-**HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；上线后应用竖拍 HIF 补测。
+**多源音乐下载仍是服务器侧服务**：go-music-dl 的上游 UI 通过 iframe 内嵌，搜索与下载由服务器完成，文件落到服务器 `data/downloads`，速度受家庭上行限制；本站只能给外围页面做亮色适配，无法从 CSS 改上游 UI。网易云直连页解决了网易云的浏览器直连与下载位置；其余音源若也要直连，需逐源处理 CORS/Referer/UA，或继续走服务器代理。详见「下载速度」一节。
+
+**HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；Python 兜底路径已避免 irot 与 EXIF 重复旋转，上线后应用竖拍 HIF 补测。
 
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），
 不存在半成品或占位页面。原因：要求纯本地手写完整 QR 编码标准（ISO/IEC 18004）算法，

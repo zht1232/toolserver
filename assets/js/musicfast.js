@@ -100,21 +100,62 @@
       });
   }
 
-  // 回落到走服务器的代理下载（速度和多源音乐下载页一致，但一定能下）
+  // 浏览器直连失败时的服务器兜底：/api/nc/stream 重新解析直链并流式转发（不落盘）。
+  // 不再使用 /music/download：go-music-dl v1.1.3 对网易云经常返回 404 Failed to get URL。
   function fallbackDownload(song, br, reason) {
+    var bar = $('mf-progress');
+    var fill = $('mf-progress-fill');
+    if (bar) bar.classList.remove('hidden');
+    if (fill) fill.style.width = '0%';
     var artists = (song.artists || []).map(function (a) { return a.name; }).join('、') || '';
-    var url = '/music/download?id=' + encodeURIComponent(song.id) +
-      '&source=netease&name=' + encodeURIComponent(song.name || '') +
-      '&artist=' + encodeURIComponent(artists) +
-      '&album=' + encodeURIComponent(((song.album || {}).name) || '') +
-      '&extra=' + encodeURIComponent(JSON.stringify({ song_id: String(song.id) }));
-    setStatus((reason ? reason + '，' : '') + '已回落到服务器代理下载（速度较慢）…');
-    var a = document.createElement('a');
-    a.href = url;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    var qs = 'id=' + encodeURIComponent(song.id) + '&br=' + encodeURIComponent(br) +
+      '&name=' + encodeURIComponent(song.name || '') + '&artist=' + encodeURIComponent(artists);
+    setStatus((reason ? reason + '，' : '') + '改用服务器代理下载（较慢，字节经服务器、不落盘）…');
+    var t0 = Date.now();
+    var received = 0;
+    var chunks = [];
+
+    fetch('/api/nc/stream?' + qs, { credentials: 'same-origin' })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().catch(function () { return {}; }).then(function (d) {
+            throw new Error(d.error || ('代理返回 ' + resp.status));
+          });
+        }
+        var total = Number(resp.headers.get('Content-Length')) || 0;
+        var ext = resp.headers.get('X-Audio-Ext') || 'mp3';
+        var reader = resp.body ? resp.body.getReader() : null;
+        if (!reader) {
+          return resp.blob().then(function (b) {
+            saveBlob(song, { ext: ext }, b, total);
+            return { size: b.size };
+          });
+        }
+        function pump(r) {
+          if (r.done) {
+            saveBlob(song, { ext: ext }, new Blob(chunks), received);
+            return { size: received };
+          }
+          received += r.value.length;
+          chunks.push(r.value);
+          if (total && fill) fill.style.width = Math.min(100, (received / total) * 100).toFixed(1) + '%';
+          var secs = (Date.now() - t0) / 1000;
+          if (secs > 0) {
+            setStatus('服务器代理下载中 ' + fmtSize(received) + ' / ' + fmtSize(total) +
+              ' · ' + fmtSpeed(received / secs));
+          }
+          return reader.read().then(pump);
+        }
+        return reader.read().then(pump);
+      })
+      .then(function (out) {
+        var secs = (Date.now() - t0) / 1000;
+        setStatus('下载完成（服务器代理）：' + fmtSize(out.size) + '，用时 ' + secs.toFixed(1) + ' 秒。');
+      })
+      .catch(function (e) {
+        if (bar) bar.classList.add('hidden');
+        setStatus('代理下载失败：' + e.message + '；可前往「多源音乐下载」尝试其他音源。', 'err');
+      });
   }
 
   function downloadSong(song) {
@@ -131,7 +172,8 @@
       .then(function (info) {
         if (!info || info.code !== 200 || !info.url) {
           if (bar) bar.classList.add('hidden');
-          fallbackDownload(song, br, (info && info.error) || '无法取得直链');
+          setStatus(((info && info.error) || '无法取得直链') +
+            '；可前往「多源音乐下载」尝试其他音源。', 'err');
           return;
         }
         setStatus('已取得直链（' + fmtSize(info.size) + '，有效期 ' +

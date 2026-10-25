@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var ROUTES = ['music', 'musicdl', 'musicfast', 'syncer', 'lrc', 'image', 'hif', 'json', 'encode', 'csvjson', 'markdown',
+  var ROUTES = ['music', 'musicfast', 'musicdl', 'syncer', 'lrc', 'image', 'hif', 'json', 'encode', 'csvjson', 'markdown',
     'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
@@ -29,6 +29,7 @@
     document.querySelectorAll('.nav-item').forEach(function (a) {
       a.classList.toggle('active', a.getAttribute('data-route') === route);
     });
+    clearToolSearch();
     // 窄屏：切页后自动收起导航菜单
     document.body.classList.remove('nav-open');
     var nt = document.getElementById('nav-toggle');
@@ -68,6 +69,60 @@
     navToggle.addEventListener('click', function () {
       var open = document.body.classList.toggle('nav-open');
       navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
+  /* 顶栏工具搜索：过滤侧栏，回车跳到第一个匹配项；Ctrl/Cmd+K 聚焦 */
+  var toolSearch = document.getElementById('tool-search');
+  var navEmpty = document.getElementById('nav-empty');
+
+  function clearToolSearch() {
+    var input = document.getElementById('tool-search');
+    if (!input || !input.value) return;
+    input.value = '';
+    document.querySelectorAll('.nav-cap').forEach(function (c) { c.classList.remove('hidden'); });
+    document.querySelectorAll('.nav-item').forEach(function (a) { a.classList.remove('hidden'); });
+    var empty = document.getElementById('nav-empty');
+    if (empty) empty.classList.add('hidden');
+  }
+
+  function filterNav() {
+    if (!toolSearch) return;
+    var q = (toolSearch.value || '').trim().toLowerCase();
+    var shown = 0;
+    document.querySelectorAll('.nav-item').forEach(function (a) {
+      var hit = !q || a.textContent.toLowerCase().indexOf(q) !== -1;
+      a.classList.toggle('hidden', !hit);
+      if (hit) shown++;
+    });
+    document.querySelectorAll('.nav-cap').forEach(function (c) {
+      c.classList.toggle('hidden', !!q);
+    });
+    if (navEmpty) navEmpty.classList.toggle('hidden', !q || shown > 0);
+  }
+
+  if (toolSearch) {
+    toolSearch.addEventListener('input', filterNav);
+    toolSearch.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var first = document.querySelector('.nav-item:not(.hidden)');
+        if (!first) return;
+        var route = first.getAttribute('data-route');
+        if (!route) return;
+        if (location.hash === '#' + route) showPage(route);
+        else location.hash = route;
+      } else if (e.key === 'Escape') {
+        clearToolSearch();
+        toolSearch.blur();
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        toolSearch.focus();
+        toolSearch.select();
+      }
     });
   }
 

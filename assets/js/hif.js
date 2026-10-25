@@ -12,6 +12,7 @@
   var zipBtn = document.getElementById('hif-zip');
   var clearBtn = document.getElementById('hif-clear');
   var qualitySel = document.getElementById('hif-quality');
+  var exposureSel = document.getElementById('hif-exposure');
   var fallbackCheck = document.getElementById('hif-fallback');
   var summary = document.getElementById('hif-summary');
   var statusEl = document.getElementById('hif-status');
@@ -23,7 +24,7 @@
   var MAX_FILES = 30;
   var MAX_FILE_BYTES = 80 * 1024 * 1024;
   var MAX_TOTAL_BYTES = 500 * 1024 * 1024;
-  var WORKER_URL = 'assets/js/hif-worker.js?v=20261024-04';
+  var WORKER_URL = 'assets/js/hif-worker.js?v=20261025-01';
 
   var files = [];
   var usedNames = {};
@@ -369,7 +370,7 @@
       finish(false, null, null, message, 'worker');
     };
     try {
-      worker.postMessage({ type: 'convert', id: jobId, buffer: buffer, name: item.file.name }, [buffer]);
+      worker.postMessage({ type: 'convert', id: jobId, buffer: buffer, name: item.file.name, exposure: exposureSel ? (parseFloat(exposureSel.value) || 0) : 0 }, [buffer]);
     } catch (err) {
       finish(false, null, null, '无法把文件交给本地解码器', 'worker');
     }
@@ -424,7 +425,8 @@
 
     var xhr = new XMLHttpRequest();
     var url = 'api/hif/convert?name=' + encodeURIComponent(item.file.name) +
-      '&q=' + encodeURIComponent(qualitySel.value);
+      '&q=' + encodeURIComponent(qualitySel.value) +
+      '&ev=' + encodeURIComponent(exposureSel ? exposureSel.value : '0');
     xhr.open('POST', url, true);
     xhr.responseType = 'arraybuffer';
     xhr.timeout = 240000;
@@ -576,6 +578,12 @@
   qualitySel.addEventListener('change', function () {
     if (!running) setStatus('JPEG 质量已设为 ' + qualitySel.value + '；仅影响之后转换的文件。');
   });
+
+  if (exposureSel) {
+    exposureSel.addEventListener('change', function () {
+      if (!running) setStatus('曝光补偿已设为 ' + exposureSel.value + ' EV；仅影响之后转换的文件。');
+    });
+  }
 
   if (fallbackCheck) {
     fallbackCheck.addEventListener('change', function () {

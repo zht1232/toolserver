@@ -175,8 +175,9 @@
     return value <= 0.0031308 ? 12.92 * value : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
   }
 
-  function convert(id, buffer) {
+  function convert(id, buffer, exposure) {
     var bytes = new Uint8Array(buffer);
+    var gain = Math.pow(2, Math.max(-4, Math.min(4, Number(exposure) || 0)));
     if (bytes.length < 16 || fourcc(bytes, 4) !== 'ftyp') {
       fail(id, 'corrupt', '不是有效的 HEIF/HIF 文件');
       return;
@@ -267,13 +268,13 @@
       } catch (err) { /* ignore */ }
 
       progress(id, 'decode', 35, { width: width, height: height });
-      toneMap(id, copy, width, height, stride, primaries, transfer, bitDepth);
+      toneMap(id, copy, width, height, stride, primaries, transfer, bitDepth, gain, Number(exposure) || 0);
     }).catch(function (err) {
       fail(id, 'engine', '本地解码器加载失败：' + (err && err.message ? err.message : err));
     });
   }
 
-  function toneMap(id, copy, width, height, stride, primaries, transfer, bitDepth) {
+  function toneMap(id, copy, width, height, stride, primaries, transfer, bitDepth, gain, exposureEv) {
     var maxCode = (1 << bitDepth) - 1;
     var norm = 1 / maxCode;
     var count = width * height;
@@ -331,6 +332,7 @@
           R = m00 * r + m01 * g + m02 * b;
           G = m10 * r + m11 * g + m12 * b;
           B = m20 * r + m21 * g + m22 * b;
+          R *= gain; G *= gain; B *= gain;
           y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
           if (y > peak) peak = y;
         }
@@ -388,6 +390,7 @@
         R = m00 * r + m01 * g + m02 * b;
         G = m10 * r + m11 * g + m12 * b;
         B = m20 * r + m21 * g + m22 * b;
+        R *= gain; G *= gain; B *= gain;
         if (hdr) {
           y = 0.2126 * R + 0.7152 * G + 0.0722 * B;
           var ri = (y / yMax * 65536) | 0;
@@ -423,6 +426,7 @@
       hdr: hdr,
       peak: hdr ? Math.round(peak * 10) / 10 : null,
       engine: 'browser',
+      exposureEv: exposureEv,
       ms: Date.now() - started
     };
     post(id, {
@@ -438,7 +442,7 @@
     var data = event.data || {};
     if (data.type !== 'convert') return;
     try {
-      convert(data.id, data.buffer);
+      convert(data.id, data.buffer, data.exposure);
     } catch (err) {
       fail(data.id, 'unknown', '转换失败：' + (err && err.message ? err.message : err));
     }

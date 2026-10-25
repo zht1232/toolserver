@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261024-05">
+<link rel="stylesheet" href="assets/style.css?v=20261025-01">
 </head>
 <body>
 <!-- 线性图标 sprite：16px stroke=currentColor，供导航与拖放区复用 -->
@@ -43,14 +43,9 @@
     <div class="logo">
       <div class="logo-mark" aria-hidden="true">
         <svg viewBox="0 0 32 32" width="34" height="34">
-          <defs>
-            <linearGradient id="lmg" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#5EEAD4"/><stop offset="1" stop-color="#0E7490"/>
-            </linearGradient>
-          </defs>
-          <rect width="32" height="32" rx="8.5" fill="url(#lmg)"/>
+          <rect width="32" height="32" rx="8.5" fill="#0C7A69"/>
           <path d="M10.5 8.5v12h9.5" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="22.5" cy="10" r="1.8" fill="#FDE68A"/>
+          <circle cx="22.5" cy="10" r="1.8" fill="#F2C94C"/>
         </svg>
       </div>
       <div>
@@ -62,8 +57,8 @@
     <nav class="nav">
       <div class="nav-cap">音乐</div>
       <a class="nav-item" data-route="music" href="#music"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg><span>音乐解密 / 歌词</span></a>
-      <a class="nav-item" data-route="musicdl" href="#musicdl"><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg><span>多源音乐下载</span></a>
       <a class="nav-item" data-route="musicfast" href="#musicfast"><svg class="nav-ico" aria-hidden="true"><use href="#i-bolt"/></svg><span>网易云直连下载</span></a>
+      <a class="nav-item" data-route="musicdl" href="#musicdl" title="服务器代理下载，文件保存在服务器"><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg><span>多源音乐下载</span></a>
       <a class="nav-item" data-route="syncer" href="#syncer"><svg class="nav-ico" aria-hidden="true"><use href="#i-wave"/></svg><span>歌词打轴器</span></a>
       <a class="nav-item" data-route="lrc" href="#lrc"><svg class="nav-ico" aria-hidden="true"><use href="#i-clock"/></svg><span>LRC 时间轴</span></a>
       <div class="nav-cap">格式</div>
@@ -92,7 +87,13 @@
       <a class="nav-item" data-route="feedback" href="#feedback"><svg class="nav-ico" aria-hidden="true"><use href="#i-msg"/></svg><span>建议与反馈</span></a>
     </nav>
 
+    <div class="nav-empty hidden" id="nav-empty">没有匹配的工具</div>
+
     <div class="sidebar-foot">
+      <div class="local-first">
+        <span class="dot" aria-hidden="true"></span>
+        <div><b>本地优先</b><p>HDR 解码与文件处理都在你的设备上完成，图片不上传。</p></div>
+      </div>
       <div class="side-status">
         <span class="dot"></span>
         <span id="side-status-text">服务运行正常</span>
@@ -111,10 +112,17 @@
         <button id="nav-toggle" type="button" aria-label="打开导航" aria-expanded="false">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <span class="dot"></span>
-        <span class="mono" id="top-title">音乐解密与歌词</span>
+        <span class="crumb-prefix">工具</span>
+        <span class="crumb-sep" aria-hidden="true">/</span>
+        <span id="top-title">音乐解密与歌词</span>
       </div>
-      <div class="topbar-right mono">
+      <div class="topbar-right">
+        <div class="tool-search">
+          <svg class="search-ico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+          <input id="tool-search" type="search" placeholder="搜索工具、格式或快捷键" aria-label="搜索工具" autocomplete="off">
+          <kbd>Ctrl K</kbd>
+        </div>
+        <span class="top-status"><span class="dot" aria-hidden="true"></span>本地运行</span>
         <span id="top-format-count"></span>
       </div>
     </header>
@@ -227,11 +235,12 @@
       <section class="page hidden" id="page-musicdl">
         <div class="page-head">
           <h1>多源音乐下载</h1>
-          <p class="lede">聚合 12 个音源搜索、试听与下载，支持 FLAC 无损、歌词封面与歌单解析，由 go-music-dl 驱动（AGPL-3.0）。</p>
+          <p class="lede">聚合 12 个音源搜索、试听与下载，支持 FLAC 无损、歌词封面与歌单解析；由服务器端 go-music-dl 驱动（AGPL-3.0），下载文件保存在服务器。</p>
         </div>
         <div class="embed-frame">
           <iframe id="musicdl-frame" title="多源音乐下载" loading="lazy" referrerpolicy="no-referrer"></iframe>
         </div>
+        <p class="note note-warn">这一页是服务器端 go-music-dl 的原始界面：搜索、解析和下载都由服务器完成，文件保存在服务器，速度受家庭上行的限制。需要浏览器直连、文件直接保存到本机，请使用「网易云直连下载」。</p>
         <p class="note">如果页面显示“音乐下载服务未就绪”，说明服务器上的 music-dl 服务没有运行，稍等片刻刷新本页；持续失败请联系管理员执行 <code class="mono">systemctl status music-dl</code>。下载行为请遵守各平台版权规定，仅供个人学习使用。</p>
       </section>
 
@@ -274,7 +283,7 @@
           <ul class="bullets">
             <li>「多源音乐下载」是服务器代理：CDN → 这台机器 → Cloudflare → 你。隧道边缘落在洛杉矶，往返 170ms，实测单流约 0.3 MB/s，多线程上限约 0.77 MB/s。</li>
             <li>本页只向服务器要一个直链（几 KB），字节由你的浏览器直接向网易云 CDN 取走，实测可达数十 MB/s，快两个数量级。</li>
-            <li>取不到直链（版权或会员限制）、或被网络环境拦住时，会自动回落到服务器代理下载，功能不会中断。</li>
+            <li>取不到直链（版权或会员限制）时会明确提示，可再用「多源音乐下载」；浏览器直连被网络/CORS 拦截时，会自动回落到服务器代理流（较慢，字节经服务器、不落盘）。</li>
             <li>仅支持网易云：其他音源的 CDN 大多要求特定 Referer / User-Agent，浏览器无法伪造，只能由服务器代取。</li>
             <li>下载内容请仅作个人学习使用，遵守各平台版权规定。</li>
           </ul>
@@ -449,7 +458,7 @@
           <p class="lede">批量把相机 HDR HIF 转成 sRGB 照片，按 203 nit 参考白压缩高光，避免发灰和偏色。</p>
         </div>
         <div class="note note-warn hif-note">
-          <b>默认在浏览器本地完成：</b>HIF/HEIF 的 10-bit HDR 解码与色彩映射由 WebAssembly 在你的浏览器里完成，图片不会上传；首次转换需加载约 1.4 MB 解码器（之后会缓存）。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。浏览器无法解码时可选择回退到本站服务器（会上传文件，仅内存处理、不落盘）。
+          <b>默认在浏览器本地完成：</b>HIF/HEIF 的 10-bit HDR 解码与色彩映射由 WebAssembly 在你的浏览器里完成，图片不会上传；首次转换需加载约 1.4 MB 解码器（之后会缓存）。单张 ≤ 80 MB、≤ 6000 万像素；单次最多 30 张、总量 ≤ 500 MB。浏览器无法解码时可选择回退到本站服务器（会上传文件，仅内存处理、不落盘）。暗图可用「曝光补偿」提亮；不同设备与查看器的显示亮度会有差异。
         </div>
         <div class="dropzone" id="hif-drop">
           <svg class="dz-icon" aria-hidden="true"><use href="#i-camera"/></svg>
@@ -464,6 +473,14 @@
                 <option value="96" selected>96 · 推荐</option>
                 <option value="92">92 · 更小</option>
                 <option value="98">98 · 更大</option>
+              </select>
+            </label>
+            <label class="field">曝光补偿
+              <select id="hif-exposure" class="input">
+                <option value="0" selected>0 EV · 标准</option>
+                <option value="0.5">+0.5 EV</option>
+                <option value="1">+1.0 EV</option>
+                <option value="1.5">+1.5 EV</option>
               </select>
             </label>
             <button class="btn btn-primary" id="hif-convert" type="button" disabled>开始批量转换</button>
@@ -976,6 +993,10 @@ python3 server.py 8000</pre>
       </section>
 
     </div>
+    <footer class="site-foot">
+      <span>LOCALTOOLS · 本地优先工具箱</span>
+      <span>浏览器本地处理 · 图片不上传</span>
+    </footer>
   </main>
 
   <!-- ============ 右侧信息栏（宽屏显示） ============ -->
@@ -1000,10 +1021,10 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261024-05"></script>
-<script src="assets/js/musicfast.js?v=20261024-05"></script>
+<script src="assets/js/main.js?v=20261025-01"></script>
+<script src="assets/js/musicfast.js?v=20261025-01"></script>
 <script src="assets/js/zip.js?v=20261024-05"></script>
-<script src="assets/js/hif.js?v=20261024-05"></script>
+<script src="assets/js/hif.js?v=20261025-01"></script>
 <script src="assets/js/music.js?v=20261024-05"></script>
 <script src="assets/js/ncm.js?v=20261024-05"></script>
 <script src="assets/js/kgm.js?v=20261024-05"></script>
