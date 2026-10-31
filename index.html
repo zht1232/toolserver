@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261025-07">
+<link rel="stylesheet" href="assets/style.css?v=20261031-02">
+<link rel="stylesheet" href="assets/raw.css?v=20261031-01">
 </head>
 <body>
 <!-- 线性图标 sprite：16px stroke=currentColor，供导航与拖放区复用 -->
@@ -59,7 +60,7 @@
 
     <nav class="nav">
       <button class="nav-item nav-home" id="nav-all-tools" type="button">
-        <svg class="nav-ico" aria-hidden="true"><use href="#i-grid"/></svg><span>全部工具</span><span class="nav-count">23</span>
+        <svg class="nav-ico" aria-hidden="true"><use href="#i-grid"/></svg><span>全部工具</span><span class="nav-count">25</span>
       </button>
       <div class="nav-cap">音乐</div>
       <a class="nav-item" data-route="music" href="#music"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg><span>音乐解密 / 歌词</span></a>
@@ -74,6 +75,9 @@
       <a class="nav-item" data-route="encode" href="#encode"><svg class="nav-ico" aria-hidden="true"><use href="#i-code"/></svg><span>编解码</span></a>
       <a class="nav-item" data-route="csvjson" href="#csvjson"><svg class="nav-ico" aria-hidden="true"><use href="#i-table"/></svg><span>CSV / JSON 互转</span></a>
       <a class="nav-item" data-route="markdown" href="#markdown"><svg class="nav-ico" aria-hidden="true"><use href="#i-file"/></svg><span>Markdown 预览</span></a>
+      <div class="nav-cap">修图</div>
+      <a class="nav-item" data-route="retouch" href="#retouch"><svg class="nav-ico" aria-hidden="true"><use href="#i-spark"/></svg><span>专业修图</span></a>
+      <a class="nav-item" data-route="raw" href="#raw"><svg class="nav-ico" aria-hidden="true"><use href="#i-camera"/></svg><span>Camera Raw</span></a>
       <div class="nav-cap">开发</div>
       <a class="nav-item" data-route="regex" href="#regex"><svg class="nav-ico" aria-hidden="true"><use href="#i-terminal"/></svg><span>正则表达式测试</span></a>
       <a class="nav-item" data-route="jwt" href="#jwt"><svg class="nav-ico" aria-hidden="true"><use href="#i-key"/></svg><span>JWT 解析器</span></a>
@@ -129,7 +133,7 @@
           <input id="tool-search" type="search" placeholder="搜索工具、格式或快捷键" aria-label="搜索工具" autocomplete="off">
           <kbd>Ctrl K</kbd>
         </div>
-        <span id="top-tool-count" class="top-tool-count">23 个工具</span>
+        <span id="top-tool-count" class="top-tool-count">25 个工具</span>
         <span id="top-format-count"></span>
         <span class="top-status"><span class="dot" aria-hidden="true"></span>本地运行</span>
         <a class="top-help" href="#about" aria-label="使用说明与隐私" title="隐私与部署"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9a3 3 0 0 1 5.6 1.3c0 1.9-2.8 2.4-2.8 4.2"/><path d="M12 17h.01"/></svg></a>
@@ -244,7 +248,7 @@
       <section class="page hidden" id="page-musicfast">
         <div class="page-head">
           <h1>多源音乐下载</h1>
-          <p class="lede">服务器只做搜索与直链解析，音频由浏览器直连 CDN，不经过服务器、也不存服务器。</p>
+          <p class="lede">默认同时检索全部音源，服务器只做搜索与直链解析，音频由浏览器直连 CDN，不经过服务器、也不存服务器。</p>
         </div>
 
         <div class="panel">
@@ -252,10 +256,13 @@
           <div class="row">
             <label class="field" for="mf-source">音源
               <select id="mf-source" class="input">
-                <option value="netease" selected>网易云</option>
-                <option value="kugou">酷狗</option>
+                <option value="all" selected>全部音源</option>
+                <option value="netease">网易云</option>
                 <option value="qq">QQ音乐</option>
+                <option value="kugou">酷狗</option>
+                <option value="soda">汽水音乐</option>
                 <option value="qianqian">千千</option>
+                <option value="fivesing">5sing</option>
               </select>
             </label>
             <input type="text" id="mf-keyword" class="input grow" placeholder="歌曲名或歌手名，回车即搜索">
@@ -266,7 +273,7 @@
               <div class="wm-progress-fill" id="mf-progress-fill"></div>
             </div>
           </div>
-          <div class="logline mono" id="mf-status">选择音源并输入关键词；服务器只做搜索与直链解析，音频由浏览器直连 CDN。</div>
+          <div class="logline mono" id="mf-status">默认「全部音源」：输入关键词后回车或点「搜索」；服务器只做搜索与直链解析，音频由浏览器直连 CDN。</div>
         </div>
 
         <div class="panel">
@@ -277,10 +284,10 @@
         <div class="panel panel-quiet">
           <div class="panel-cap">原理与边界</div>
           <ul class="bullets">
-            <li>服务器只负责搜索与直链解析，返回歌曲元数据和临时 URL；音频字节不经过本站服务器。</li>
-            <li>点击「浏览器直连下载」后，浏览器直接向网易云 / 酷狗 / QQ音乐 / 千千的 CDN 拉取音频，进度、速度与大小都在本地显示。</li>
-            <li>只列这四个音源：其他平台 CDN 往往校验 Referer / User-Agent，或链接加密、需要额外解密，浏览器直连会被 CORS / 403 拒绝。</li>
-            <li>不做服务器下载、不落盘、不存储文件；酷狗等平台的部分歌曲没有免费直链，失败时会明确提示，换一首或换源即可，本站不会改用服务器中转。</li>
+            <li>默认「全部音源」会并行检索网易云、QQ音乐、酷狗、汽水音乐、千千、5sing，并标注每首歌的实际来源，方便在某个源不可用时换源。</li>
+            <li>服务器只负责搜索与直链解析，返回歌曲元数据和临时 URL；音频字节不经过本站服务器，由浏览器直连各平台 CDN。</li>
+            <li>会员曲、版权下架曲或被平台限制的歌曲可能没有可下载直链；换一个音源或版本再试，或点击失败项旁的「换源搜索」。这不是本站服务器故障。</li>
+            <li>酷我、咪咕缺少跨域响应头，B 站需要 Referer，Jamendo 返回网页，浏览器无法直连下载，所以不列出；本站不做服务器中转、不落盘、不存储音频。</li>
             <li>下载内容请仅作个人学习使用，遵守各平台版权规定与当地法律。</li>
           </ul>
         </div>
@@ -531,7 +538,7 @@
         <section class="hif-common" aria-labelledby="hif-common-title">
           <div class="hif-common-head">
             <h2 id="hif-common-title">常用工具</h2>
-            <button class="linkbtn" id="hif-all-tools" type="button">全部 23 个工具 →</button>
+            <button class="linkbtn" id="hif-all-tools" type="button">全部 25 个工具 →</button>
           </div>
           <div class="hif-common-strip">
             <a class="hif-tool" href="#image"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg></span><span>图片转换压缩</span></a>
@@ -540,6 +547,66 @@
             <a class="hif-tool" href="#color"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-droplet"/></svg></span><span>颜色转换</span></a>
           </div>
         </section>
+      </section>
+
+      <!-- ===== 02c 专业修图（BitMappery 工作区） ===== -->
+      <section class="page hidden" id="page-retouch">
+        <div class="page-head hif-page-head">
+          <div class="page-head-main">
+            <div class="page-eyebrow">修图工具 · 24 <span class="eyebrow-dot" aria-hidden="true"></span> PRO EDITOR</div>
+            <h1>专业修图</h1>
+            <p class="lede">图层、图层蒙版、画笔、选区、文字与特效，基于 MIT 开源的 BitMappery，全部在浏览器本地完成。</p>
+          </div>
+          <div class="head-badges">
+            <span class="badge-chip badge-chip-mint"><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg>本地处理</span>
+            <span class="badge-chip">图层 / 蒙版</span>
+          </div>
+        </div>
+        <div class="trust-row">
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg>图层与图层蒙版</span>
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-spark"/></svg>画笔 / 选区 / 文字</span>
+          <span><svg class="nav-ico" aria-hidden="true"><use href="#i-download"/></svg>PSD 导入 / JPEG 导出</span>
+        </div>
+        <section class="panel retouch-panel" aria-labelledby="retouch-title">
+          <div class="retouch-head">
+            <div>
+              <h2 id="retouch-title">修图工作区</h2>
+              <p>BitMappery 1.2 · MIT 开源引擎 · 文件不上传服务器</p>
+            </div>
+            <div class="retouch-actions">
+              <button class="btn btn-primary" id="retouch-open" type="button">启动修图</button>
+              <a class="btn" href="editor/" target="_blank" rel="noopener">全屏打开</a>
+            </div>
+          </div>
+          <div class="retouch-stage" id="retouch-stage">
+            <div class="retouch-cover" id="retouch-cover">
+              <span class="retouch-cover-icon" aria-hidden="true"><svg class="nav-ico"><use href="#i-spark"/></svg></span>
+              <h3>浏览器里的专业图层修图</h3>
+              <p>支持图层、图层蒙版、画笔、选区、文字、特效、撤销重做、PSD 导入与 JPEG 导出。首次启动按需加载编辑器，之后由浏览器缓存。</p>
+              <div class="retouch-feature-grid">
+                <span>图层 / 蒙版</span>
+                <span>画笔 / 选区 / 文字</span>
+                <span>非破坏滤镜 / 历史</span>
+                <span>PSD 导入 / 图片导出</span>
+              </div>
+              <button class="btn btn-primary retouch-start" id="retouch-start" type="button">启动专业修图</button>
+              <p class="retouch-hint">建议桌面横屏使用；图片只在浏览器内存中处理，不会上传。</p>
+              <p class="retouch-hint">需要处理相机 RAW？<a href="#raw">打开 Camera Raw 显影 →</a></p>
+            </div>
+            <iframe class="retouch-frame hidden" id="retouch-frame" src="about:blank" title="专业修图工作区" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+          </div>
+          <div class="retouch-foot">
+            <svg class="nav-ico" aria-hidden="true"><use href="#i-info"/></svg>
+            <span>专业修图由 <a href="https://github.com/igorski/bitmappery" target="_blank" rel="noopener">BitMappery</a>（MIT）驱动，已本地化并移除云端存储入口；原始图片不会离开你的浏览器。</span>
+          </div>
+        </section>
+      </section>
+
+      <!-- ===== 02d Camera Raw（浏览器本地 RAW 显影） ===== -->
+      <section class="page hidden" id="page-raw">
+        <div id="raw-root">
+          <div class="panel raw-loading">正在加载 Camera Raw 工作区…</div>
+        </div>
       </section>
 
       <!-- ===== 06 JSON ===== -->
@@ -1031,7 +1098,7 @@ python3 server.py 8000</pre>
 
     </div>
     <footer class="site-foot">
-      <span>LOCALTOOLS · 23 个工具</span>
+      <span>LOCALTOOLS · 25 个工具</span>
       <span>浏览器本地处理 · 图片不上传</span>
     </footer>
   </main>
@@ -1088,8 +1155,8 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261025-06"></script>
-<script src="assets/js/musicfast.js?v=20261025-04"></script>
+<script src="assets/js/main.js?v=20261031-01"></script>
+<script src="assets/js/musicfast.js?v=20261031-01"></script>
 <script src="assets/js/zip.js?v=20261024-05"></script>
 <script src="assets/js/hif.js?v=20261025-07"></script>
 <script src="assets/js/music.js?v=20261024-05"></script>
@@ -1114,5 +1181,7 @@ python3 server.py 8000</pre>
 <script src="assets/js/diff.js?v=20261024-05"></script>
 <script src="assets/js/reference.js?v=20261024-05"></script>
 <script src="assets/js/feedback.js?v=20261024-05"></script>
+<script src="assets/js/retouch.js?v=20261031-03"></script>
+<script type="module" src="assets/js/raw.js?v=20261031-01"></script>
 </body>
 </html>

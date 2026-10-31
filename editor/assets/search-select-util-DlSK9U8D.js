@@ -1,0 +1,1 @@
+var e=e=>e.map(e=>typeof e==`object`?e:{label:t(e.toString()),value:e}),t=e=>e.toLowerCase().split(` `).map(e=>e.charAt(0).toUpperCase()+e.substring(1)).join(` `);export{e as t};

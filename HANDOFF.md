@@ -1,7 +1,7 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 23 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页：服务器用本机 go-music-dl 只做搜索与直链解析，音频字节由浏览器直连网易云 / 酷狗 / QQ / 千千 CDN，服务器不转发、不保存歌曲。
+前端工具箱 25 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页：默认并行检索网易云 / QQ音乐 / 酷狗 / 汽水音乐 / 千千 / 5sing，服务器用本机 go-music-dl 只做搜索与直链解析，音频字节由浏览器直连各平台 CDN，服务器不转发、不保存歌曲；会员/版权曲可换源搜索。另新增「专业修图」（BitMappery）与「Camera Raw」（FlashRaw）两个本地图像工作区。
 `server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换、多源音乐搜索/直链解析）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与多源音乐解析不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
@@ -11,7 +11,7 @@ python3 server.py 8000
 ```
 
 ## 目录结构
-- `index.html` — 单页应用外壳，侧边栏导航 + 23 个 `<section class="page">`，hash 路由切页
+- `index.html` — 单页应用外壳，侧边栏导航 + 25 个路由页面（`retouch`/`raw` 为新建的修图工作区），hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
 - `assets/js/hif-worker.js` — HIF 浏览器本地转换 Worker：nclx/pixi 解析、libheif 16-bit 解码、PQ/HLG/SDR → sRGB 色调映射
@@ -32,6 +32,8 @@ python3 server.py 8000
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
 | 格式 | HIF / HEIF 转 JPEG | hif.js + hif-worker.js + assets/vendor/libheif/（浏览器本地）；server.py `/api/hif/convert` + hif_convert.py（兜底） |
+| 修图 | 专业修图 | editor/（BitMappery 构建，按需 iframe）+ retouch.js |
+| 修图 | Camera Raw | raw.js + raw.css + assets/vendor/flashraw（FlashRaw WASM + WebGL2） |
 | 格式 | JSON 格式化 / 编解码 | tools.js |
 | 格式 | CSV / JSON / Markdown 表格互转 | csvjson.js |
 | 格式 | Markdown 实时预览 | markdown.js（内置手写 Markdown 解析器） |
@@ -81,10 +83,18 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - `/api/music/search?s=&source=` 调上游 `/music/search`（HTML）并解析 `.song-card`，返回歌曲元数据（id/source/name/artist/album/duration/extra）。
 - `/api/music/url?id=&source=&duration=&extra=` 调上游 `/music/inspect`（JSON），返回 CDN URL / size / bitrate；http→https。
 - 浏览器 `fetch(mode:'cors')` 直连 CDN 流式下载到本机；服务器不转发、不缓存、不落盘音频，也没有服务器下载兜底。
-- 可浏览器直连的源：网易云 / 酷狗 / QQ / 千千（CDN 实测返回 `Access-Control-Allow-Origin: *`）。酷我 / 咪咕无 CORS、B 站需 Referer、汽水需解密，故不列出。
-- 直连失败 / 无直链 / CORS 拦截时前端明确报错；解析服务不可用时 `/api/ping.musicResolver.reachable=false`。
+- 可浏览器直连的源：网易云 / QQ音乐 / 酷狗 / 汽水音乐 / 千千 / 5sing（CDN 实测返回 `Access-Control-Allow-Origin: *`）。酷我 / 咪咕无 CORS、B 站需 Referer、Jamendo 返回 HTML，故不列出。
+- `/api/music/search` 支持 `source=all`：并行检索六源、交错合并、每源计数；搜索缓存 120s、直链缓存 90s（只缓存非空搜索结果和有效直链），单源聚合超时 12s。
+- 直连失败 / 会员曲 / 版权下架 / CORS 拦截时前端明确区分原因，并提供「换源搜索」在全部音源中找替代版本；解析服务不可用时 `/api/ping.musicResolver.reachable=false`。
 - 旧 `/music/*` UI 代理已删除，上游 UI 与 `/music/download` 不对外暴露；`music-dl.service` 只供本站 API 在本机调用。服务为未修改的 AGPL-3.0 二进制，详见 `THIRD_PARTY_NOTICES.md`。
 - **部署**：`music-dl.service` 需 `active` 且 `enabled`（只监听 127.0.0.1:8080）；`server.py` 的 `/api/music/*` 只调用它的 `/music/search` 与 `/music/inspect`，不调用 `/download`，不落盘音频。
+
+## 专业修图与 Camera Raw（浏览器本地）
+
+- **专业修图**（`#retouch`）：`assets/js/retouch.js` 只负责按需加载 `editor/` 里的 BitMappery 构建（MIT），避免首屏拉取 4.8 MB 编辑器；iframe 由站点浅色页面框住，可全屏打开。BitMappery 提供图层、图层蒙版、画笔、选区、文字、非破坏滤镜、历史、PSD 导入和图片导出；已移除云端存储入口、禁用 Google Fonts 外部请求并做中文化。编辑器本身不向服务器上传文件。
+- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡/曲线/蒙版等实时显影，支持线性、径向、画笔蒙版与局部调整，导出 JPEG/PNG。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
+- **许可证**：BitMappery 的 LICENSE 与修改说明在 `editor/`；FlashRaw 的 MIT/APACHE 许可证在 `assets/vendor/flashraw/`；整体来源见 `THIRD_PARTY_NOTICES.md`。
+- **集成**：两个页面都通过 `main.js` 的 `route-editor` 类隐藏右栏并使用更宽的工作区；`retouch.js`/`raw.js` 不改动服务器 API，也没有上传接口。
 
 ## 视觉规范（2026-10-25 亮色主题版）
 
@@ -101,10 +111,12 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **提示条**：`.note` 是浅薄荷信息条，`.note note-warn` 是浅琥珀警告条（用于「会上传文件」「有版权/实验性风险」这类需要停一下看的话）。
 - **表格**：`.ftable` 是唯一表格样式；格式扩展名用 `.fmt-chip` 小胶囊（等宽、描边），不要堆空格分隔文本。
 - **HIF 页**：`.hif-converter-panel` 把「转换队列」标题/统计/清空/本地标识、拖放区、控制条、每文件进度、文件列表和面板脚注收进同一张白卡；控制条 `.hif-controls` 单行时「开始转换」靠右，≤600px 堆叠并让主按钮占满。右栏 `.rail-hif` 只在 `body.route-hif` 显示，包含解码器状态、本次会话统计、最近使用和 EXIF 提示；统计/最近使用由 `hif.js` 与 `main.js` 实时更新，页面切换通过 `showPage()` 挂 `body.route-hif`。
-- **右信息栏与页脚**：≥1400px 显示右侧 rail，非 HIF 页用 `.rail-generic`，HIF 页用 `.rail-hif`；rail 区块用白卡。`main` 底部有 `.site-foot` 一行「LOCALTOOLS · 23 个工具 / 浏览器本地处理」。
+- **右信息栏与页脚**：≥1400px 显示右侧 rail，非 HIF 页用 `.rail-generic`，HIF 页用 `.rail-hif`；rail 区块用白卡。`main` 底部有 `.site-foot` 一行「LOCALTOOLS · 25 个工具 / 浏览器本地处理」。
 - **原生控件**：`:root` 用 `color-scheme: light`；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 深色内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
+**修图页的限制**：专业修图是 BitMappery 的独立 iframe 构建（约 4.4 MB，首次启动加载），移动端空间较紧，建议桌面横屏；图层蒙版、PSD 导入和大部分上游功能保留，但上游本身没有 Camera Raw 级显影参数，RAW 显影请用 `#raw`。Camera Raw 页需要 WebGL2；大尺寸 RAW 首次解码需要数百毫秒到数秒，预览会按 1600px 限制，导出全分辨率可能较慢；不支持 WebGL2 的浏览器无法使用实时显影。
+
 **HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；Python 兜底路径已避免 irot 与 EXIF 重复旋转，上线后应用竖拍 HIF 补测。
 
 **二维码生成与识别功能本次未实现**，已从导航和路由中完全移除（不是隐藏，是彻底删掉了入口），
@@ -122,7 +134,7 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - 音频、常规图片转换和文本在浏览器本地处理；AI 水印修补也在浏览器本地运行。HIF 默认在浏览器本地转换；只有用户开启服务器兜底且本地解码失败时才会上传，服务器仅内存处理、不落盘。
 - 代码风格统一为 ES5（`var`、`function`、无箭头函数/class/let/const/模板字符串），
   是为了兼容老旧设备/浏览器，新增代码请保持一致。`hif-worker.js` 允许使用 Promise（仅在支持 Worker + WebAssembly 的浏览器里运行）。
-- 已做过的验证：`node --check` 全部 JS 文件语法通过；全部 23 个路由无 `Uncaught` JS 运行时错误；
+- 已做过的验证：`node --check` 全部 JS 文件语法通过；全部 25 个路由无 `Uncaught` JS 运行时错误；
   HIF 转换用 Canon EOS R7 的 BT.2020/PQ HIF 做过 API、浏览器批量 2 张与 ZIP 打包测试。
   2026-10-24 浏览器本地路线：用 Node 的 libheif-js WASM 对 32 MP HIF 实测解码 ~4.7 s、色调映射 ~1.1 s，色彩与服务端输出 MAE ≈ 0.96/255；仍需在真实 Chrome/Edge/Safari 和移动端复测 canvas 编码与内存。
   未做过的验证：真实移动设备/老旧浏览器的实机测试、真实 HLG 样张、竖拍 EXIF 方向、各音乐解密格式的实机端到端测试。

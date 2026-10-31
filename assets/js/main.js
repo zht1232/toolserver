@@ -2,12 +2,13 @@
 (function () {
   'use strict';
 
-  var ROUTES = ['music', 'musicfast', 'syncer', 'lrc', 'image', 'hif', 'json', 'encode', 'csvjson', 'markdown',
-    'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
+  var ROUTES = ['music', 'musicfast', 'syncer', 'lrc', 'image', 'hif', 'retouch', 'raw', 'json', 'encode',
+    'csvjson', 'markdown', 'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
     'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
   var TITLES = {
     music: '音乐解密与歌词', musicfast: '多源音乐下载', syncer: '歌词打轴器',
-    lrc: 'LRC 时间轴', image: '图片转换压缩', hif: 'HIF / HEIF 转 JPEG', json: 'JSON 格式化',
+    lrc: 'LRC 时间轴', image: '图片转换压缩', hif: 'HIF / HEIF 转 JPEG', retouch: '专业修图',
+    raw: 'Camera Raw', json: 'JSON 格式化',
     encode: '编解码', csvjson: 'CSV / JSON 互转', markdown: 'Markdown 预览',
     regex: '正则表达式测试', jwt: 'JWT 解析器', cron: 'Cron 表达式', radix: '进制转换 / 位运算',
     generator: 'UUID / 密码生成', diff: '文本 Diff 对比', reference: '速查表',
@@ -18,7 +19,7 @@
   var GROUPS = {
     music: '音乐', musicfast: '音乐', syncer: '音乐', lrc: '音乐',
     image: '格式', hif: '格式', watermark: '格式', json: '格式', encode: '格式',
-    csvjson: '格式', markdown: '格式',
+    csvjson: '格式', markdown: '格式', retouch: '修图', raw: '修图',
     regex: '开发', jwt: '开发', cron: '开发', radix: '开发', generator: '开发',
     diff: '开发', reference: '开发',
     text: '文本', hash: '文本', timestamp: '文本', color: '文本',
@@ -126,6 +127,7 @@
     if (groupEl) groupEl.textContent = GROUPS[route] || '';
     if (groupSep) groupSep.classList.toggle('hidden', !GROUPS[route]);
     document.body.classList.toggle('route-hif', route === 'hif');
+    document.body.classList.toggle('route-editor', route === 'retouch' || route === 'raw');
     recordRecent(route);
     if (lyricsAlias) {
       if (location.hash === '#lyrics' && window.history && history.replaceState) history.replaceState(null, '', '#music');

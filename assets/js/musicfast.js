@@ -1,7 +1,8 @@
 /* 多源音乐下载：服务器只做搜索与直链解析，音频字节由浏览器直接从 CDN 拉取。
  *
- * 支持音源（CDN 允许浏览器跨域直连）：网易云、酷狗、QQ音乐、千千。
- * 其余平台往往校验 Referer / User-Agent 或链接加密，浏览器无法直连，故不列出。
+ * 支持音源（CDN 允许浏览器跨域直连）：网易云、QQ音乐、酷狗、汽水音乐、千千、5sing；
+ * 默认「全部音源」并行检索并交错合并，便于在失败时换源。
+ * 其余平台往往校验 Referer / User-Agent、链接加密或响应不是音频，浏览器无法直连，故不列出。
  * 流程：/api/music/search 搜索 -> /api/music/url 解析直链 -> fetch(url,{mode:'cors'})
  * 流式读取并显示进度 -> Blob -> a[download] 保存。不做服务器代理、不做服务器兜底。
  * 代码保持 ES5 写法（var/function），与项目其余脚本一致。
@@ -10,14 +11,10 @@
   'use strict';
 
   var DL_LABEL = '浏览器直连下载';
-  var MSG_DOWN = '解析服务不可用，请稍后重试';
-  var MSG_CORS = '该音源不允许浏览器直连；本站不做服务器下载，请换源/换曲/重试。';
-  var SOURCE_LABELS = {
-    netease: '网易云',
-    kugou: '酷狗',
-    qq: 'QQ音乐',
-    qianqian: '千千'
-  };
+  var ALL_LABEL = '全部音源';
+  var MSG_DOWN = '解析服务暂时不可用，请稍后重试（这不是会员或版权限制）。';
+  var MSG_CORS = '该音源的 CDN 不允许浏览器直连（缺少跨域响应头），本站不做服务器下载中转。请换源或点「换源搜索」。';
+  var MSG_LIMIT = '平台会员 / 版权曲可能无法下载；这是音源侧限制，不是本站服务器故障。';
   var REASON_LABELS = {
     not_found: '该音源没有可下载资源（可能已下架、受版权或会员限制）',
     restricted: '该歌曲受版权或会员限制',
@@ -26,6 +23,27 @@
     timeout: '解析超时，请重试',
     error: '解析服务临时异常，请重试'
   };
+  // #mf-source 的选项在初始化时重建（index.html 不参与改动），默认选中全部音源。
+  var SOURCE_OPTIONS = [
+    { value: 'all', label: ALL_LABEL },
+    { value: 'netease', label: '网易云' },
+    { value: 'qq', label: 'QQ音乐' },
+    { value: 'kugou', label: '酷狗' },
+    { value: 'soda', label: '汽水音乐' },
+    { value: 'qianqian', label: '千千' },
+    { value: 'fivesing', label: '5sing' }
+  ];
+  var SOURCE_LABELS = {
+    all: ALL_LABEL,
+    netease: '网易云',
+    kugou: '酷狗',
+    qq: 'QQ音乐',
+    qianqian: '千千',
+    soda: '汽水音乐',
+    fivesing: '5sing'
+  };
+  var MAX_RESULTS = 20;
+  var MAX_RESULTS_ALL = 30;
   var AUDIO_EXT = /^(mp3|flac|m4a|mp4|aac|wav|ogg|oga|opus|ape|wma|webm)$/;
   var TYPE_EXT = {
     'audio/mpeg': 'mp3',
@@ -46,7 +64,7 @@
   var HTML_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
   var results = [];
-  var emptyMsg = '还没有搜索结果。选择音源、输入关键词后回车或点「搜索」。';
+  var emptyMsg = '还没有搜索结果。选择音源（默认「全部音源」）、输入关键词后回车或点「搜索」。';
   var working = false;
   var activeRow = null;
 
@@ -64,11 +82,99 @@
     return String(s == null ? '' : s).replace(/^\s+|\s+$/g, '');
   }
 
-  function fail(kind, detail) {
+  function fail(kind, detail, status) {
     var err = new Error(kind);
     err.kind = kind;
     if (detail) err.detail = String(detail);
+    if (status) err.status = String(status);
     return err;
+  }
+
+  // 用 DOM API 重建 #mf-source，避免改动 index.html；默认选中「全部音源」。
+  function buildSourceSelect() {
+    var sel = $('mf-source');
+    if (!sel) return;
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
+    for (var i = 0; i < SOURCE_OPTIONS.length; i++) {
+      var opt = document.createElement('option');
+      opt.value = SOURCE_OPTIONS[i].value;
+      opt.textContent = SOURCE_OPTIONS[i].label;
+      sel.appendChild(opt);
+    }
+    sel.value = 'all';
+    sel.addEventListener('change', onSourceChange);
+  }
+
+  function selectedSource() {
+    var sel = $('mf-source');
+    var value = sel ? String(sel.value || '') : '';
+    return value || 'all';
+  }
+
+  function onSourceChange() {
+    if (working) return;
+    var label = sourceLabel(selectedSource());
+    results = [];
+    emptyMsg = '已切换到「' + label + '」，输入关键词后回车或点「搜索」。';
+    render();
+    hideProgress();
+    setStatus('当前音源：' + label +
+      (selectedSource() === 'all' ? '（并行检索各源并合并，失败可换源）。' : '。'));
+  }
+
+  function parentRow(node) {
+    while (node && node.nodeType === 1) {
+      var cls = node.className ? String(node.className) : '';
+      if (cls.split(/\s+/).indexOf('mf-row') !== -1) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function retryRow(row) {
+    if (!row || working) return;
+    var dl = row.querySelector('.mf-dl');
+    var idx = dl ? parseInt(dl.getAttribute('data-idx'), 10) : NaN;
+    var song = isFinite(idx) ? results[idx] : null;
+    if (!song) return;
+    var artist = artistOf(song);
+    if (artist === '未知歌手') artist = '';
+    var keyword = trim((song.name || '') + ' ' + artist).slice(0, 70);
+    if (!keyword) return;
+    var sel = $('mf-source');
+    if (sel) sel.value = 'all';
+    var kw = $('mf-keyword');
+    if (kw) kw.value = keyword;
+    search();
+  }
+
+  // 解析失败原因分类：区分会员 / 版权 / 无直链 / 超时等（优先用上游 status，其次看文案）。
+  function failureHint(status, detail) {
+    var key = String(status || '').toLowerCase();
+    var text = String(detail || '');
+    if (key === 'not_found') {
+      return '该音源没有找到这首歌的可下载资源（可能已下架）。' + MSG_LIMIT;
+    }
+    if (key === 'vip' || key === 'paid') {
+      return '该曲需要平台会员或付费购买，音源不提供可下载直链。' + MSG_LIMIT;
+    }
+    if (key === 'copyright' || key === 'restricted') {
+      return '该曲受版权限制或已下架，音源没有可用直链。' + MSG_LIMIT;
+    }
+    if (key === 'timeout') {
+      return '解析超时，上游响应较慢，可稍后重试。';
+    }
+    if (key === 'no_url') return '上游没有返回可用直链。' + MSG_LIMIT;
+    if (/会员|vip|付费|购买/i.test(text)) {
+      return '该曲需要平台会员或付费购买，音源不提供可下载直链。' + MSG_LIMIT;
+    }
+    if (/版权|下架/.test(text)) {
+      return '该曲受版权限制或已下架，音源没有可用直链。' + MSG_LIMIT;
+    }
+    if (/超时|timeout/i.test(text)) {
+      return '解析超时，上游响应较慢，可稍后重试。';
+    }
+    return (text || '未返回可用直链（可能是会员曲、版权限制或上游临时异常）。') + MSG_LIMIT;
   }
 
   function fmtDur(d) {
@@ -131,17 +237,31 @@
     }
   }
 
-  function rowError(row, msg) {
+  function rowError(row, msg, withRetry) {
     if (!row) return;
     var el = row.querySelector('.mf-error');
     if (!el) return;
-    if (msg) {
-      el.textContent = msg;
-      el.classList.remove('hidden');
-    } else {
-      el.textContent = '';
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (!msg) {
       el.classList.add('hidden');
+      return;
     }
+    // 只放纯文本节点：提示里不会出现未转义的用户/上游数据
+    var text = document.createElement('span');
+    text.className = 'mf-error-text';
+    text.textContent = msg;
+    el.appendChild(text);
+    if (withRetry) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn mf-retry';
+      btn.textContent = '换源搜索';
+      btn.style.marginLeft = '8px';
+      btn.style.padding = '2px 9px';
+      btn.style.fontSize = '12px';
+      el.appendChild(btn);
+    }
+    el.classList.remove('hidden');
   }
 
   function lock(activeBtn, row, text) {
@@ -149,6 +269,8 @@
     activeRow = row || null;
     var sBtn = $('mf-search');
     if (sBtn) sBtn.disabled = true;
+    var sel = $('mf-source');
+    if (sel) sel.disabled = true;
     var btns = document.querySelectorAll('.mf-dl');
     for (var i = 0; i < btns.length; i++) {
       btns[i].disabled = true;
@@ -164,6 +286,8 @@
       sBtn.disabled = false;
       sBtn.textContent = '搜索';
     }
+    var sel = $('mf-source');
+    if (sel) sel.disabled = false;
     var btns = document.querySelectorAll('.mf-dl');
     for (var i = 0; i < btns.length; i++) {
       btns[i].disabled = false;
@@ -200,15 +324,30 @@
   function sourceOf(song) {
     var src = song && song.source ? song.source : '';
     if (!src) {
+      // 后端一定会带 source；缺失时只在选中具体音源时兜底，避免「全部音源」被当成来源
       var sel = $('mf-source');
-      src = sel ? sel.value : 'netease';
+      var value = sel ? String(sel.value || '') : '';
+      src = value && value !== 'all' ? value : '';
     }
     return String(src).toLowerCase();
   }
 
   function sourceLabel(src) {
     var key = String(src || '').toLowerCase();
-    return SOURCE_LABELS[key] || src || '未知音源';
+    return SOURCE_LABELS[key] || (key ? String(src) : '未知音源');
+  }
+
+  // 把 all 的 counts 渲染成「网易云 5 · 酷狗 3」；只读白名单键，忽略未知字段。
+  function sourceBreakdown(counts) {
+    if (!counts || typeof counts !== 'object') return '';
+    var parts = [];
+    for (var i = 0; i < SOURCE_OPTIONS.length; i++) {
+      var key = SOURCE_OPTIONS[i].value;
+      if (key === 'all') continue;
+      var n = Number(counts[key]);
+      if (isFinite(n) && n > 0) parts.push(SOURCE_LABELS[key] + ' ' + Math.floor(n));
+    }
+    return parts.join(' · ');
   }
 
   function coverOf(song) {
@@ -398,7 +537,7 @@
         /^https?:\/\//i.test(info.url)) {
         return info;
       }
-      throw fail('resolve', info.error || reasonText(info));
+      throw fail('resolve', info.error || reasonText(info), info && info.status);
     });
   }
 
@@ -423,6 +562,7 @@
     }).catch(function (e) {
       var kind = e && e.kind;
       var detail = e && (e.detail || e.message);
+      var status = e && e.status;
       if (kind === 'down') {
         hideProgress();
         setStatus(MSG_DOWN, 'err');
@@ -431,16 +571,16 @@
         hideProgress();
         var corsMsg = MSG_CORS + (detail ? '（' + detail + '）' : '');
         setStatus(corsMsg, 'err');
-        rowError(row, corsMsg);
+        rowError(row, corsMsg, true);
       } else if (kind === 'resolve') {
         hideProgress();
-        var resolveMsg = '解析失败：' + (detail || '未返回可用直链');
-        setStatus(resolveMsg + '。请换源/换曲/重试。', 'err');
-        rowError(row, resolveMsg);
+        var resolveMsg = '解析失败：' + failureHint(status, detail);
+        setStatus(resolveMsg + ' 可点「换源搜索」在全部音源中查找。', 'err');
+        rowError(row, resolveMsg, true);
       } else {
         hideProgress();
         setStatus('下载失败：' + (detail || '未知错误') + '。请稍后重试。', 'err');
-        rowError(row, '下载失败：' + (detail || '未知错误'));
+        rowError(row, '下载失败：' + (detail || '未知错误'), true);
       }
     }).then(function () {
       unlock();
@@ -499,14 +639,16 @@
   function search() {
     if (working) return;
     var kw = $('mf-keyword');
-    var srcEl = $('mf-source');
     var q = trim(kw ? kw.value : '');
     if (!q) {
       setStatus('请输入歌曲名或歌手名', 'err');
       if (kw) kw.focus();
       return;
     }
-    var source = srcEl ? srcEl.value : 'netease';
+    var source = selectedSource();
+    var isAll = source === 'all';
+    var label = sourceLabel(source);
+    var limit = isAll ? MAX_RESULTS_ALL : MAX_RESULTS;
 
     results = [];
     emptyMsg = '正在检索…';
@@ -514,7 +656,7 @@
     lock(null, null, '');
     var sBtn = $('mf-search');
     if (sBtn) sBtn.textContent = '搜索中…';
-    setStatus('正在通过服务器检索「' + q + '」（' + sourceLabel(source) + '）…');
+    setStatus('正在通过服务器检索「' + q + '」（' + label + '）…');
 
     fetchJson('/api/music/search?s=' + encodeURIComponent(q) +
       '&source=' + encodeURIComponent(source)).then(function (res) {
@@ -552,17 +694,24 @@
       }
       if (!songs.length) {
         results = [];
-        emptyMsg = '没有找到相关歌曲，换个关键词或音源试试。';
+        emptyMsg = isAll ?
+          '全部音源都没有找到相关歌曲，换个关键词试试。' :
+          '「' + label + '」没有找到相关歌曲，可切换到「' + ALL_LABEL + '」再试。';
         render();
-        setStatus('没有找到结果，试试其他关键词或更换音源。', 'err');
+        setStatus(isAll ?
+          '全部音源都没有找到结果，换个关键词试试。' :
+          '「' + label + '」没有找到结果，切换到「' + ALL_LABEL + '」再试。', 'err');
         return;
       }
-      results = songs.slice(0, 20);
+      results = songs.slice(0, limit);
       emptyMsg = '还没有搜索结果。';
       render();
       var more = songs.length > results.length ?
         '（共 ' + songs.length + ' 条，显示前 ' + results.length + ' 条）' : '';
-      setStatus('找到 ' + results.length + ' 首' + more + '，点「' + DL_LABEL + '」由浏览器直连 CDN。');
+      var breakdown = isAll ? sourceBreakdown(d.counts) : '';
+      setStatus('「' + label + '」找到 ' + results.length + ' 首' + more +
+        (breakdown ? '：' + breakdown : '') +
+        '，点「' + DL_LABEL + '」由浏览器直连 CDN。');
     }).catch(function () {
       results = [];
       emptyMsg = '检索服务暂不可用，请稍后重试。';
@@ -573,7 +722,21 @@
     });
   }
 
+  function bindResults() {
+    var box = $('mf-results');
+    if (!box) return;
+    // 事件委托只绑定一次：错误区域的「换源搜索」按钮不重复监听
+    box.addEventListener('click', function (e) {
+      var node = e.target;
+      var cls = node && node.className ? String(node.className) : '';
+      if (cls.split(/\s+/).indexOf('mf-retry') === -1) return;
+      retryRow(parentRow(node));
+    });
+  }
+
   function init() {
+    buildSourceSelect();
+    bindResults();
     var btn = $('mf-search');
     var kw = $('mf-keyword');
     if (btn) btn.addEventListener('click', search);
@@ -585,6 +748,7 @@
         }
       });
     }
+    setStatus('默认「' + ALL_LABEL + '」：输入关键词后回车或点「搜索」；服务器只做搜索与直链解析，音频由浏览器直连 CDN。');
     render();
   }
 

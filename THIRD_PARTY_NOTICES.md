@@ -1,5 +1,13 @@
 # Third-party notices
 
+## BitMappery (professional editor)
+
+The "专业修图" workspace is a self-hosted build of [BitMappery](https://github.com/igorski/bitmappery) 1.2.0, licensed under the MIT License. It provides layers, layer masks, brushes, selections, text, non-destructive effects, history, PSD import and image export. Our build changes the theme, adds Chinese labels, removes/hides cloud-storage entry points and disables Google Fonts loading; the upstream copyright and MIT license are included in `editor/LICENSE`. All editing happens in the browser; the editor does not upload images to our server.
+
+## FlashRaw (RAW decoder)
+
+The "Camera Raw" page uses [FlashRaw](https://github.com/ybouane/flashraw) 0.1.0, licensed under MIT OR Apache-2.0, as a WebAssembly RAW decoder. The browser-served WASM assets are unmodified; both license texts are included in `assets/vendor/flashraw/`. Raw files are decoded and developed locally in the browser and are never uploaded.
+
 ## go-music-dl (internal metadata/URL resolver)
 
 The "多源音乐下载" page uses the unmodified [go-music-dl](https://github.com/guohuiyuan/go-music-dl) v1.1.3 binary on the self-hosted server (systemd `music-dl.service`, listening only on 127.0.0.1:8080). The site calls only its `/music/search` HTML and `/music/inspect` JSON endpoints to resolve metadata and CDN URLs; it does not embed or proxy the upstream UI and does not use the upstream download endpoint. Audio bytes are fetched by the visitor's browser directly from the source CDN and are never relayed or stored by the server. go-music-dl and its [music-lib](https://github.com/guohuiyuan/music-lib) are licensed under AGPL-3.0; the binary is unmodified. Downloading copyrighted music may violate platform terms and local law; personal, non-commercial use only.

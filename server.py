@@ -16,7 +16,8 @@
   GET /api/kgm/key?start=&len=      按字节区间返回酷狗公钥表（分片解密用）
   GET /api/nc/search?s=关键词        网易云音乐搜索中转
   GET /api/nc/lyric?id=歌曲ID        网易云歌词中转（含翻译歌词）
-  GET /api/music/search?s=&source=  多源音乐搜索（解析上游 HTML，返回 JSON 元数据）
+  GET /api/music/search?s=&source=  多源音乐搜索（解析上游 HTML，返回 JSON 元数据；
+                                    source=all 并行检索全部音源并交错合并，附带每源命中数）
   GET /api/music/url?id=&source=&duration=&extra=  解析音源 CDN 直链（只回 URL，不转发字节）
   GET /api/ai/models/{detector|inpainter} 按需下发浏览器 AI 模型
   GET /api/ai/runtime/{文件名}         下发 allowlist 中的 ONNX Runtime Web 文件
@@ -44,6 +45,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -69,10 +71,18 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 MUSIC_DL_HOST = "127.0.0.1"
 MUSIC_DL_PORT = 8080
 MUSIC_DL_ORIGIN = "http://%s:%d" % (MUSIC_DL_HOST, MUSIC_DL_PORT)
-# 仅列出 CDN 允许浏览器跨域读取的音源（网易云 / 酷狗 / QQ / 千千）；
-# 酷我、咪咕无 CORS，B 站需 Referer，汽水需解密，因此不对外提供。
-MUSIC_SOURCES = ("netease", "kugou", "qq", "qianqian")
+# 仅列出 CDN 允许浏览器跨域读取的音源：网易云 / 酷狗 / QQ / 千千（原有四源），
+# 以及 2026-10-31 实测 inspect 直链带 Access-Control-Allow-Origin: * 的汽水（soda）与 5sing（fivesing）。
+# 酷我、咪咕无 CORS，B 站需 Referer，Jamendo 返回 text/html，浏览器无法直连，因此不对外提供。
+MUSIC_SOURCES = ("netease", "kugou", "qq", "qianqian", "soda", "fivesing")
+MUSIC_ALL = "all"
 MUSIC_MAX_RESULTS = 20
+# source=all 交错合并后的总量上限；单源仍取 MUSIC_MAX_RESULTS。
+MUSIC_AGG_MAX_RESULTS = 30
+# 聚合搜索的并发上限（≤6，等于音源数）：上游是单机解析器，避免一次搜索打满它。
+MUSIC_AGG_WORKERS = 6
+# 聚合搜索给单源更短的超时：个别源挂起时不要拖住整页搜索。
+MUSIC_AGG_TIMEOUT = 12
 MUSIC_MAX_QUERY = 80
 MUSIC_MAX_ID = 200
 MUSIC_MAX_EXTRA = 4000
@@ -80,13 +90,20 @@ MUSIC_TIMEOUT = 25
 MUSIC_MAX_HTML = 2 * 1024 * 1024
 MUSIC_MAX_JSON = 256 * 1024
 # 上游是单机解析器，按客户端 IP 做滑动窗口限流，避免被当成公开搜索代理刷爆。
+# source=all 的聚合请求只在入口计 1 次（不会因为内部并发 6 个上游请求而多计）。
 MUSIC_RATE_LIMITS = {"search": (30, 120), "inspect": (60, 240)}
+# 短 TTL 内存缓存：搜索 120s、直链 90s；键 = 实际参数，线程安全、容量有上限。
+# inspect 的 TTL 刻意不超过 90s：直链会过期，前端重试时最多在 90s 内仍命中旧 URL。
+MUSIC_CACHE_TTL = {"search": 120, "inspect": 90}
+MUSIC_CACHE_MAX = 512
 
 _key_state = {"expanding": False}
 _feedback_state = {}
 _MUSIC_RATE = {kind: {} for kind in MUSIC_RATE_LIMITS}
 _MUSIC_RATE_LOCK = threading.Lock()
 _MUSIC_RATE_MAX_CLIENTS = 4096
+_MUSIC_CACHE = {}
+_MUSIC_CACHE_LOCK = threading.Lock()
 
 # HIF conversion is CPU/RAM heavy, so requests are serialised and rate limited.
 _HIF_MAX_UPLOAD = getattr(hif_convert, "MAX_UPLOAD_BYTES", 80 * 1024 * 1024)
@@ -251,6 +268,138 @@ def music_rate_allow(kind, client):
             for key in [k for k, stamps in bucket.items() if not stamps or now - stamps[-1] >= 3600]:
                 bucket.pop(key, None)
     return True
+
+
+def music_cache_get(kind, key):
+    """读短 TTL 缓存；过期条目顺手删除并返回 None。key 为参数元组。"""
+    full = (kind,) + tuple(key)
+    now = time.time()
+    with _MUSIC_CACHE_LOCK:
+        entry = _MUSIC_CACHE.get(full)
+        if entry is None:
+            return None
+        if entry[0] <= now:
+            _MUSIC_CACHE.pop(full, None)
+            return None
+        return entry[1]
+
+
+def music_cache_put(kind, key, value):
+    """写缓存；只在成功时调用，错误/异常绝不缓存。容量超限时丢弃最早写入项。"""
+    full = (kind,) + tuple(key)
+    now = time.time()
+    ttl = MUSIC_CACHE_TTL.get(kind, 60)
+    with _MUSIC_CACHE_LOCK:
+        _MUSIC_CACHE[full] = (now + ttl, value)
+        if len(_MUSIC_CACHE) > MUSIC_CACHE_MAX:
+            for stale in [k for k, item in _MUSIC_CACHE.items() if item[0] <= now]:
+                _MUSIC_CACHE.pop(stale, None)
+        while len(_MUSIC_CACHE) > MUSIC_CACHE_MAX:
+            # dict 保持插入顺序：容量仍超限时淘汰最早写入的条目
+            _MUSIC_CACHE.pop(next(iter(_MUSIC_CACHE)))
+
+
+class MusicSourceError(Exception):
+    """单源搜索失败；kind 区分上游请求失败（upstream）与返回内容异常（parse）。"""
+
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+
+
+def music_search_source(source, keyword, timeout=MUSIC_TIMEOUT):
+    """检索单个音源（带缓存）；失败抛 MusicSourceError，不写缓存。"""
+    cache_key = (source, keyword)
+    cached = music_cache_get("search", cache_key)
+    if cached is not None:
+        return list(cached)
+
+    params = {
+        "q": keyword,
+        "type": "song",
+        "page": "1",
+        "page_size": str(MUSIC_MAX_RESULTS),
+        "sources": source,
+    }
+    try:
+        raw = music_resolver_get("/music/search", params, timeout=timeout)
+    except Exception as exc:
+        raise MusicSourceError("upstream", music_error_text(exc))
+    try:
+        songs = parse_music_results(raw.decode("utf-8", "replace"), source)
+    except Exception as exc:
+        raise MusicSourceError("parse", str(exc)[:200] or type(exc).__name__)
+    # 空结果不缓存：上游偶尔会抖动返回空页，缓存会让用户很长时间内重试也拿不到结果。
+    if songs:
+        music_cache_put("search", cache_key, songs)
+    return list(songs)
+
+
+def music_dedupe_key(song):
+    """同源 + 同名 + 同歌手 + 同长度视为重复；跨源重复保留，作为可换源选项。"""
+    return (
+        song.get("source") or "",
+        (song.get("name") or "").strip().lower(),
+        (song.get("artist") or "").strip().lower(),
+        as_int(song.get("duration")),
+    )
+
+
+def music_search_all(keyword):
+    """并行检索全部音源，交错合并去重。
+
+    返回 (songs, counts, failures)：counts 为每个源的命中数（失败源为 0），
+    failures 为失败源数量；单个源失败（请求异常 / 解析异常）不影响整体。
+    """
+    counts = dict((source, 0) for source in MUSIC_SOURCES)
+    per_source = {}
+    failures = 0
+    workers = max(1, min(len(MUSIC_SOURCES), MUSIC_AGG_WORKERS))
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = dict(
+            (pool.submit(music_search_source, source, keyword, MUSIC_AGG_TIMEOUT), source)
+            for source in MUSIC_SOURCES
+        )
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                songs = future.result()
+            except Exception as exc:
+                failures += 1
+                # 只记录单行原因，响应里不泄露堆栈
+                detail = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+                sys.stderr.write("[music] search %s failed: %s\n" % (source, detail[:200]))
+                continue
+            if songs:
+                counts[source] = len(songs)
+                per_source[source] = songs
+    finally:
+        pool.shutdown(wait=True)
+
+    merged = []
+    seen = set()
+    index = 0
+    while len(merged) < MUSIC_AGG_MAX_RESULTS:
+        added = False
+        for source in MUSIC_SOURCES:
+            songs = per_source.get(source) or ()
+            if index >= len(songs):
+                continue
+            added = True
+            song = songs[index]
+            marker = music_dedupe_key(song)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            merged.append(song)
+            if len(merged) >= MUSIC_AGG_MAX_RESULTS:
+                break
+        if not added:
+            break
+        index += 1
+    return merged, counts, failures
 
 
 class MusicCardParser(html.parser.HTMLParser):
@@ -550,31 +699,46 @@ class Handler(SimpleHTTPRequestHandler):
         if len(keyword) > MUSIC_MAX_QUERY:
             self.send_json({"error": "搜索关键词过长（最多 %d 个字符）" % MUSIC_MAX_QUERY}, 400)
             return
-        if source not in MUSIC_SOURCES:
-            self.send_json({"error": "不支持的音源（仅支持 %s）" % "、".join(MUSIC_SOURCES)}, 400)
+        if source != MUSIC_ALL and source not in MUSIC_SOURCES:
+            self.send_json({
+                "error": "不支持的音源（仅支持 all 与 %s）" % "、".join(MUSIC_SOURCES),
+            }, 400)
             return
+        # 聚合搜索同样只计 1 次，内部并发 6 个上游请求不再额外计数
         if not music_rate_allow("search", self.rate_limit_key()):
             self.send_json({"error": "搜索请求过于频繁，请稍后再试"}, 429)
             return
 
-        params = {
-            "q": keyword,
-            "type": "song",
-            "page": "1",
-            "page_size": str(MUSIC_MAX_RESULTS),
-            "sources": source,
-        }
+        if source == MUSIC_ALL:
+            try:
+                songs, counts, failures = music_search_all(keyword)
+            except Exception as exc:
+                sys.stderr.write("[music] aggregate failed: %s\n" % exc)
+                self.send_json({"error": "解析服务临时异常，请稍后重试"}, 502)
+                return
+            if failures >= len(MUSIC_SOURCES):
+                self.send_json({"error": "解析服务请求失败：全部音源均未响应，请稍后重试"}, 502)
+                return
+            self.send_json({
+                "ok": True,
+                "source": MUSIC_ALL,
+                "songs": songs,
+                "counts": counts,
+            })
+            return
+
         try:
-            raw = music_resolver_get("/music/search", params)
+            songs = music_search_source(source, keyword)
+        except MusicSourceError as exc:
+            sys.stderr.write("[music] search %s failed: %s\n" % (source, exc.message))
+            if exc.kind == "parse":
+                self.send_json({"error": "解析服务返回内容异常，无法解析搜索结果"}, 502)
+            else:
+                self.send_json({"error": "解析服务请求失败：%s" % exc.message}, 502)
+            return
         except Exception as exc:
             sys.stderr.write("[music] search upstream failed: %s\n" % exc)
             self.send_json({"error": "解析服务请求失败：%s" % music_error_text(exc)}, 502)
-            return
-        try:
-            songs = parse_music_results(raw.decode("utf-8", "replace"), source)
-        except Exception as exc:
-            sys.stderr.write("[music] search parse failed: %s\n" % exc)
-            self.send_json({"error": "解析服务返回内容异常，无法解析搜索结果"}, 502)
             return
         self.send_json({"ok": True, "source": source, "songs": songs})
 
@@ -602,6 +766,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({"error": "解析请求过于频繁，请稍后再试"}, 429)
             return
 
+        cache_key = (source, song_id, duration, extra)
+        cached = music_cache_get("inspect", cache_key)
+        if cached is not None:
+            self.send_json(cached)
+            return
+
         params = {"id": song_id, "source": source, "duration": duration}
         if extra:
             params["extra"] = extra
@@ -619,7 +789,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(info, dict):
             self.send_json({"error": "解析服务返回内容异常"}, 502)
             return
-        self.send_json(sanitize_music_inspect(info))
+        result = sanitize_music_inspect(info)
+        # 只缓存成功拿到的直链；失效 / 异常结果不缓存，避免重试被旧结论卡住
+        if result.get("valid"):
+            music_cache_put("inspect", cache_key, result)
+        self.send_json(result)
 
     # ---------- 路由 ----------
     def do_HEAD(self):

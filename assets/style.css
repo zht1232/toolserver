@@ -1346,3 +1346,72 @@ body.route-hif .rail-generic { display: none; }
 .nav-count { margin-left: auto; color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
 
 body.route-hif #top-format-count { display: none; }
+
+/* ---------- 专业修图入口 ---------- */
+.retouch-panel { padding: 16px; }
+.retouch-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: space-between; gap: 10px 14px; margin-bottom: 13px;
+}
+.retouch-head h2 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 500; }
+.retouch-head p { margin: 2px 0 0; color: var(--ink-3); font-size: 12px; }
+.retouch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.retouch-actions .btn { text-decoration: none; }
+.retouch-stage {
+  position: relative; overflow: hidden;
+  height: clamp(560px, 76vh, 900px);
+  background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 12px;
+}
+.retouch-cover {
+  height: 100%; overflow: auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 34px 24px; text-align: center;
+}
+.retouch-cover-icon {
+  display: grid; place-items: center; width: 52px; height: 52px;
+  color: var(--accent); background: var(--mint);
+  border: 1px solid var(--mint-line); border-radius: 14px;
+}
+.retouch-cover-icon .nav-ico { width: 24px; height: 24px; }
+.retouch-cover h3 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 500; }
+.retouch-cover > p {
+  max-width: 560px; margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.6;
+}
+.retouch-feature-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px; width: min(540px, 100%); margin: 4px 0 6px;
+}
+.retouch-feature-grid span {
+  padding: 7px 10px; color: var(--ink-2); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; font-size: 12px;
+}
+.retouch-start { min-width: 150px; }
+.retouch-hint { color: var(--ink-3); font-size: 11.5px; }
+.retouch-frame {
+  display: block; width: 100%; height: 100%;
+  border: 0; background: #fff;
+}
+.retouch-foot {
+  display: flex; gap: 7px; align-items: flex-start;
+  margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3); font-size: 11px; line-height: 1.5;
+}
+.retouch-foot .nav-ico { width: 14px; height: 14px; margin-top: 1px; color: var(--accent); flex: none; }
+.retouch-foot a { color: var(--accent-hover); }
+.raw-loading { padding: 28px; color: var(--ink-3); font-size: 13px; }
+
+body.route-editor .rail { display: none !important; }
+body.route-editor .stage { max-width: none; }
+body.route-editor #top-format-count { display: none; }
+@media (min-width: 1400px) {
+  body.route-editor .app { grid-template-columns: 216px minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .retouch-stage { height: 66vh; min-height: 460px; }
+  .retouch-cover { padding: 22px 16px; }
+  .retouch-feature-grid { grid-template-columns: 1fr; }
+}
+
+.retouch-hint a { color: var(--accent-hover); }
