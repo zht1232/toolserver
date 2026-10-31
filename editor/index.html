@@ -10,6 +10,20 @@
     <style>
       html, body { margin: 0; height: 100%; background: #F2F5F0; color: #16221E;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", Helvetica, Verdana, sans-serif; }
+      /* Disabled tools must not invert to white on the light workspace. */
+      .tool-button:disabled,
+      .tool-button:disabled:hover,
+      .tool-button:disabled.active {
+        background-color: transparent !important;
+        color: #6C7A72 !important;
+        cursor: default;
+      }
+      .tool-button:disabled img,
+      .tool-button:disabled:hover img,
+      .tool-button:disabled.active img {
+        filter: none !important;
+        opacity: 0.42;
+      }
     </style>
     <title>专业修图 · LOCALTOOLS</title>
     <script type="module" crossorigin src="./assets/index-CU_Bdv5Z.js"></script>
@@ -22,7 +36,6 @@
     <link rel="modulepreload" crossorigin href="./assets/canvas-service-CYpnKNMR.js">
     <link rel="modulepreload" crossorigin href="./assets/history-state-factory-4_zpZqCe.js">
     <link rel="stylesheet" crossorigin href="./assets/style-aY9czEtJ.css">
-    <link rel="stylesheet" href="./overrides.css">
   </head>
   <body>
     <noscript>

@@ -512,8 +512,14 @@ class Handler(SimpleHTTPRequestHandler):
             return "no-store"
         if path.startswith("/assets/"):
             return "public, max-age=604800"
-        if path in ("", "/") or path.endswith(".html"):
-            return "public, max-age=120"
+        if path.startswith("/editor/assets/"):
+            # Vite 输出文件名已带内容哈希，可以长缓存
+            return "public, max-age=604800"
+        if path in ("", "/") or path.endswith("/") or path.endswith(".html"):
+            # HTML（含目录默认页 /editor/）必须每次回源校验，否则部署后用户会长时间看到旧版本
+            return "no-cache, must-revalidate"
+        if path.endswith("/overrides.css"):
+            return "no-cache, must-revalidate"
         return "public, max-age=3600"
 
     def end_headers(self):
