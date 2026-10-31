@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -25,6 +25,7 @@
   var MASK_EXPORT_WIDTH = 2048;
   var MAX_MASKS = 8;
   var MAX_HISTORY = 40;
+  var AI_SEGMENT_INPUT_EDGE = 768;
   var IDENTITY_CURVE = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   var CURVE_CHANNELS = [
     { key: 'rgb', label: 'RGB', short: 'RGB', color: '#0C7A69', curve: '#0C7A69' },
@@ -953,7 +954,7 @@
         '<div class="raw-head-main">' +
           '<div class="raw-eyebrow">Camera Raw · 本地显影</div>' +
           '<h2>RAW 显影</h2>' +
-          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与智能蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
+          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与 AI 人像 / 智能天空蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
         '</div>' +
         '<div class="raw-head-actions">' +
           '<button type="button" class="raw-btn primary" data-act="open">' + icon('open') + '打开文件</button>' +
@@ -972,9 +973,9 @@
               '<span class="raw-file-tag" id="raw-filetag" hidden>RAW</span>' +
             '</div>' +
             '<div class="raw-view-tools">' +
-              '<button type="button" class="raw-btn" data-act="before" id="raw-before" title="切换原图与调整后">' +
+              '<button type="button" class="raw-btn" data-act="before" id="raw-before" title="切换原图与调整后（按住 \\ 快速对比）">' +
                 icon('compare') + '<span data-before-label>原图对比</span></button>' +
-              '<button type="button" class="raw-btn" data-act="fit" title="适应窗口">适应</button>' +
+              '<button type="button" class="raw-btn" data-act="fit" title="适应窗口 (F)">适应</button>' +
               '<button type="button" class="raw-btn" data-act="one" title="100% 像素">100%</button>' +
               '<div class="raw-zoom"><span>缩放</span>' +
                 '<input id="raw-zoom" type="range" min="25" max="200" step="1" value="100" aria-label="预览缩放">' +
@@ -1089,7 +1090,7 @@
                   '<option value="3:2">3 : 2</option>' +
                   '<option value="16:9">16 : 9</option>' +
                 '</select>' +
-                '<button type="button" class="raw-btn tiny primary" data-act="crop-mode" id="raw-crop-toggle">' + icon('crop') + '裁剪</button>' +
+                '<button type="button" class="raw-btn tiny primary" data-act="crop-mode" id="raw-crop-toggle" title="裁剪 (C)">' + icon('crop') + '裁剪</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="geometry-reset">重置</button>' +
               '</div>' +
               '<div class="raw-crop-apply-row" id="raw-crop-apply-row" hidden>' +
@@ -1163,7 +1164,7 @@
                   '<option value="linear">线性渐变</option>' +
                   '<option value="radial">径向渐变</option>' +
                   '<option value="brush">画笔</option>' +
-                  '<option value="subject">智能主体</option>' +
+                  '<option value="subject">AI 主体（本地模型）</option>' +
                   '<option value="sky">智能天空</option>' +
                 '</select>' +
                 '<button type="button" class="raw-btn tiny primary" data-act="mask-add">＋ 添加蒙版</button>' +
@@ -1175,11 +1176,17 @@
                 '<button type="button" data-mask="linear" class="is-active">线性渐变</button>' +
                 '<button type="button" data-mask="radial">径向渐变</button>' +
                 '<button type="button" data-mask="brush">画笔</button>' +
-                '<button type="button" data-mask="subject">智能主体</button>' +
+                '<button type="button" data-mask="subject">AI 主体</button>' +
                 '<button type="button" data-mask="sky">智能天空</button>' +
               '</div>' +
               '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。</p>' +
               '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
+              '<div class="raw-ai-model" id="raw-ai-model" role="status" aria-live="polite" hidden>' +
+                '<span class="raw-spinner raw-ai-spinner" id="raw-ai-spinner" hidden></span>' +
+                '<span class="raw-ai-dot"></span>' +
+                '<span class="raw-ai-model-text" id="raw-ai-model-text">AI 人像分割模型 · 按需加载</span>' +
+                '<button type="button" class="raw-btn tiny" data-act="ai-subject-retry" id="raw-ai-retry" hidden>重试</button>' +
+              '</div>' +
               '<div class="raw-mask-actions">' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-invert">反转</label>' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-show">显示蒙版</label>' +
@@ -1267,7 +1274,7 @@
   function maskTypeLabel(type) {
     return type === 'linear' ? '线性' : type === 'radial' ? '径向' :
       type === 'brush' ? '画笔' : type === 'sky' ? '智能天空' :
-      type === 'subject' ? '智能主体' : '未启用';
+      type === 'subject' ? 'AI 主体' : '未启用';
   }
 
   function maskGeometryDefaults(type) {
@@ -1311,7 +1318,7 @@
     var smart = isSmartMaskType(type);
     var mask = {
       id: 'mask-' + maskSeq,
-      name: smart ? (type === 'sky' ? '天空 ' : '主体 ') + maskSeq : '蒙版 ' + maskSeq,
+      name: smart ? (type === 'sky' ? '天空 ' : 'AI 主体 ') + maskSeq : '蒙版 ' + maskSeq,
       type: type,
       enabled: true,
       show: false,
@@ -1391,7 +1398,22 @@
   var curveCanvas = null;
   var curveCtx = null;
   var vendorBase = '';
+  var aiVendorBase = '';
   var flashrawPromise = null;
+  var aiSegmenter = { promise: null, instance: null, status: 'idle', error: null };
+  var aiSubjectBase = null;
+  var aiSubjectRaw = null;
+  var aiSubjectState = {
+    running: false,
+    queued: false,
+    timer: 0,
+    seq: 0,
+    status: 'idle',
+    coverage: 0,
+    failedPreview: null,
+    noPerson: false,
+    error: ''
+  };
   var rafPending = false;
   var maskBuildQueue = Object.create(null);
   var maskBuildRaf = false;
@@ -1409,6 +1431,8 @@
   var geometryRaf = 0;
   var cropSyncRaf = 0;
   var smartMaskTimer = 0;
+  var beforeKeyHeld = false;
+  var beforeKeyPrevious = false;
 
   function resolveVendorBase() {
     var scripts = Array.prototype.slice.call(document.scripts || []);
@@ -1498,6 +1522,10 @@
       lensSum: $('#raw-lens-sum', root),
       detailSum: $('#raw-detail-sum', root),
       maskAI: $('#raw-mask-ai-refresh', root),
+      aiModel: $('#raw-ai-model', root),
+      aiModelText: $('#raw-ai-model-text', root),
+      aiSpinner: $('#raw-ai-spinner', root),
+      aiRetry: $('#raw-ai-retry', root),
       maskSum: $('#raw-mask-sum', root),
       maskSeg: $('#raw-mask-seg', root),
       maskList: $('#raw-mask-list', root),
@@ -1531,6 +1559,12 @@
     } else {
       vendorBase = resolveVendorBase();
     }
+    if (cfg.aiVendorBase) {
+      aiVendorBase = new URL(cfg.aiVendorBase, document.baseURI).href;
+    } else {
+      aiVendorBase = new URL('../mediapipe-selfie/', vendorBase).href;
+    }
+    if (!/\/$/.test(aiVendorBase)) aiVendorBase += '/';
     curveCanvas = els.curveCanvas;
     curveCtx = curveCanvas.getContext('2d');
 
@@ -1673,6 +1707,19 @@
       }
       previewMaskCanvases = Object.create(null);
       aiBaseCache = Object.create(null);
+      aiSubjectBase = null;
+      aiSubjectRaw = null;
+      aiSubjectState.seq += 1;
+      aiSubjectState.status = 'idle';
+      aiSubjectState.failedPreview = null;
+      aiSubjectState.noPerson = false;
+      aiSubjectState.coverage = 0;
+      aiSubjectState.error = '';
+      aiSubjectState.queued = false;
+      if (aiSubjectState.timer) {
+        clearTimeout(aiSubjectState.timer);
+        aiSubjectState.timer = 0;
+      }
       state.adjust = defaultAdjust();
       state.before = false;
       state.curves = createCurves();
@@ -3107,7 +3154,25 @@
     state.renderH = composed.h;
     els.canvas.width = composed.w;
     els.canvas.height = composed.h;
+    if (aiSubjectState.timer) {
+      clearTimeout(aiSubjectState.timer);
+      aiSubjectState.timer = 0;
+    }
     aiBaseCache = Object.create(null);
+    if (aiSubjectRawValid()) {
+      if (!aiSubjectBase || aiSubjectBase.geometryKey !== geometrySignature()) {
+        aiSubjectBase = null;
+        ensureAISubjectBaseForGeometry();
+      }
+      updateAIModelUI();
+    } else if (aiSubjectBase) {
+      aiSubjectBase = null;
+      aiSubjectState.coverage = 0;
+      if (!aiSubjectState.running && aiSubjectState.failedPreview !== state.previewCanvas) {
+        aiSubjectState.status = 'idle';
+      }
+      updateAIModelUI();
+    }
     if (renderer) {
       renderer.setSource(composed.canvas);
       ensureCurveLut();
@@ -3517,7 +3582,7 @@
    * 蒙版
    * ------------------------------------------------------------------ */
 
-  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: '智能天空', subject: '智能主体' };
+  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: '智能天空', subject: 'AI 主体' };
 
   function activeMask() {
     for (var i = 0; i < state.masks.length; i++) {
@@ -3655,13 +3720,14 @@
     } else if (mask.type === 'sky') {
       els.maskNote.innerHTML = '<b>智能天空</b>：在浏览器内按颜色与顶部连通区域识别，人物/建筑边缘可能需用画笔修整。勾选“显示蒙版”检查覆盖，必要时点“重新识别”。';
     } else if (mask.type === 'subject') {
-      els.maskNote.innerHTML = '<b>智能主体</b>：按中心构图、边缘色差与显著性识别主体，复杂背景可能需要画笔补充或擦除。全部计算在本机完成。';
+      els.maskNote.innerHTML = '<b>AI 主体</b>：优先运行本地 MediaPipe 人像分割模型（约 10 MB，仅首次加载，图片不上传）；未检测到人像时自动回退到构图识别。分割结果可用画笔修整。';
     } else {
       els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，可调画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
     }
     if (els.exportSum) {
       els.exportSum.textContent = els.exportFormat.value === 'image/png' ? 'PNG' : 'JPEG';
     }
+    updateAIModelUI();
   }
 
   function setMaskType(type) {
@@ -3864,6 +3930,356 @@
     Object.keys(aiBaseCache).forEach(function (key) {
       if (key.indexOf(prefix) === 0) delete aiBaseCache[key];
     });
+  }
+
+  function geometrySignature() {
+    var g = state.geometry;
+    var crop = g.crop ? [g.crop.x, g.crop.y, g.crop.w, g.crop.h].map(function (v) {
+      return Number(v).toFixed(4);
+    }).join(',') : '';
+    return state.loadSeq + ':' + (g.rotate90 || 0) + ':' + (g.flipH ? 1 : 0) + (g.flipV ? 1 : 0) +
+      ':' + (Number(g.angle) || 0).toFixed(2) + ':' + crop;
+  }
+
+  function hasSubjectMask() {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].type === 'subject') return true;
+    }
+    return false;
+  }
+
+  function buildSegmentationInput(source, maxEdge) {
+    var w = source.width;
+    var h = source.height;
+    var scale = Math.min(1, maxEdge / Math.max(1, w, h));
+    var cw = Math.max(32, Math.round(w * scale));
+    var ch = Math.max(32, Math.round(h * scale));
+    var canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    var ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, 0, 0, cw, ch);
+    return canvas;
+  }
+
+  function maskCanvasFromConfidence(conf, targetWidth) {
+    try {
+      var w = conf.width;
+      var h = conf.height;
+      var data = conf.getAsFloat32Array();
+      var n = w * h;
+      var small = document.createElement('canvas');
+      small.width = w;
+      small.height = h;
+      var sctx = small.getContext('2d');
+      var img = sctx.createImageData(w, h);
+      var covered = 0;
+      for (var i = 0; i < n; i++) {
+        var p = clamp(Number(data[i]) || 0, 0, 1);
+        if (p >= 0.5) covered++;
+        var v = Math.round(p * 255);
+        var o = i * 4;
+        img.data[o] = v;
+        img.data[o + 1] = v;
+        img.data[o + 2] = v;
+        img.data[o + 3] = 255;
+      }
+      sctx.putImageData(img, 0, 0);
+      var outW = Math.max(64, Math.min(1024, Math.round(targetWidth)));
+      var outH = Math.max(1, Math.round(outW * h / w));
+      var out = document.createElement('canvas');
+      out.width = outW;
+      out.height = outH;
+      var ctx = out.getContext('2d');
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, outW, outH);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      try { ctx.filter = 'blur(' + Math.max(1, outW / 640).toFixed(2) + 'px)'; } catch (e) { /* ignore */ }
+      ctx.drawImage(small, 0, 0, outW, outH);
+      try { ctx.filter = 'none'; } catch (e2) { /* ignore */ }
+      return { canvas: out, coverage: covered / n };
+    } catch (e3) {
+      return null;
+    }
+  }
+
+  function aiSubjectRawValid() {
+    return !!(aiSubjectRaw && aiSubjectRaw.preview === state.previewCanvas);
+  }
+
+  function measureMaskCoverage(canvas) {
+    if (!canvas || !canvas.width || !canvas.height) return 0;
+    try {
+      var w = Math.max(1, Math.min(160, canvas.width));
+      var h = Math.max(1, Math.round(canvas.height / canvas.width * w));
+      var scratch = document.createElement('canvas');
+      scratch.width = w;
+      scratch.height = h;
+      var ctx = scratch.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(canvas, 0, 0, w, h);
+      var data = ctx.getImageData(0, 0, w, h).data;
+      var covered = 0;
+      for (var i = 0; i < data.length; i += 4) {
+        if (data[i] >= 127) covered++;
+      }
+      return covered / (w * h);
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // 模型始终在“未旋转/未裁剪”的原始预览上推理，再把蒙版按当前几何重采样；
+  // 这样旋转后不会把画面边缘误当成人物，也避免每次几何变化都重新推理。
+  function ensureAISubjectBaseForGeometry() {
+    if (!aiSubjectRawValid()) return null;
+    var sig = geometrySignature();
+    if (aiSubjectBase && aiSubjectBase.geometryKey === sig) return aiSubjectBase;
+    var composed = composeGeometry(aiSubjectRaw.canvas, state.geometry);
+    aiSubjectBase = {
+      canvas: composed.canvas,
+      coverage: measureMaskCoverage(composed.canvas),
+      geometryKey: sig,
+      at: Date.now()
+    };
+    return aiSubjectBase;
+  }
+
+  function hasEnabledSubjectMask() {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].type === 'subject' && state.masks[i].enabled) return true;
+    }
+    return false;
+  }
+
+  function aiSubjectPendingForExport() {
+    if (!hasEnabledSubjectMask()) return false;
+    if (ensureAISubjectBaseForGeometry()) return false;
+    if (aiSubjectState.failedPreview === state.previewCanvas) return false;
+    return true;
+  }
+
+  function ensureAISegmenter() {
+    if (aiSegmenter.instance) return Promise.resolve(aiSegmenter.instance);
+    if (aiSegmenter.promise) return aiSegmenter.promise;
+    aiSegmenter.status = 'loading';
+    aiSegmenter.error = null;
+    updateAIModelUI();
+    aiSegmenter.promise = (async function () {
+      var mod = await import(aiVendorBase + 'vision_bundle.js');
+      if (!mod || !mod.FilesetResolver || !mod.ImageSegmenter) {
+        throw new Error('MediaPipe runtime exports missing');
+      }
+      var fileset = await mod.FilesetResolver.forVisionTasks(aiVendorBase + 'wasm');
+      var segmenter = await mod.ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: aiVendorBase + 'selfie_segmenter.tflite',
+          delegate: 'CPU'
+        },
+        runningMode: 'IMAGE',
+        outputConfidenceMasks: true,
+        outputCategoryMask: false
+      });
+      aiSegmenter.instance = segmenter;
+      aiSegmenter.status = 'ready';
+      updateAIModelUI();
+      return segmenter;
+    })().catch(function (err) {
+      aiSegmenter.status = 'failed';
+      aiSegmenter.error = err;
+      aiSegmenter.promise = null;
+      updateAIModelUI();
+      throw err;
+    });
+    return aiSegmenter.promise;
+  }
+
+  function updateAIModelUI() {
+    if (!els.aiModel) return;
+    var mask = activeMask();
+    var subject = !!mask && mask.type === 'subject';
+    if (els.maskAI) {
+      els.maskAI.disabled = subject && (!!aiSubjectState.running || state.cropEditing);
+      els.maskAI.innerHTML = icon('wand') + (subject ? '重新分割' : '重新识别');
+    }
+    els.aiModel.hidden = !subject;
+    if (!subject) return;
+    els.aiRetry.disabled = !!state.cropEditing || !!aiSubjectState.running;
+    var text = 'AI 人像分割模型 · 按需加载';
+    var spinning = false;
+    var retry = false;
+    var tone = '';
+    var aiBase = ensureAISubjectBaseForGeometry();
+    if (aiSegmenter.status === 'loading' || (aiSubjectState.status === 'loading' && !aiSegmenter.instance && aiSegmenter.status !== 'failed')) {
+      text = '正在加载本地 AI 模型（首次约 10 MB，不上传图片）…';
+      spinning = true;
+      tone = 'is-loading';
+    } else if (aiSubjectState.status === 'loading') {
+      text = '正在识别人像…';
+      spinning = true;
+      tone = 'is-loading';
+    } else if (aiBase) {
+      text = 'AI 人像分割 · 覆盖约 ' + (aiBase.coverage * 100).toFixed(1) + '%';
+      tone = 'is-ok';
+    } else if (aiSubjectState.failedPreview === state.previewCanvas) {
+      text = aiSubjectState.noPerson
+        ? '未检测到人像 · 已回退构图识别'
+        : 'AI 模型不可用 · 已回退构图识别';
+      retry = true;
+      tone = 'is-warn';
+    }
+    els.aiModel.className = 'raw-ai-model' + (tone ? ' ' + tone : '');
+    els.aiModelText.textContent = text;
+    els.aiSpinner.hidden = !spinning;
+    els.aiRetry.hidden = !retry;
+  }
+
+  function scheduleAISubjectSegmentation(delay, force) {
+    if (!state.loaded || !state.previewCanvas || state.busy || state.cropEditing || !hasSubjectMask()) return;
+    if (aiSubjectState.running) {
+      if (force) aiSubjectState.queued = true;
+      return;
+    }
+    if (!force && aiSubjectRawValid()) return;
+    if (!force && aiSubjectState.failedPreview === state.previewCanvas) return;
+    if (aiSubjectState.timer) clearTimeout(aiSubjectState.timer);
+    aiSubjectState.timer = setTimeout(function () {
+      aiSubjectState.timer = 0;
+      runAISubjectSegmentation({ force: !!force });
+    }, delay == null ? 220 : delay);
+  }
+
+  function setAIStatus(text, kind) {
+    if (!state.busy) setStatus(text, kind);
+  }
+
+  async function runAISubjectSegmentation(opts) {
+    opts = opts || {};
+    if (aiSubjectState.running) {
+      if (opts.force) aiSubjectState.queued = true;
+      return;
+    }
+    if (!state.loaded || !state.previewCanvas || !hasSubjectMask()) return;
+    if (!opts.force && aiSubjectRawValid()) return;
+    if (!opts.force && aiSubjectState.failedPreview === state.previewCanvas) return;
+    var previewRef = state.previewCanvas;
+    var seq = ++aiSubjectState.seq;
+    var firstLoad = !aiSegmenter.instance;
+    aiSubjectState.running = true;
+    aiSubjectState.status = 'loading';
+    updateAIModelUI();
+    setStatus(firstLoad
+      ? '正在加载本地 AI 人像分割模型（首次约 10 MB，图片不上传）…'
+      : '正在识别人像…', '', true);
+    var result = null;
+    try {
+      var segmenter = await ensureAISegmenter();
+      if (seq !== aiSubjectState.seq || previewRef !== state.previewCanvas || !hasSubjectMask()) {
+        aiSubjectState.status = 'idle';
+        return;
+      }
+      setStatus('正在识别人像…', '', true);
+      await nextFrame();
+      var input = buildSegmentationInput(previewRef, AI_SEGMENT_INPUT_EDGE);
+      var t0 = performance.now();
+      result = segmenter.segment(input);
+      var masks = result.confidenceMasks || [];
+      if (!masks.length) throw new Error('AI 分割模型没有返回蒙版');
+      var built = maskCanvasFromConfidence(masks[0], MASK_PREVIEW_WIDTH);
+      if (!built) throw new Error('无法读取 AI 分割蒙版');
+      var inferMs = performance.now() - t0;
+      if (seq !== aiSubjectState.seq || previewRef !== state.previewCanvas || !hasSubjectMask()) {
+        aiSubjectState.status = 'idle';
+        return;
+      }
+      aiSubjectState.coverage = built.coverage;
+      aiSubjectState.error = '';
+      if (built.coverage < 0.012) {
+        aiSubjectRaw = null;
+        aiSubjectBase = null;
+        aiSubjectState.status = 'ready';
+        aiSubjectState.failedPreview = previewRef;
+        aiSubjectState.noPerson = true;
+        aiBaseCache = Object.create(null);
+        refreshSubjectMaskTextures();
+        updateAIModelUI();
+        setAIStatus('AI 模型未检测到人像，已使用构图识别。可用画笔修整或换一张人像照片。', 'warn');
+      } else {
+        aiSubjectRaw = { canvas: built.canvas, coverage: built.coverage, preview: previewRef };
+        aiSubjectBase = null;
+        ensureAISubjectBaseForGeometry();
+        aiSubjectState.status = 'ready';
+        aiSubjectState.failedPreview = null;
+        aiSubjectState.noPerson = false;
+        aiBaseCache = Object.create(null);
+        refreshSubjectMaskTextures();
+        updateAIModelUI();
+        var shownCoverage = aiSubjectBase ? aiSubjectBase.coverage : built.coverage;
+        setAIStatus('AI 人像分割完成，覆盖约 ' + (shownCoverage * 100).toFixed(1) +
+          '%。本地推理 ' + Math.round(inferMs) + ' ms，可用画笔修整。', 'ok');
+      }
+    } catch (err) {
+      console.warn('[raw] AI subject segmentation failed', err);
+      if (seq === aiSubjectState.seq) {
+        aiSubjectRaw = null;
+        aiSubjectBase = null;
+        aiSubjectState.status = 'failed';
+        aiSubjectState.failedPreview = previewRef;
+        aiSubjectState.noPerson = false;
+        aiSubjectState.error = String(err && (err.message || err));
+        aiBaseCache = Object.create(null);
+        refreshSubjectMaskTextures();
+        updateAIModelUI();
+        setAIStatus('AI 分割模型加载失败，已回退到构图识别。可点“重新分割”重试。', 'warn');
+      }
+    } finally {
+      try { if (result && result.close) result.close(); } catch (e) { /* ignore */ }
+      var isLatest = seq === aiSubjectState.seq;
+      aiSubjectState.running = false;
+      updateAIModelUI();
+      if (isLatest && aiSubjectState.status === 'idle' && els.status &&
+          /^正在(加载本地 AI|识别人像)/.test(els.status.textContent || '')) {
+        setStatus(baselineStatus(), 'ok');
+      }
+      if (hasSubjectMask() && !aiSubjectRawValid() &&
+          aiSubjectState.failedPreview !== state.previewCanvas && !aiSubjectState.queued) {
+        scheduleAISubjectSegmentation(80, false);
+      }
+      if (aiSubjectState.queued) {
+        aiSubjectState.queued = false;
+        scheduleAISubjectSegmentation(60, true);
+      }
+    }
+  }
+
+  function refreshSubjectMaskTextures() {
+    if (!renderer || !state.preview) return;
+    aiBaseCache = Object.create(null);
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].type === 'subject') refreshMaskTexture(state.masks[i]);
+    }
+    updateMaskUI();
+    scheduleRender();
+  }
+
+  function retryAISubject() {
+    var mask = activeMask();
+    if (!mask || mask.type !== 'subject') return;
+    if (state.cropEditing) {
+      setStatus('请先应用或取消裁剪，再运行 AI 人像分割。', 'warn');
+      return;
+    }
+    aiSubjectState.failedPreview = null;
+    aiSubjectState.noPerson = false;
+    aiSubjectState.error = '';
+    aiSubjectState.status = 'idle';
+    if (aiSegmenter.status === 'failed' && !aiSegmenter.instance) {
+      aiSegmenter.promise = null;
+    }
+    updateAIModelUI();
+    scheduleAISubjectSegmentation(0, true);
   }
 
   function analysisCanvas(source, maxEdge) {
@@ -4190,6 +4606,13 @@
   function getSmartBase(mask, targetWidth, srcW, srcH, sourceCanvas, force) {
     var source = sourceCanvas || state.renderSource;
     if (!source) return null;
+    if (mask.type === 'subject') {
+      var aiBase = ensureAISubjectBaseForGeometry();
+      if (aiBase) return aiBase;
+      if (aiSubjectState.failedPreview !== state.previewCanvas) {
+        scheduleAISubjectSegmentation(180, false);
+      }
+    }
     var key = mask.id + ':' + Math.round(targetWidth) + ':' + source.width + 'x' + source.height;
     if (!force && aiBaseCache[key]) return aiBaseCache[key];
     var base = mask.type === 'sky'
@@ -4199,10 +4622,12 @@
     return base;
   }
 
-  function identifySmartMask(mask, show) {
+  function identifySmartMask(mask, show, forceAI) {
     if (!mask || !isSmartMaskType(mask.type) || !state.renderSource) return;
-    clearAIBaseForMask(mask.id);
-    var base = getSmartBase(mask, MASK_PREVIEW_WIDTH, state.renderW, state.renderH, state.renderSource, true);
+    var smartSubject = mask.type === 'subject';
+    if (!smartSubject) clearAIBaseForMask(mask.id);
+    var base = getSmartBase(mask, MASK_PREVIEW_WIDTH, state.renderW, state.renderH,
+      state.renderSource, !smartSubject);
     if (show) mask.show = true;
     if (mask.show) {
       for (var i = 0; i < state.masks.length; i++) {
@@ -4210,18 +4635,45 @@
       }
     }
     refreshMaskTexture(mask);
-    markHistory('识别' + maskTypeLabel(mask.type) + '蒙版');
     updateMaskUI();
     scheduleRender();
     var coverage = base ? Math.round(base.coverage * 1000) / 10 : 0;
-    if (coverage >= 0.2) {
+    if (smartSubject) {
+      if (forceAI) {
+        aiSubjectState.failedPreview = null;
+        aiSubjectState.noPerson = false;
+        aiSubjectState.status = 'idle';
+      }
+      var aiBase = ensureAISubjectBaseForGeometry();
+      if (aiBase && !forceAI) {
+        setStatus('已应用 AI 人像分割，覆盖约 ' + (aiBase.coverage * 100).toFixed(1) +
+          '%。可用画笔修整。', 'ok');
+      } else if (!forceAI && aiSubjectState.failedPreview === state.previewCanvas) {
+        setStatus(aiSubjectState.noPerson
+          ? 'AI 模型未检测到人像，已回退到构图识别。可用画笔修整或换一张人像照片。'
+          : 'AI 分割模型不可用，已回退到构图识别。可点“重新分割”重试。', 'warn');
+      } else if (state.cropEditing) {
+        setStatus('已创建 AI 主体蒙版；应用或取消裁剪后会自动运行人像分割。', '');
+      } else if (state.busy) {
+        setStatus('导出进行中；完成后会自动运行 AI 人像分割。', '');
+      } else {
+        setStatus('正在加载并运行本地 AI 人像分割模型（首次约 10 MB，图片不上传）…', '', true);
+        scheduleAISubjectSegmentation(0, !!forceAI);
+      }
+    } else if (coverage >= 0.2) {
       setStatus('已生成' + maskTypeLabel(mask.type) + '蒙版，覆盖约 ' + coverage +
         '%。可用画笔补充或擦除，并调节羽化与局部参数。', 'ok');
     } else {
       setStatus('未识别到明显的' + (mask.type === 'sky' ? '天空' : '主体') +
         '。可换一张照片，或改用画笔手动建立范围。', 'warn');
     }
-    dispatch('raw:mask-ai', { id: mask.id, type: mask.type, coverage: coverage / 100 });
+    updateAIModelUI();
+    dispatch('raw:mask-ai', {
+      id: mask.id,
+      type: mask.type,
+      coverage: smartSubject && aiSubjectBase ? aiSubjectBase.coverage : coverage / 100,
+      engine: smartSubject && aiSubjectBase ? 'mediapipe' : 'local'
+    });
   }
 
   function buildMaskCanvas(mask, targetWidth, srcW, srcH, reuse, sourceCanvas) {
@@ -4279,7 +4731,10 @@
 
   function refreshMaskTexture(mask, skipSmart) {
     if (!renderer || !state.preview || !mask) return;
-    if (skipSmart && isSmartMaskType(mask.type)) return;
+    if (skipSmart && isSmartMaskType(mask.type) &&
+        !(mask.type === 'subject' && aiSubjectBase && aiSubjectBase.geometryKey === geometrySignature())) {
+      return;
+    }
     if (isTexturedMaskType(mask.type)) {
       var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.renderW || state.preview.w,
         state.renderH || state.preview.h, previewMaskCanvases[mask.id], state.renderSource);
@@ -4627,6 +5082,12 @@
       return null;
     }
     if (state.busy) return null;
+    if (aiSubjectPendingForExport()) {
+      scheduleAISubjectSegmentation(0, false);
+      setStatus('AI 主体蒙版仍在识别，完成后即可导出。', 'warn');
+      showExportResult('AI 主体蒙版仍在识别，请稍候再导出，以保证导出与预览一致。', true);
+      return null;
+    }
 
     var format = opts.format || els.exportFormat.value || 'image/jpeg';
     var quality = opts.quality != null ? clamp(Number(opts.quality), 0.6, 1) : Number(els.exportQuality.value) / 100;
@@ -4702,6 +5163,9 @@
       setBusy(false);
       els.exportBtn.disabled = !state.loaded;
       updateFootRight();
+      if (hasSubjectMask() && (!aiSubjectBase || aiSubjectBase.geometryKey !== geometrySignature())) {
+        scheduleAISubjectSegmentation(240, false);
+      }
     }
   }
 
@@ -4857,7 +5321,9 @@
         } else if (act === 'mask-remove') {
           removeActiveMask();
         } else if (act === 'mask-ai-refresh') {
-          identifySmartMask(activeMask(), false);
+          identifySmartMask(activeMask(), false, true);
+        } else if (act === 'ai-subject-retry') {
+          retryAISubject();
         } else if (act === 'rotate-left') {
           rotateGeometry(-1);
         } else if (act === 'rotate-right') {
@@ -4920,17 +5386,57 @@
     });
 
     // 撤销 / 重做快捷键（仅 Camera Raw 页面可见时生效）
+    function releaseBeforeKey() {
+      if (!beforeKeyHeld) return;
+      beforeKeyHeld = false;
+      state.before = beforeKeyPrevious;
+      updateBeforeLabel();
+      scheduleRender();
+    }
+
     document.addEventListener('keydown', function (e) {
       if (!state.loaded) return;
       var page = document.getElementById('page-raw');
       if (!page || page.classList.contains('hidden')) return;
-      if (e.key === 'Escape' && state.cropEditing) {
-        e.preventDefault();
-        cancelCropMode();
-        return;
+      if (e.key === 'Escape') {
+        if (beforeKeyHeld) {
+          e.preventDefault();
+          releaseBeforeKey();
+          return;
+        }
+        if (state.cropEditing) {
+          e.preventDefault();
+          cancelCropMode();
+          return;
+        }
+      }
+      var tag = (e.target && e.target.tagName || '').toLowerCase();
+      var typing = tag === 'textarea' || tag === 'select' || (tag === 'input' && e.target.type !== 'range');
+      var modifier = e.ctrlKey || e.metaKey || e.altKey;
+      if (!modifier && !state.busy) {
+        if (e.key === '\\' && !typing && !state.cropEditing) {
+          e.preventDefault();
+          if (e.repeat || beforeKeyHeld) return;
+          beforeKeyPrevious = state.before;
+          beforeKeyHeld = true;
+          state.before = true;
+          updateBeforeLabel();
+          scheduleRender();
+          return;
+        }
+        if (!typing && (e.key === 'c' || e.key === 'C')) {
+          e.preventDefault();
+          if (state.cropEditing) cancelCropMode(); else beginCropMode();
+          return;
+        }
+        if (!typing && (e.key === 'f' || e.key === 'F')) {
+          e.preventDefault();
+          state.zoomMode = 'fit';
+          applyZoom();
+          return;
+        }
       }
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      var tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'textarea' || tag === 'select' || (tag === 'input' && e.target.type !== 'range')) return;
       var key = String(e.key || '').toLowerCase();
       if (key === 'z') {
@@ -4941,6 +5447,12 @@
         redoHistory();
       }
     });
+    document.addEventListener('keyup', function (e) {
+      if (e.key === '\\' && beforeKeyHeld) {
+        releaseBeforeKey();
+      }
+    });
+    window.addEventListener('blur', releaseBeforeKey);
 
     // 滑杆
     root.querySelectorAll('[data-adj], [data-local]').forEach(bindSlider);
@@ -5163,6 +5675,18 @@
         index: historyIndex,
         entries: historyEntries.map(function (entry) { return entry.label; })
       },
+      ai: (function () {
+        var aiBase = ensureAISubjectBaseForGeometry();
+        return {
+          modelStatus: aiSegmenter.status,
+          subjectStatus: aiSubjectState.status,
+          engine: aiBase ? 'mediapipe' : (hasSubjectMask() ? 'local' : 'none'),
+          coverage: aiBase ? aiBase.coverage :
+            (aiSubjectState.failedPreview === state.previewCanvas ? aiSubjectState.coverage : 0),
+          signature: geometrySignature(),
+          error: aiSubjectState.error || (aiSegmenter.error ? String(aiSegmenter.error.message || aiSegmenter.error) : '')
+        };
+      })(),
       lastExport: state.lastExport ? {
         size: state.lastExport.size,
         width: state.lastExport.width,
@@ -5220,7 +5744,7 @@
         mask = addMask(type || 'sky');
         return serializeMask(mask);
       }
-      identifySmartMask(mask, true);
+      identifySmartMask(mask, true, true);
       return serializeMask(mask);
     },
     getHistory: function () {
@@ -5278,6 +5802,7 @@
     setMaskEnabled: setMaskEnabled,
     getMasks: function () { return state.masks.map(serializeMask); },
     getState: snapshot,
+    retryAISubject: retryAISubject,
     renderNow: renderNow,
     getCanvas: function () { return els.canvas; },
     getRenderSource: function () { return state.renderSource; },

@@ -8,6 +8,15 @@ The "专业修图" workspace is a self-hosted build of [BitMappery](https://gith
 
 The "Camera Raw" page uses [FlashRaw](https://github.com/ybouane/flashraw) 0.1.0, licensed under MIT OR Apache-2.0, as a WebAssembly RAW decoder. The browser-served WASM assets are unmodified; both license texts are included in `assets/vendor/flashraw/`. Raw files are decoded and developed locally in the browser and are never uploaded.
 
+## MediaPipe Tasks Vision and Selfie Segmenter (AI person mask)
+
+The Camera Raw page's "AI 主体" mask uses the following unmodified Google MediaPipe assets, vendored under `assets/vendor/mediapipe-selfie/` and loaded on demand:
+
+- [`@mediapipe/tasks-vision` 0.10.21](https://github.com/google-ai-edge/mediapipe) — Apache License 2.0. The browser module is served as `vision_bundle.js` (only the file extension was changed from `.mjs`); the SIMD WebAssembly runtime is in `wasm/`.
+- [MediaPipe Selfie Segmenter float16 v1 model](https://github.com/google-ai-edge/mediapipe/tree/master/mediapipe/modules/selfie_segmentation) — Apache License 2.0, downloaded from the official MediaPipe model storage as `selfie_segmenter.tflite`.
+
+The upstream Apache License 2.0 text is included at `assets/vendor/mediapipe-selfie/LICENSE`; file origins are recorded in `assets/vendor/mediapipe-selfie/SOURCE.md`. The model and runtime are served by this site, not a third-party CDN. Inference runs in the visitor's browser; images and generated masks are not uploaded. The site does not modify the upstream binaries or weights.
+
 ## go-music-dl (internal metadata/URL resolver)
 
 The "多源音乐下载" page uses the unmodified [go-music-dl](https://github.com/guohuiyuan/go-music-dl) v1.1.3 binary on the self-hosted server (systemd `music-dl.service`, listening only on 127.0.0.1:8080). The site calls only its `/music/search` HTML and `/music/inspect` JSON endpoints to resolve metadata and CDN URLs; it does not embed or proxy the upstream UI and does not use the upstream download endpoint. Audio bytes are fetched by the visitor's browser directly from the source CDN and are never relayed or stored by the server. go-music-dl and its [music-lib](https://github.com/guohuiyuan/music-lib) are licensed under AGPL-3.0; the binary is unmodified. Downloading copyrighted music may violate platform terms and local law; personal, non-commercial use only.
