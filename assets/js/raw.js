@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -24,6 +24,7 @@
   var MASK_PREVIEW_WIDTH = 768;
   var MASK_EXPORT_WIDTH = 2048;
   var MAX_MASKS = 8;
+  var MAX_HISTORY = 40;
   var IDENTITY_CURVE = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   var CURVE_CHANNELS = [
     { key: 'rgb', label: 'RGB', short: 'RGB', color: '#0C7A69', curve: '#0C7A69' },
@@ -31,6 +32,14 @@
     { key: 'g', label: '绿', short: '绿', color: '#1F7A4D', curve: '#1F7A4D' },
     { key: 'b', label: '蓝', short: '蓝', color: '#2F5EB8', curve: '#2F5EB8' }
   ];
+  var CROP_ASPECTS = {
+    free: 0,
+    original: 0,
+    '1:1': 1,
+    '4:3': 4 / 3,
+    '3:2': 3 / 2,
+    '16:9': 16 / 9
+  };
 
   var RAW_RE = /\.(cr2|cr3|crw|nef|nrw|arw|srf|sr2|arq|dng|raf|orf|ori|orw|rw2|rwl|pef|srw|mrw|iiq|mos|3fr|fff|kdc|dcr|dcs|erf|mef|x3f|ari|raw)$/i;
   var IMAGE_RE = /\.(jpe?g|png|webp|avif|gif|bmp)$/i;
@@ -50,7 +59,13 @@
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.6" r=".9" fill="currentColor" stroke="none"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
     lock: '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
-    'image-off': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m3 3 18 18"/><path d="M8 15l2.5-3 2 2.2L15 11l3 4"/>'
+    'image-off': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m3 3 18 18"/><path d="M8 15l2.5-3 2 2.2L15 11l3 4"/>',
+    crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
+    rotate: '<path d="M4 9a8 8 0 1 1 1.2 8.4"/><path d="M4 3v6h6"/>',
+    flip: '<path d="M12 3v18"/><path d="M8 6 3 12l5 6Z"/><path d="m16 6 5 6-5 6Z"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/>',
+    lens: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M4.5 7.5h3M16.5 16.5h3"/>',
+    wand: '<path d="m4 20 11-11"/><path d="m14 4 .8 2.2L17 7l-2.2.8L14 10l-.8-2.2L11 7l2.2-.8Z"/><path d="m19 12 .6 1.4L21 14l-1.4.6L19 16l-.6-1.4L17 14l1.4-.6Z"/>'
   };
 
   function icon(name) {
@@ -59,6 +74,11 @@
   }
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function smoothstep(lo, hi, x) {
+    var t = clamp((x - lo) / Math.max(1e-8, hi - lo), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
   function escapeHTML(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
@@ -159,6 +179,19 @@
     { key: 'sharpen', label: '锐化', min: 0, max: 100, step: 1, def: 0 }
   ];
 
+  var LENS = [
+    { key: 'lensDistort', label: '畸变校正', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'lensVignette', label: '暗角校正', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'lensCa', label: '色差校正', min: -100, max: 100, step: 1, def: 0 }
+  ];
+
+  var DETAIL = [
+    { key: 'noiseLuma', label: '亮度降噪', min: 0, max: 100, step: 1, def: 0 },
+    { key: 'noiseColor', label: '色彩降噪', min: 0, max: 100, step: 1, def: 0 }
+  ];
+
+  var ALL_ADJUSTMENTS = ADJUSTMENTS.concat(LENS, DETAIL);
+
   var LOCALS = [
     { key: 'exposure', label: '局部曝光', min: -3, max: 3, step: 0.05, def: 0, ev: true },
     { key: 'contrast', label: '局部对比', min: -100, max: 100, step: 1, def: 0 },
@@ -166,9 +199,19 @@
     { key: 'saturation', label: '局部饱和', min: -100, max: 100, step: 1, def: 0 }
   ];
 
+  var PARAM_CURVE = [
+    { key: 'highlights', label: '高光', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'lights', label: '亮调', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'darks', label: '暗调', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'shadows', label: '阴影', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'shadowSplit', label: '阴影分界', min: 0, max: 45, step: 1, def: 25, unit: '%' },
+    { key: 'midSplit', label: '中间调分界', min: 25, max: 75, step: 1, def: 50, unit: '%' },
+    { key: 'highlightSplit', label: '高光分界', min: 55, max: 100, step: 1, def: 75, unit: '%' }
+  ];
+
   function defaultAdjust() {
     var o = {};
-    ADJUSTMENTS.forEach(function (d) { o[d.key] = d.def; });
+    ALL_ADJUSTMENTS.forEach(function (d) { o[d.key] = d.def; });
     return o;
   }
   function defaultLocal() {
@@ -176,8 +219,32 @@
     LOCALS.forEach(function (d) { o[d.key] = d.def; });
     return o;
   }
+  function defaultParamCurve() {
+    var o = {};
+    PARAM_CURVE.forEach(function (d) { o[d.key] = d.def; });
+    return o;
+  }
+  function defaultGeometry() {
+    return { rotate90: 0, flipH: false, flipV: false, angle: 0, crop: null };
+  }
+  function cloneGeometry(g) {
+    g = g || {};
+    return {
+      rotate90: (((Number(g.rotate90) || 0) % 4) + 4) % 4,
+      flipH: !!g.flipH,
+      flipV: !!g.flipV,
+      angle: clamp(Number(g.angle) || 0, -45, 45),
+      crop: g.crop ? {
+        x: clamp(Number(g.crop.x) || 0, 0, 1),
+        y: clamp(Number(g.crop.y) || 0, 0, 1),
+        w: clamp(Number(g.crop.w) || 0, 0.001, 1),
+        h: clamp(Number(g.crop.h) || 0, 0.001, 1)
+      } : null
+    };
+  }
 
   function fmtAdjust(def, v) {
+    if (def.unit === '%') return Math.round(v) + '%';
     if (def.ev) return (v > 0 ? '+' : '') + Number(v).toFixed(2);
     var r = Math.round(v);
     return (r > 0 ? '+' : '') + String(r);
@@ -225,6 +292,11 @@
     'uniform float u_vignette;',
     'uniform float u_grain;',
     'uniform float u_sharpen;',
+    'uniform float u_lensDistort;',
+    'uniform float u_lensVignette;',
+    'uniform float u_lensCa;',
+    'uniform float u_noiseLuma;',
+    'uniform float u_noiseColor;',
     'uniform float u_maskType;',
     'uniform float u_maskInvert;',
     'uniform float u_maskShow;',
@@ -280,6 +352,55 @@
     '  return mix(m, 1.0 - m, step(0.5, u_maskInvert));',
     '}',
     '',
+    'vec2 lensRemap(vec2 uv) {',
+    '  if (abs(u_lensDistort) < 0.0001) return uv;',
+    '  float aspect = u_texSize.x / max(1.0, u_texSize.y);',
+    '  vec2 halfSpan = vec2(aspect, 1.0) * 0.5;',
+    '  vec2 c = (uv - 0.5) / halfSpan;',
+    '  float r2 = clamp(dot(c, c) * 0.5, 0.0, 1.0);',
+    '  float cover = 1.0 / (1.0 + abs(u_lensDistort) * 0.35);',
+    '  c *= cover * (1.0 + u_lensDistort * 0.35 * r2);',
+    '  return clamp(c * halfSpan + 0.5, 0.0, 1.0);',
+    '}',
+    '',
+    'vec3 sampleChroma(vec2 uv) {',
+    '  uv = clamp(uv, 0.0, 1.0);',
+    '  if (abs(u_lensCa) < 0.0001) return texture(u_image, uv).rgb;',
+    '  vec2 d = uv - 0.5;',
+    '  float k = u_lensCa * 0.006;',
+    '  return vec3(',
+    '    texture(u_image, clamp(0.5 + d * (1.0 + k), 0.0, 1.0)).r,',
+    '    texture(u_image, uv).g,',
+    '    texture(u_image, clamp(0.5 + d * (1.0 - k), 0.0, 1.0)).b',
+    '  );',
+    '}',
+    '',
+    'vec3 denoiseSource(vec3 src, vec2 uv) {',
+    '  if (u_noiseLuma < 0.001 && u_noiseColor < 0.001) return src;',
+    '  vec2 px = vec2(max(1.0, u_scale)) / u_texSize;',
+    '  float l0 = lumaOf(src);',
+    '  float sigma = mix(0.035, 0.12, u_noiseLuma);',
+    '  vec3 acc = src;',
+    '  float wsum = 1.0;',
+    '  for (int i = -1; i <= 1; i++) {',
+    '    for (int j = -1; j <= 1; j++) {',
+    '      if (i == 0 && j == 0) continue;',
+    '      vec3 s = sampleChroma(lensRemap(uv + vec2(float(i), float(j)) * px));',
+    '      float dl = lumaOf(s) - l0;',
+    '      float w = exp(-(dl * dl) / max(0.0001, sigma * sigma));',
+    '      acc += s * w;',
+    '      wsum += w;',
+    '    }',
+    '  }',
+    '  vec3 avg = acc / wsum;',
+    '  float lb = lumaOf(avg);',
+    '  float edge = smoothstep(0.0, 0.06, abs(lb - l0));',
+    '  float outL = mix(l0, lb, u_noiseLuma * (1.0 - edge * 0.65));',
+    '  vec3 chroma = avg - vec3(lb);',
+    '  vec3 srcChroma = src - vec3(l0);',
+    '  return vec3(outL) + mix(srcChroma, chroma, u_noiseColor);',
+    '}',
+    '',
     'vec3 globalAdjust(vec3 src) {',
     '  vec3 lin = srgbToLinear(src);',
     '',
@@ -289,6 +410,12 @@
     '  lin.g *= exp2(-u_tint * 0.32);',
     '  lin.r *= exp2(u_tint * 0.10);',
     '  lin.b *= exp2(u_tint * 0.10);',
+    '',
+    '  // 镜头暗角校正：只抬边缘，不改变中心曝光',
+    '  if (abs(u_lensVignette) > 0.0001) {',
+    '    float vr = length((v_uv - 0.5) * vec2(u_aspect, 1.0)) / length(vec2(u_aspect, 1.0) * 0.5);',
+    '    lin *= 1.0 + u_lensVignette * 1.1 * smoothstep(0.25, 1.0, clamp(vr, 0.0, 1.5));',
+    '  }',
     '',
     '  // 曝光在线性光中计算',
     '  lin *= exp2(u_exposure);',
@@ -306,10 +433,10 @@
     '  vec2 px = 1.0 / u_texSize;',
     '  float sc = max(1.0, u_scale);',
     '  vec2 cpx = px * 1.5 * sc;',
-    '  vec3 blurC = texture(u_image, v_uv + vec2(cpx.x, 0.0)).rgb',
-    '             + texture(u_image, v_uv - vec2(cpx.x, 0.0)).rgb',
-    '             + texture(u_image, v_uv + vec2(0.0, cpx.y)).rgb',
-    '             + texture(u_image, v_uv - vec2(0.0, cpx.y)).rgb;',
+    '  vec3 blurC = sampleChroma(lensRemap(v_uv + vec2(cpx.x, 0.0)))',
+    '             + sampleChroma(lensRemap(v_uv - vec2(cpx.x, 0.0)))',
+    '             + sampleChroma(lensRemap(v_uv + vec2(0.0, cpx.y)))',
+    '             + sampleChroma(lensRemap(v_uv - vec2(0.0, cpx.y)));',
     '  float blurL = lumaOf(blurC * 0.25);',
     '  float detail = lumaOf(src) - blurL;',
     '  if (abs(u_clarity) > 0.0001) {',
@@ -347,11 +474,12 @@
     'void main() {',
     '  // Pass 0：全局显影；原图对比时直接输出源像素。',
     '  if (u_pass < 0.5) {',
-    '    vec3 src = texture(u_image, v_uv).rgb;',
     '    if (u_before > 0.5) {',
-    '      outColor = vec4(src, 1.0);',
+    '      outColor = vec4(texture(u_image, v_uv).rgb, 1.0);',
     '      return;',
     '    }',
+    '    vec3 src = sampleChroma(lensRemap(v_uv));',
+    '    src = denoiseSource(src, v_uv);',
     '    outColor = vec4(clamp(globalAdjust(src), 0.0, 1.0), 1.0);',
     '    return;',
     '  }',
@@ -384,10 +512,10 @@
     '    vec2 px = 1.0 / u_texSize;',
     '    float sc = max(1.0, u_scale);',
     '    vec2 spx = px * sc;',
-    '    vec3 n4 = texture(u_image, v_uv + vec2(spx.x, 0.0)).rgb',
-    '            + texture(u_image, v_uv - vec2(spx.x, 0.0)).rgb',
-    '            + texture(u_image, v_uv + vec2(0.0, spx.y)).rgb',
-    '            + texture(u_image, v_uv - vec2(0.0, spx.y)).rgb;',
+    '    vec3 n4 = sampleChroma(lensRemap(v_uv + vec2(spx.x, 0.0)))',
+    '            + sampleChroma(lensRemap(v_uv - vec2(spx.x, 0.0)))',
+    '            + sampleChroma(lensRemap(v_uv + vec2(0.0, spx.y)))',
+    '            + sampleChroma(lensRemap(v_uv - vec2(0.0, spx.y)));',
     '    float sharpDetail = lumaOf(g) - lumaOf(n4 * 0.25);',
     '    g += sharpDetail * u_sharpen * 1.6;',
     '  }',
@@ -424,7 +552,8 @@
     'u_image', 'u_stage', 'u_curve', 'u_mask', 'u_texSize', 'u_aspect', 'u_before', 'u_pass',
     'u_exposure', 'u_contrast', 'u_highlights', 'u_shadows', 'u_whites', 'u_blacks',
     'u_temp', 'u_tint', 'u_vibrance', 'u_saturation', 'u_clarity', 'u_dehaze',
-    'u_vignette', 'u_grain', 'u_sharpen', 'u_maskType', 'u_maskInvert', 'u_maskShow',
+    'u_vignette', 'u_grain', 'u_sharpen', 'u_lensDistort', 'u_lensVignette', 'u_lensCa',
+    'u_noiseLuma', 'u_noiseColor', 'u_maskType', 'u_maskInvert', 'u_maskShow',
     'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_local', 'u_curveOn', 'u_scale', 'u_seed'
   ];
 
@@ -652,6 +781,11 @@
     gl.uniform1f(u.u_vignette, params.vignette);
     gl.uniform1f(u.u_grain, params.grain);
     gl.uniform1f(u.u_sharpen, params.sharpen);
+    gl.uniform1f(u.u_lensDistort, params.lensDistort);
+    gl.uniform1f(u.u_lensVignette, params.lensVignette);
+    gl.uniform1f(u.u_lensCa, params.lensCa);
+    gl.uniform1f(u.u_noiseLuma, params.noiseLuma);
+    gl.uniform1f(u.u_noiseColor, params.noiseColor);
     gl.uniform1f(u.u_scale, Math.max(1, w / 1600));
     gl.uniform1f(u.u_seed, 17.0);
   };
@@ -742,7 +876,7 @@
       gl.uniform1f(this.u.u_before, 0);
       this.setMaskUniforms(mask);
       this.bindStage(stageTex);
-      this.bindMask(mask.type === 3 ? mask.id : null);
+      this.bindMask(mask.type >= 3 ? mask.id : null);
       this.draw();
       if (destFbo === targets.fboB) {
         stageTex = targets.texB;
@@ -762,7 +896,7 @@
     this.setMaskUniforms(show);
     gl.uniform1f(this.u.u_maskShow, show ? 1 : 0);
     this.bindStage(stageTex);
-    this.bindMask(show && show.type === 3 ? show.id : null);
+    this.bindMask(show && show.type >= 3 ? show.id : null);
     this.draw();
 
     gl.bindVertexArray(null);
@@ -807,13 +941,19 @@
   function buildHTML() {
     var basicSliders = ADJUSTMENTS.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
     var localSliders = LOCALS.map(function (d) { return sliderHTML(d, 'local'); }).join('');
+    var lensSliders = LENS.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
+    var detailSliders = DETAIL.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
+    var paramRegionSliders = PARAM_CURVE.filter(function (d) { return d.unit !== '%'; })
+      .map(function (d) { return sliderHTML(d, 'param'); }).join('');
+    var paramSplitSliders = PARAM_CURVE.filter(function (d) { return d.unit === '%'; })
+      .map(function (d) { return sliderHTML(d, 'param'); }).join('');
 
     return '' +
       '<div class="raw-head">' +
         '<div class="raw-head-main">' +
           '<div class="raw-eyebrow">Camera Raw · 本地显影</div>' +
           '<h2>RAW 显影</h2>' +
-          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、色彩、曲线与局部蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
+          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与智能蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
         '</div>' +
         '<div class="raw-head-actions">' +
           '<button type="button" class="raw-btn primary" data-act="open">' + icon('open') + '打开文件</button>' +
@@ -855,6 +995,25 @@
               '<span class="raw-spinner"></span><b id="raw-busy-title">正在载入</b>' +
               '<span id="raw-busy-sub">大文件解码可能需要数秒，请保持此页打开。</span>' +
             '</div>' +
+            '<div class="raw-crop-overlay" id="raw-crop-overlay" hidden>' +
+              '<div class="raw-crop-box" id="raw-crop-box" data-crop-box>' +
+                '<span class="raw-crop-grid" aria-hidden="true"></span>' +
+                '<span class="raw-crop-handle is-nw" data-handle="nw"></span>' +
+                '<span class="raw-crop-handle is-n" data-handle="n"></span>' +
+                '<span class="raw-crop-handle is-ne" data-handle="ne"></span>' +
+                '<span class="raw-crop-handle is-e" data-handle="e"></span>' +
+                '<span class="raw-crop-handle is-se" data-handle="se"></span>' +
+                '<span class="raw-crop-handle is-s" data-handle="s"></span>' +
+                '<span class="raw-crop-handle is-sw" data-handle="sw"></span>' +
+                '<span class="raw-crop-handle is-w" data-handle="w"></span>' +
+                '<span class="raw-crop-size" id="raw-crop-size"></span>' +
+              '</div>' +
+              '<div class="raw-crop-bar">' +
+                '<span><b>裁剪</b> 拖动框内移动，拖动边角调整</span>' +
+                '<button type="button" class="raw-btn tiny primary" data-act="crop-apply">应用裁剪</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="crop-cancel">取消</button>' +
+              '</div>' +
+            '</div>' +
           '</div>' +
           '<div class="raw-stage-foot">' +
             '<div class="raw-status" aria-live="polite">' +
@@ -888,11 +1047,74 @@
           '</details>' +
 
           '<details class="raw-group" open>' +
+            '<summary>' + icon('history') + '<span>历史记录</span><span class="raw-sum-meta" id="raw-history-sum">—</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body raw-history-body">' +
+              '<div class="raw-history-list" id="raw-history-list" aria-label="历史记录"></div>' +
+              '<p class="raw-group-hint raw-history-hint">点击任意步骤回到该状态；回到旧步骤后继续调整会丢弃其后的步骤。</p>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group" open>' +
             '<summary>' + icon('sliders') + '<span>基本调整</span><span class="raw-sum-meta" id="raw-adj-sum">0 项</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
               '<div class="raw-sliders" id="raw-adj-sliders">' + basicSliders + '</div>' +
               '<p class="raw-group-hint" style="margin:9px 0 0;font-size:10.5px;color:var(--raw-ink-3)">双击滑杆可单独复位。曝光以 EV 计算，色温 / 色调为相对相机白平衡的偏移。</p>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group" open id="raw-geometry-group">' +
+            '<summary>' + icon('crop') + '<span>几何与裁剪</span><span class="raw-sum-meta" id="raw-geo-sum">原始</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<div class="raw-geo-row">' +
+                '<button type="button" class="raw-btn tiny" data-act="rotate-left" title="逆时针旋转 90°">' + icon('rotate') + '左转</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="rotate-right" title="顺时针旋转 90°">右转</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="flip-h" title="水平镜像">' + icon('flip') + '水平</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="flip-v" title="垂直镜像">垂直</button>' +
+              '</div>' +
+              '<div class="raw-slider raw-geo-angle">' +
+                '<label for="raw-geo-angle">拉直</label>' +
+                '<input id="raw-geo-angle" type="range" min="-45" max="45" step="0.1" value="0" data-geo="angle">' +
+                '<output for="raw-geo-angle" id="raw-geo-angle-v">0.0°</output>' +
+              '</div>' +
+              '<div class="raw-crop-controls">' +
+                '<label class="raw-field-label" for="raw-crop-aspect">比例</label>' +
+                '<select class="raw-select" id="raw-crop-aspect">' +
+                  '<option value="free">自由</option>' +
+                  '<option value="original">原始比例</option>' +
+                  '<option value="1:1">1 : 1</option>' +
+                  '<option value="4:3">4 : 3</option>' +
+                  '<option value="3:2">3 : 2</option>' +
+                  '<option value="16:9">16 : 9</option>' +
+                '</select>' +
+                '<button type="button" class="raw-btn tiny primary" data-act="crop-mode" id="raw-crop-toggle">' + icon('crop') + '裁剪</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="geometry-reset">重置</button>' +
+              '</div>' +
+              '<div class="raw-crop-apply-row" id="raw-crop-apply-row" hidden>' +
+                '<button type="button" class="raw-btn primary" data-act="crop-apply">应用裁剪</button>' +
+                '<button type="button" class="raw-btn" data-act="crop-cancel">取消</button>' +
+              '</div>' +
+              '<p class="raw-group-hint raw-geo-note" id="raw-geo-note">拉直会自动放大以避免空白边缘；旋转或翻转后仍可继续裁剪。</p>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group">' +
+            '<summary>' + icon('lens') + '<span>镜头校正</span><span class="raw-sum-meta" id="raw-lens-sum">手动</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<p class="raw-group-hint">没有镜头配置文件，按画面边缘手动校正。畸变正负对应枕形 / 桶形，暗角校正只提亮四角。</p>' +
+              '<div class="raw-sliders" id="raw-lens-sliders">' + lensSliders + '</div>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group">' +
+            '<summary>' + icon('sliders') + '<span>细节与降噪</span><span class="raw-sum-meta" id="raw-detail-sum">关闭</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<p class="raw-group-hint">降噪作用于原始像素并保留边缘。高 ISO 可从亮度 20–40、色彩 25–50 开始；过强会损失细节。</p>' +
+              '<div class="raw-sliders" id="raw-detail-sliders">' + detailSliders + '</div>' +
             '</div>' +
           '</details>' +
 
@@ -916,6 +1138,16 @@
                 '</div>' +
                 '<span class="raw-curve-hint" id="raw-curve-hint">先 RGB 复合，再单通道 · 点击加点 / 拖动 / 双击删点</span>' +
               '</div>' +
+              '<div class="raw-param-curve" id="raw-param-curve">' +
+                '<div class="raw-param-head">' +
+                  '<span><b>参数曲线</b><em>仅 RGB 复合 · 按四个亮度区间微调，叠加在点曲线之后</em></span>' +
+                  '<button type="button" class="raw-btn tiny" data-act="param-reset">重置参数</button>' +
+                '</div>' +
+                '<div class="raw-param-sliders">' + paramRegionSliders + '</div>' +
+                '<div class="raw-param-split-head"><span>区间分界</span><span>阴影 · 暗调 · 亮调 · 高光</span></div>' +
+                '<div class="raw-param-splits">' + paramSplitSliders + '</div>' +
+                '<p class="raw-curve-hint raw-param-hint">虚线为叠加参数后的实际曲线。四个滑杆分别压暗 / 提亮对应亮度区域。</p>' +
+              '</div>' +
             '</div>' +
           '</details>' +
 
@@ -931,6 +1163,8 @@
                   '<option value="linear">线性渐变</option>' +
                   '<option value="radial">径向渐变</option>' +
                   '<option value="brush">画笔</option>' +
+                  '<option value="subject">智能主体</option>' +
+                  '<option value="sky">智能天空</option>' +
                 '</select>' +
                 '<button type="button" class="raw-btn tiny primary" data-act="mask-add">＋ 添加蒙版</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制</button>' +
@@ -941,13 +1175,16 @@
                 '<button type="button" data-mask="linear" class="is-active">线性渐变</button>' +
                 '<button type="button" data-mask="radial">径向渐变</button>' +
                 '<button type="button" data-mask="brush">画笔</button>' +
+                '<button type="button" data-mask="subject">智能主体</button>' +
+                '<button type="button" data-mask="sky">智能天空</button>' +
               '</div>' +
               '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。</p>' +
               '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
               '<div class="raw-mask-actions">' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-invert">反转</label>' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-show">显示蒙版</label>' +
-                '<button type="button" class="raw-btn tiny" data-act="mask-clear">清除范围</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-clear">清除笔画 / 范围</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-ai-refresh" id="raw-mask-ai-refresh" hidden>' + icon('wand') + '重新识别</button>' +
               '</div>' +
               '<div class="raw-slider" style="margin-bottom:9px">' +
                 '<label for="raw-mask-feather">羽化</label>' +
@@ -1028,12 +1265,13 @@
   }
 
   function maskTypeLabel(type) {
-    return type === 'linear' ? '线性' : type === 'radial' ? '径向' : type === 'brush' ? '画笔' : '未启用';
+    return type === 'linear' ? '线性' : type === 'radial' ? '径向' :
+      type === 'brush' ? '画笔' : type === 'sky' ? '智能天空' :
+      type === 'subject' ? '智能主体' : '未启用';
   }
 
-  function defaultGeometry(type) {
+  function maskGeometryDefaults(type) {
     if (type === 'radial') return { p1: { x: 0.5, y: 0.5 }, p2: { x: 0.28, y: 0.28 } };
-    if (type === 'brush') return { p1: { x: 0.2, y: 0.5 }, p2: { x: 0.8, y: 0.5 } };
     return { p1: { x: 0.2, y: 0.5 }, p2: { x: 0.8, y: 0.5 } };
   }
 
@@ -1053,6 +1291,7 @@
         var pts = stroke.points || stroke || [];
         return {
           radius: stroke.radius != null ? Number(stroke.radius) : Math.max(0.005, mask.brushPct / 200),
+          mode: stroke.mode === 'subtract' ? 'subtract' : 'add',
           points: pts.map(function (p) { return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) }; })
         };
       });
@@ -1067,16 +1306,17 @@
 
   function createMask(type, opts) {
     maskSeq += 1;
-    type = type === 'radial' || type === 'brush' || type === 'none' ? type : 'linear';
-    var geo = defaultGeometry(type);
+    type = normalizeMaskType(type);
+    var geo = maskGeometryDefaults(type);
+    var smart = isSmartMaskType(type);
     var mask = {
       id: 'mask-' + maskSeq,
-      name: '蒙版 ' + maskSeq,
+      name: smart ? (type === 'sky' ? '天空 ' : '主体 ') + maskSeq : '蒙版 ' + maskSeq,
       type: type,
       enabled: true,
       show: false,
       invert: false,
-      feather: type === 'brush' ? 0.35 : 0.45,
+      feather: type === 'brush' ? 0.35 : smart ? 0.3 : 0.45,
       p1: geo.p1,
       p2: geo.p2,
       strokes: [],
@@ -1107,6 +1347,9 @@
       fullSize: { w: 0, h: 0 },
       preview: null,
       previewCanvas: null,
+      renderSource: null,
+      renderW: 0,
+      renderH: 0,
       histogram: null,
       decodeMs: 0,
       previewDecodeMs: 0,
@@ -1116,10 +1359,17 @@
       adjust: defaultAdjust(),
       before: false,
       curves: createCurves(),
+      paramCurve: defaultParamCurve(),
       curveChannel: 'rgb',
       curveLut: null,
       curveOn: false,
       curveDragging: -1,
+      geometry: defaultGeometry(),
+      cropEditing: false,
+      cropAspect: 'free',
+      cropRect: null,
+      cropBackup: null,
+      cropDrag: null,
       masks: [initialMask],
       activeMaskId: initialMask.id,
       zoomMode: 'fit',
@@ -1149,12 +1399,16 @@
   var resizeObserver = null;
   var curveResizeObserver = null;
   var glLost = false;
-  var historyUndo = [];
-  var historyRedo = [];
-  var historyLast = '';
+  var historyEntries = [];
+  var historyIndex = -1;
   var historyTimer = 0;
+  var historyPendingLabel = '';
   var historySuspend = false;
   var histogramTimer = 0;
+  var aiBaseCache = Object.create(null);
+  var geometryRaf = 0;
+  var cropSyncRaf = 0;
+  var smartMaskTimer = 0;
 
   function resolveVendorBase() {
     var scripts = Array.prototype.slice.call(document.scripts || []);
@@ -1229,6 +1483,21 @@
       curveCanvas: $('#raw-curve', root),
       curveChannels: $('#raw-curve-channels', root),
       curveHint: $('#raw-curve-hint', root),
+      historyList: $('#raw-history-list', root),
+      historySum: $('#raw-history-sum', root),
+      geoSum: $('#raw-geo-sum', root),
+      geoNote: $('#raw-geo-note', root),
+      geoAngle: $('#raw-geo-angle', root),
+      geoAngleV: $('#raw-geo-angle-v', root),
+      cropAspect: $('#raw-crop-aspect', root),
+      cropToggle: $('#raw-crop-toggle', root),
+      cropApplyRow: $('#raw-crop-apply-row', root),
+      cropOverlay: $('#raw-crop-overlay', root),
+      cropBox: $('#raw-crop-box', root),
+      cropSize: $('#raw-crop-size', root),
+      lensSum: $('#raw-lens-sum', root),
+      detailSum: $('#raw-detail-sum', root),
+      maskAI: $('#raw-mask-ai-refresh', root),
       maskSum: $('#raw-mask-sum', root),
       maskSeg: $('#raw-mask-seg', root),
       maskList: $('#raw-mask-list', root),
@@ -1280,8 +1549,12 @@
     initCurveEditor();
     updateMaskUI();
     updateAdjustOutputs();
+    updateParamCurveUI();
     updateCurveUI();
     updateBeforeLabel();
+    updateGeometryUI();
+    renderHistoryPanel();
+    updateHistoryUI();
     scheduleRender();
     mountedRoots.push(el);
     return api;
@@ -1319,7 +1592,7 @@
   function updateFootRight() {
     if (!els.footRight) return;
     if (state.preview) {
-      els.footRight.textContent = state.preview.w + '×' + state.preview.h + ' 预览 · ' + state.backendLabel;
+      els.footRight.textContent = (state.renderW || state.preview.w) + '×' + (state.renderH || state.preview.h) + ' 预览 · ' + state.backendLabel;
     } else {
       els.footRight.textContent = '本地解码 · 不上传';
     }
@@ -1327,7 +1600,7 @@
 
   function baselineStatus() {
     if (!state.loaded || !state.preview) return '等待载入 RAW 或图片…';
-    return '已载入 ' + state.fileName + ' · ' + state.preview.w + '×' + state.preview.h +
+    return '已载入 ' + state.fileName + ' · ' + (state.renderW || state.preview.w) + '×' + (state.renderH || state.preview.h) +
       ' 预览 · 解码 ' + Math.round(state.decodeMs) + ' ms';
   }
 
@@ -1394,6 +1667,29 @@
         return;
       }
 
+      // 新文件使用独立编辑状态，避免上一张图的局部蒙版/裁剪套到新画面。
+      for (var mi = 0; mi < state.masks.length; mi++) {
+        if (renderer) renderer.clearMask(state.masks[mi].id);
+      }
+      previewMaskCanvases = Object.create(null);
+      aiBaseCache = Object.create(null);
+      state.adjust = defaultAdjust();
+      state.before = false;
+      state.curves = createCurves();
+      state.paramCurve = defaultParamCurve();
+      state.curveChannel = 'rgb';
+      state.curveLut = null;
+      state.curveOn = false;
+      state.curveDragging = -1;
+      var freshMask = createMask('linear');
+      state.masks = [freshMask];
+      state.activeMaskId = freshMask.id;
+      state.geometry = defaultGeometry();
+      state.cropEditing = false;
+      state.cropDrag = null;
+      state.cropRect = null;
+      state.cropBackup = null;
+      if (els.cropOverlay) els.cropOverlay.hidden = true;
       commitSource(result);
       if (result.raw) {
         state.raw = result.raw;
@@ -1430,6 +1726,11 @@
       state.zoomMode = 'fit';
       requestAnimationFrame(applyZoom);
       updateFootRight();
+      updateAdjustOutputs();
+      updateParamCurveUI();
+      updateCurveLut(false);
+      updateMaskUI();
+      updateGeometryUI();
       resetHistory();
       dispatch('raw:file', { name: name, meta: state.meta, preview: { w: result.preview.w, h: result.preview.h } });
     } catch (err) {
@@ -1630,12 +1931,10 @@
     state.sourceNote = result.sourceNote || '';
     state.sourceWarn = !!result.sourceWarn;
 
-    els.canvas.width = result.preview.w;
-    els.canvas.height = result.preview.h;
-    renderer.setSource(result.preview.canvas);
-    ensureCurveLut();
+    applyGeometrySource();
     if (curveCtx) drawCurve();
     refreshAllMaskTextures();
+    updateGeometryUI();
     scheduleRender();
   }
 
@@ -1765,8 +2064,19 @@
    * 渲染
    * ------------------------------------------------------------------ */
 
+  function isTexturedMaskType(type) {
+    return type === 'brush' || type === 'sky' || type === 'subject';
+  }
+
+  function isSmartMaskType(type) {
+    return type === 'sky' || type === 'subject';
+  }
+
   function maskTypeCode(type) {
-    return type === 'linear' ? 1 : type === 'radial' ? 2 : type === 'brush' ? 3 : 0;
+    if (type === 'linear') return 1;
+    if (type === 'radial') return 2;
+    if (isTexturedMaskType(type)) return 3;
+    return 0;
   }
 
   function localVector(l) {
@@ -1820,6 +2130,11 @@
       vignette: a.vignette / 100,
       grain: a.grain / 100,
       sharpen: a.sharpen / 100,
+      lensDistort: a.lensDistort / 100,
+      lensVignette: a.lensVignette / 100,
+      lensCa: a.lensCa / 100,
+      noiseLuma: a.noiseLuma / 100,
+      noiseColor: a.noiseColor / 100,
       masks: masks,
       showMask: showMask
     };
@@ -1845,7 +2160,6 @@
       name: mask.name,
       type: mask.type,
       enabled: !!mask.enabled,
-      show: !!mask.show,
       invert: !!mask.invert,
       feather: mask.feather,
       p1: { x: mask.p1.x, y: mask.p1.y },
@@ -1871,26 +2185,75 @@
     return JSON.stringify({
       adjust: Object.assign({}, state.adjust),
       curves: curves,
+      paramCurve: Object.assign({}, state.paramCurve),
       curveChannel: state.curveChannel,
-      masks: state.masks.map(cloneHistoryMask),
-      activeMaskId: state.activeMaskId
+      geometry: cloneGeometry(state.geometry),
+      masks: state.masks.map(cloneHistoryMask)
     });
+  }
+
+  function markHistory(label) {
+    if (label) historyPendingLabel = String(label);
+  }
+
+  function renderHistoryPanel(scrollToCurrent) {
+    if (!els.historyList) return;
+    if (!historyEntries.length) {
+      els.historyList.innerHTML = '<p class="raw-history-empty">载入文件后，调整步骤会出现在这里。</p>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < historyEntries.length; i++) {
+      var entry = historyEntries[i];
+      var cls = 'raw-history-item';
+      if (i === historyIndex) cls += ' is-current';
+      else if (i > historyIndex) cls += ' is-future';
+      html += '<button type="button" class="' + cls + '" data-history-index="' + i + '"' +
+        ' title="' + escapeHTML(entry.label + ' · ' + new Date(entry.time).toLocaleTimeString()) + '">' +
+        '<span class="raw-history-dot"></span>' +
+        '<span class="raw-history-label">' + escapeHTML(entry.label) + '</span>' +
+        '<span class="raw-history-step">' + (i + 1) + '</span>' +
+        '</button>';
+    }
+    els.historyList.innerHTML = html;
+    if (scrollToCurrent) {
+      var cur = els.historyList.querySelector('.raw-history-item.is-current');
+      if (cur) {
+        var top = cur.offsetTop;
+        var h = els.historyList.clientHeight;
+        if (top < els.historyList.scrollTop || top + cur.offsetHeight > els.historyList.scrollTop + h) {
+          els.historyList.scrollTop = Math.max(0, top - h / 2);
+        }
+      }
+    }
   }
 
   function updateHistoryUI() {
     if (!root) return;
     var undoBtn = root.querySelector('#raw-undo');
     var redoBtn = root.querySelector('#raw-redo');
-    if (undoBtn) undoBtn.disabled = !state.loaded || (!historyUndo.length && !historyTimer);
-    if (redoBtn) redoBtn.disabled = !state.loaded || !historyRedo.length;
+    if (undoBtn) undoBtn.disabled = !state.loaded || (historyIndex <= 0 && !historyTimer);
+    if (redoBtn) redoBtn.disabled = !state.loaded || !!historyTimer || historyIndex >= historyEntries.length - 1;
+    if (els.historySum) {
+      if (!historyEntries.length) els.historySum.textContent = '—';
+      else {
+        var current = historyEntries[historyIndex];
+        els.historySum.textContent = (historyTimer && historyPendingLabel ? historyPendingLabel + '…' : (current ? current.label : '—'));
+      }
+    }
   }
 
   function resetHistory() {
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = 0;
-    historyUndo = [];
-    historyRedo = [];
-    historyLast = state.loaded ? historySnapshot() : '';
+    historyPendingLabel = '';
+    historyEntries = [];
+    historyIndex = -1;
+    if (state.loaded) {
+      historyEntries.push({ label: '打开文件', snap: historySnapshot(), time: Date.now() });
+      historyIndex = 0;
+    }
+    renderHistoryPanel(true);
     updateHistoryUI();
   }
 
@@ -1898,21 +2261,32 @@
     historyTimer = 0;
     if (historySuspend || !state.loaded) return;
     var snap = historySnapshot();
-    if (!historyLast) {
-      historyLast = snap;
+    var current = historyEntries[historyIndex];
+    if (current && snap === current.snap) {
+      historyPendingLabel = '';
       updateHistoryUI();
       return;
     }
-    if (snap === historyLast) return;
-    historyUndo.push(historyLast);
-    if (historyUndo.length > 24) historyUndo.shift();
-    historyLast = snap;
-    historyRedo = [];
+    if (historyIndex >= 0) historyEntries = historyEntries.slice(0, historyIndex + 1);
+    var label = historyPendingLabel || '调整';
+    historyEntries.push({ label: label, snap: snap, time: Date.now() });
+    historyIndex = historyEntries.length - 1;
+    if (historyEntries.length > MAX_HISTORY) {
+      historyEntries.splice(0, historyEntries.length - MAX_HISTORY);
+      historyIndex = historyEntries.length - 1;
+    }
+    historyPendingLabel = '';
+    renderHistoryPanel(true);
     updateHistoryUI();
   }
 
-  function historyTouch() {
-    if (historySuspend || !state.loaded) return;
+  function historyTouch(label) {
+    if (label) markHistory(label);
+    if (historySuspend || !state.loaded || state.cropEditing) return;
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].dragMode) return;
+    }
+    if (!historyPendingLabel) historyPendingLabel = '调整';
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = setTimeout(historyCommit, 450);
     updateHistoryUI();
@@ -1921,6 +2295,7 @@
   function historyFlush() {
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = 0;
+    if (state.cropEditing) return;
     historyCommit();
   }
 
@@ -1931,6 +2306,7 @@
     historySuspend = true;
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = 0;
+    historyPendingLabel = '';
     state.adjust = Object.assign(defaultAdjust(), snap.adjust || {});
     state.curves = createCurves();
     CURVE_CHANNELS.forEach(function (ch) {
@@ -1940,14 +2316,30 @@
         });
       }
     });
+    state.paramCurve = defaultParamCurve();
+    if (snap.paramCurve) {
+      PARAM_CURVE.forEach(function (d) {
+        var value = Number(snap.paramCurve[d.key]);
+        if (isFinite(value)) state.paramCurve[d.key] = clamp(value, d.min, d.max);
+      });
+      normalizeParamSplits(state.paramCurve);
+    }
     state.curveChannel = state.curves[snap.curveChannel] ? snap.curveChannel : 'rgb';
     state.curveDragging = -1;
     state.before = false;
     state.curveLut = null;
+    state.geometry = cloneGeometry(snap.geometry);
+    state.cropEditing = false;
+    state.cropDrag = null;
+    state.cropRect = null;
+    if (els.cropOverlay) els.cropOverlay.hidden = true;
+    if (els.cropToggle) els.cropToggle.classList.remove('is-on');
+    var previousActiveId = state.activeMaskId;
     for (var i = 0; i < state.masks.length; i++) {
       if (renderer) renderer.clearMask(state.masks[i].id);
     }
     previewMaskCanvases = Object.create(null);
+    aiBaseCache = Object.create(null);
     state.masks = (snap.masks || []).map(function (m) {
       var id = String(m.id || ('mask-' + (++maskSeq)));
       var numeric = parseInt(id.replace(/^mask-/, ''), 10);
@@ -1955,9 +2347,9 @@
       return {
         id: id,
         name: m.name || id,
-        type: m.type === 'radial' || m.type === 'brush' || m.type === 'none' ? m.type : 'linear',
+        type: normalizeMaskType(m.type),
         enabled: m.enabled !== false,
-        show: !!m.show,
+        show: false,
         invert: !!m.invert,
         feather: clamp(Number(m.feather), 0, 1),
         p1: { x: clamp(Number(m.p1 && m.p1.x), 0, 1), y: clamp(Number(m.p1 && m.p1.y), 0, 1) },
@@ -1980,43 +2372,59 @@
         _moved: false
       };
     });
-    var active = state.masks.filter(function (m) { return m.id === snap.activeMaskId; })[0];
+    var active = state.masks.filter(function (m) { return m.id === previousActiveId; })[0];
     state.activeMaskId = active ? active.id : (state.masks[0] ? state.masks[0].id : null);
-    ADJUSTMENTS.forEach(function (d) {
+    ALL_ADJUSTMENTS.forEach(function (d) {
       var input = root.querySelector('[data-adj="' + d.key + '"]');
       if (input) input.value = String(state.adjust[d.key]);
     });
     updateAdjustOutputs();
+    updateParamCurveUI();
     updateBeforeLabel();
+    applyGeometrySource();
     updateCurveLut(false);
     updateMaskUI();
+    updateGeometryUI();
     refreshAllMaskTextures();
+    applyZoom();
+    updateFootRight();
     scheduleRender();
-    historyLast = serialized;
     historySuspend = false;
     updateHistoryUI();
   }
 
+  function restoreHistoryEntry(index, quiet) {
+    if (index < 0 || index >= historyEntries.length) return;
+    var entry = historyEntries[index];
+    historyIndex = index;
+    restoreHistory(entry.snap);
+    renderHistoryPanel(true);
+    updateHistoryUI();
+    if (!quiet) setStatus('已回到历史步骤：' + entry.label, 'ok');
+  }
+
   function undoHistory() {
     if (!state.loaded) return;
+    if (state.cropEditing) {
+      setStatus('请先应用或取消裁剪，再撤销调整。', 'warn');
+      return;
+    }
     historyFlush();
-    if (!historyUndo.length) return;
-    var current = historySnapshot();
-    var previous = historyUndo.pop();
-    historyRedo.push(current);
-    restoreHistory(previous);
-    setStatus('已撤销上一步调整。', 'ok');
+    if (historyIndex <= 0) return;
+    restoreHistoryEntry(historyIndex - 1, true);
+    setStatus('已撤销到：' + historyEntries[historyIndex].label, 'ok');
   }
 
   function redoHistory() {
     if (!state.loaded) return;
+    if (state.cropEditing) {
+      setStatus('请先应用或取消裁剪，再重做调整。', 'warn');
+      return;
+    }
     historyFlush();
-    if (!historyRedo.length) return;
-    var current = historySnapshot();
-    var next = historyRedo.pop();
-    historyUndo.push(current);
-    restoreHistory(next);
-    setStatus('已重做上一步调整。', 'ok');
+    if (historyIndex >= historyEntries.length - 1) return;
+    restoreHistoryEntry(historyIndex + 1, true);
+    setStatus('已重做到：' + historyEntries[historyIndex].label, 'ok');
   }
 
   function renderNow() {
@@ -2054,7 +2462,7 @@
    * ------------------------------------------------------------------ */
 
   function updateAdjustOutputs() {
-    ADJUSTMENTS.forEach(function (d) {
+    ALL_ADJUSTMENTS.forEach(function (d) {
       var out = root.querySelector('[data-out-adj="' + d.key + '"]');
       if (out) {
         out.textContent = fmtAdjust(d, state.adjust[d.key]);
@@ -2079,6 +2487,14 @@
       return Math.abs(state.adjust[d.key] - d.def) > 1e-9;
     }).length;
     if (els.adjSum) els.adjSum.textContent = count ? count + ' 项' : '0 项';
+    var lensCount = LENS.filter(function (d) {
+      return Math.abs(state.adjust[d.key] - d.def) > 1e-9;
+    }).length;
+    if (els.lensSum) els.lensSum.textContent = lensCount ? lensCount + ' 项' : '手动';
+    var detailCount = DETAIL.filter(function (d) {
+      return Math.abs(state.adjust[d.key] - d.def) > 1e-9;
+    }).length;
+    if (els.detailSum) els.detailSum.textContent = detailCount ? detailCount + ' 项' : '关闭';
   }
 
   function findDef(key, list) {
@@ -2087,7 +2503,7 @@
   }
 
   function setAdjustment(key, value, local, silent) {
-    var def = findDef(key, local ? LOCALS : ADJUSTMENTS);
+    var def = findDef(key, local ? LOCALS : ALL_ADJUSTMENTS);
     if (!def) return;
     var v = clamp(Number(value), def.min, def.max);
     var localMask = null;
@@ -2096,8 +2512,10 @@
       if (!localMask) localMask = addMask('linear');
       if (!localMask) return;
       localMask.local[key] = v;
+      markHistory(def.label + (localMask ? ' · ' + localMask.name : ''));
     } else {
       state.adjust[key] = v;
+      markHistory(def.label);
     }
     var input = root.querySelector('[data-' + (local ? 'local' : 'adj') + '="' + key + '"]');
     if (input && Number(input.value) !== v) input.value = v;
@@ -2108,7 +2526,7 @@
   }
 
   function resetAdjustment(key, local) {
-    var def = findDef(key, local ? LOCALS : ADJUSTMENTS);
+    var def = findDef(key, local ? LOCALS : ALL_ADJUSTMENTS);
     if (!def) return;
     setAdjustment(key, def.def, local);
   }
@@ -2252,6 +2670,25 @@
     }
     curveCtx.stroke();
 
+    // 参数曲线叠加后的实际曲线：仅 RGB 复合有精确定义，单通道视图不画以免误导。
+    if (!paramCurveIsIdentity() && activeKey === 'rgb') {
+      curveCtx.save();
+      curveCtx.globalAlpha = 0.62;
+      curveCtx.strokeStyle = activeInfo.curve;
+      curveCtx.lineWidth = Math.max(1, dpr * 1.2);
+      curveCtx.setLineDash([5 * dpr, 3.5 * dpr]);
+      curveCtx.beginPath();
+      for (var pi = 0; pi <= N; pi++) {
+        var pxc = pi / N;
+        var pyc = parametricEval(evaluate(pxc), state.paramCurve);
+        var ppc = curveToPx({ x: pxc, y: pyc });
+        if (pi === 0) curveCtx.moveTo(ppc.x, ppc.y);
+        else curveCtx.lineTo(ppc.x, ppc.y);
+      }
+      curveCtx.stroke();
+      curveCtx.restore();
+    }
+
     // 控制点
     var activePts = activeCurvePoints();
     for (var k = 0; k < activePts.length; k++) {
@@ -2324,10 +2761,47 @@
     return state.curves[state.curveChannel] || state.curves.rgb;
   }
 
-  // 先应用 RGB 复合曲线，再应用对应单通道曲线，生成 256×3 LUT（R/G/B 各一行）。
+  function normalizeParamSplits(p) {
+    p.shadowSplit = clamp(Number(p.shadowSplit), 0, 45);
+    p.midSplit = clamp(Number(p.midSplit), 25, 75);
+    p.highlightSplit = clamp(Number(p.highlightSplit), 55, 100);
+    if (p.shadowSplit > p.midSplit - 5) p.shadowSplit = Math.max(0, p.midSplit - 5);
+    if (p.highlightSplit < p.midSplit + 5) p.highlightSplit = Math.min(100, p.midSplit + 5);
+    return p;
+  }
+
+  function paramCurveIsIdentity(p) {
+    p = p || state.paramCurve;
+    return !p.highlights && !p.lights && !p.darks && !p.shadows;
+  }
+
+  // 四个亮度区间的余弦权重叠加；在两端收束，保证纯黑与纯白不被推开。
+  function parametricEval(x, p) {
+    if (paramCurveIsIdentity(p)) return x;
+    var bounds = [0, p.shadowSplit / 100, p.midSplit / 100, p.highlightSplit / 100, 1];
+    var values = [p.shadows, p.darks, p.lights, p.highlights];
+    var delta = 0;
+    var sum = 0;
+    for (var i = 0; i < 4; i++) {
+      var lo = bounds[i];
+      var hi = bounds[i + 1];
+      if (hi - lo < 0.001) continue;
+      var center = (lo + hi) / 2;
+      var half = Math.max(0.02, (hi - lo) * 0.75);
+      var d = Math.abs(x - center) / half;
+      var w = d >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * d);
+      sum += w;
+      delta += w * (values[i] / 100);
+    }
+    if (sum > 0) delta /= sum;
+    var taper = smoothstep(0, 0.035, x) * smoothstep(0, 0.035, 1 - x);
+    return clamp(x + delta * 0.24 * taper, 0, 1);
+  }
+
+  // 先应用 RGB 复合点曲线与参数曲线，再应用对应单通道点曲线，生成 256×3 LUT。
   function buildCurveLut() {
     var evaluators = {};
-    var identity = true;
+    var identity = paramCurveIsIdentity();
     for (var c = 0; c < CURVE_CHANNELS.length; c++) {
       var key = CURVE_CHANNELS[c].key;
       var pts = state.curves[key].slice().sort(function (a, b) { return a.x - b.x; });
@@ -2337,7 +2811,7 @@
     var lut = new Uint8Array(256 * 3 * 4);
     for (var i = 0; i < 256; i++) {
       var x = i / 255;
-      var comp = clamp(evaluators.rgb(x), 0, 1);
+      var comp = clamp(parametricEval(evaluators.rgb(x), state.paramCurve), 0, 1);
       var rv = Math.round(clamp(evaluators.r(comp), 0, 1) * 255);
       var gv = Math.round(clamp(evaluators.g(comp), 0, 1) * 255);
       var bv = Math.round(clamp(evaluators.b(comp), 0, 1) * 255);
@@ -2358,7 +2832,13 @@
   function updateCurveUI() {
     var info = channelInfo(state.curveChannel);
     var identity = curvePointsIdentity(activeCurvePoints());
-    if (els.curveSum) els.curveSum.textContent = info.label + ' · ' + (identity ? '线性' : '已调整');
+    var paramCount = ['highlights', 'lights', 'darks', 'shadows'].filter(function (k) {
+      return Math.abs(state.paramCurve[k]) > 1e-9;
+    }).length;
+    if (els.curveSum) {
+      var status = identity && !paramCount ? '线性' : (!identity && paramCount ? '点 + 参数' : (paramCount ? '参数 ' + paramCount : '已调整'));
+      els.curveSum.textContent = info.label + ' · ' + status;
+    }
     if (els.curveHint) {
       els.curveHint.textContent = info.label + ' 通道 · 先 RGB 复合再单通道 · 点击加点 / 拖动 / 双击删点';
     }
@@ -2369,6 +2849,39 @@
         b.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
     }
+  }
+
+  function updateParamCurveUI() {
+    if (!root) return;
+    PARAM_CURVE.forEach(function (d) {
+      var v = state.paramCurve[d.key];
+      var input = root.querySelector('[data-param="' + d.key + '"]');
+      var out = root.querySelector('[data-out-param="' + d.key + '"]');
+      if (input && Number(input.value) !== v) input.value = String(v);
+      if (out) {
+        out.textContent = fmtAdjust(d, v);
+        out.classList.toggle('is-set', Math.abs(v - d.def) > 1e-9);
+      }
+    });
+  }
+
+  function setParamCurve(key, value, silent) {
+    var def = findDef(key, PARAM_CURVE);
+    if (!def) return;
+    state.paramCurve[key] = clamp(Number(value), def.min, def.max);
+    normalizeParamSplits(state.paramCurve);
+    updateParamCurveUI();
+    markHistory('参数曲线 · ' + def.label);
+    restoreBaselineIfNeeded();
+    updateCurveLut(true);
+    if (silent) historyFlush();
+  }
+
+  function resetParamCurve() {
+    state.paramCurve = defaultParamCurve();
+    updateParamCurveUI();
+    markHistory('重置参数曲线');
+    updateCurveLut(true);
   }
 
   function updateCurveLut(doRender) {
@@ -2382,7 +2895,7 @@
     if (doRender !== false) scheduleRender();
   }
 
-  function setCurvePoints(points, channel) {
+  function setCurvePoints(points, channel, label) {
     channel = state.curves[channel] ? channel : state.curveChannel;
     var pts = (points || []).map(function (p) {
       return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) };
@@ -2390,6 +2903,7 @@
     if (!pts.length) pts = cloneCurvePoints(IDENTITY_CURVE);
     pts.sort(function (a, b) { return a.x - b.x; });
     state.curves[channel] = pts;
+    markHistory(label || (channelInfo(channel).label + ' 点曲线'));
     updateCurveLut(true);
   }
 
@@ -2410,6 +2924,7 @@
 
   function onCurveDown(e) {
     e.preventDefault();
+    markHistory(channelInfo(state.curveChannel).label + ' 点曲线');
     var p = curveEventPoint(e);
     var pts = activeCurvePoints();
     var best = -1;
@@ -2438,6 +2953,7 @@
   function onCurveMove(e) {
     if (state.curveDragging < 0) return;
     e.preventDefault();
+    markHistory(channelInfo(state.curveChannel).label + ' 点曲线');
     var p = curveEventPoint(e);
     var idx = state.curveDragging;
     var pts = activeCurvePoints();
@@ -2478,6 +2994,7 @@
     }
     if (best <= 0 || best >= pts.length - 1) return;
     pts.splice(best, 1);
+    markHistory(channelInfo(state.curveChannel).label + ' 删除曲线点');
     updateCurveLut(true);
   }
 
@@ -2491,14 +3008,516 @@
     } else {
       points = cloneCurvePoints(IDENTITY_CURVE);
     }
-    setCurvePoints(points, channel);
+    var presetLabel = name === 'soft' ? '柔和' : name === 'contrast' ? '强对比' : '线性';
+    setCurvePoints(points, channel, channelInfo(channel).label + ' 曲线 · ' + presetLabel);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 几何：旋转 / 镜像 / 拉直 / 裁剪
+   * ------------------------------------------------------------------ */
+
+  function normalizeMaskType(type) {
+    return type === 'radial' || type === 'brush' || type === 'none' ||
+      type === 'sky' || type === 'subject' ? type : 'linear';
+  }
+
+  function geometryIsIdentity(g) {
+    g = g || state.geometry;
+    return !g.rotate90 && !g.flipH && !g.flipV &&
+      Math.abs(g.angle) < 0.01 && !g.crop;
+  }
+
+  // 预览和导出共用同一条几何管线：旋转/镜像 → 拉直（自动放大防黑边）→ 裁剪。
+  function composeGeometry(source, geometry) {
+    var w = source.width;
+    var h = source.height;
+    if (!w || !h) return { canvas: source, w: w || 0, h: h || 0 };
+    var g = geometry || defaultGeometry();
+    var rot = (((Number(g.rotate90) || 0) % 4) + 4) % 4;
+    var oriented = source;
+    var ow = w;
+    var oh = h;
+    if (rot || g.flipH || g.flipV) {
+      var swap = rot % 2 === 1;
+      ow = swap ? h : w;
+      oh = swap ? w : h;
+      var oc = document.createElement('canvas');
+      oc.width = ow;
+      oc.height = oh;
+      var octx = oc.getContext('2d');
+      octx.save();
+      octx.translate(ow / 2, oh / 2);
+      octx.rotate(rot * Math.PI / 2);
+      octx.scale(g.flipH ? -1 : 1, g.flipV ? -1 : 1);
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = 'high';
+      octx.drawImage(source, -w / 2, -h / 2);
+      octx.restore();
+      oriented = oc;
+    }
+    var angle = clamp(Number(g.angle) || 0, -45, 45);
+    if (Math.abs(angle) > 0.001) {
+      var rad = angle * Math.PI / 180;
+      var c = Math.abs(Math.cos(rad));
+      var s = Math.abs(Math.sin(rad));
+      var cover = Math.max((ow * c + oh * s) / ow, (ow * s + oh * c) / oh);
+      var sc = document.createElement('canvas');
+      sc.width = ow;
+      sc.height = oh;
+      var sctx = sc.getContext('2d');
+      sctx.save();
+      sctx.translate(ow / 2, oh / 2);
+      sctx.rotate(rad);
+      sctx.scale(cover, cover);
+      sctx.imageSmoothingEnabled = true;
+      sctx.imageSmoothingQuality = 'high';
+      sctx.drawImage(oriented, -ow / 2, -oh / 2);
+      sctx.restore();
+      oriented = sc;
+    }
+    var crop = g.crop;
+    if (crop && crop.w > 0.001 && crop.h > 0.001) {
+      var cx = clamp(Number(crop.x) || 0, 0, 0.999);
+      var cy = clamp(Number(crop.y) || 0, 0, 0.999);
+      var cw = clamp(Number(crop.w) || 1, 0.001, 1 - cx);
+      var ch = clamp(Number(crop.h) || 1, 0.001, 1 - cy);
+      var sx = Math.round(cx * ow);
+      var sy = Math.round(cy * oh);
+      var sw = Math.max(1, Math.min(ow - sx, Math.round(cw * ow)));
+      var sh = Math.max(1, Math.min(oh - sy, Math.round(ch * oh)));
+      if (sx > 0 || sy > 0 || sw < ow || sh < oh) {
+        var cc = document.createElement('canvas');
+        cc.width = sw;
+        cc.height = sh;
+        var cctx = cc.getContext('2d');
+        cctx.imageSmoothingEnabled = true;
+        cctx.imageSmoothingQuality = 'high';
+        cctx.drawImage(oriented, sx, sy, sw, sh, 0, 0, sw, sh);
+        oriented = cc;
+      }
+    }
+    return { canvas: oriented, w: oriented.width, h: oriented.height };
+  }
+
+  function applyGeometrySource() {
+    if (!state.previewCanvas) return;
+    var composed = composeGeometry(state.previewCanvas, state.geometry);
+    state.renderSource = composed.canvas;
+    state.renderW = composed.w;
+    state.renderH = composed.h;
+    els.canvas.width = composed.w;
+    els.canvas.height = composed.h;
+    aiBaseCache = Object.create(null);
+    if (renderer) {
+      renderer.setSource(composed.canvas);
+      ensureCurveLut();
+    }
+  }
+
+  function rebuildRenderSource(opts) {
+    if (!state.previewCanvas) return;
+    applyGeometrySource();
+    if (opts && opts.fit) state.zoomMode = 'fit';
+    refreshAllMaskTextures(!!(opts && opts.deferSmart));
+    if (opts && opts.deferSmart) scheduleSmartMaskRefresh();
+    updateGeometryUI();
+    applyZoom();
+    if (state.cropEditing) {
+      els.cropOverlay.hidden = false;
+      syncCropOverlay();
+      updateCropBox();
+    }
+    scheduleRender();
+    updateFootRight();
+  }
+
+  function scheduleGeometryApply(label, fit) {
+    if (label) markHistory(label);
+    if (geometryRaf) return;
+    geometryRaf = requestAnimationFrame(function () {
+      geometryRaf = 0;
+      rebuildRenderSource({ fit: !!fit, deferSmart: true });
+    });
+  }
+
+  function scheduleSmartMaskRefresh() {
+    var hasSmart = false;
+    for (var i = 0; i < state.masks.length; i++) {
+      if (isSmartMaskType(state.masks[i].type)) { hasSmart = true; break; }
+    }
+    if (!hasSmart) return;
+    if (smartMaskTimer) clearTimeout(smartMaskTimer);
+    smartMaskTimer = setTimeout(function () {
+      smartMaskTimer = 0;
+      if (!state.preview) return;
+      for (var j = 0; j < state.masks.length; j++) {
+        if (isSmartMaskType(state.masks[j].type)) refreshMaskTexture(state.masks[j]);
+      }
+      scheduleRender();
+    }, 220);
+  }
+
+  function transformCropForRotate(crop, dir) {
+    if (!crop) return null;
+    var x = crop.x, y = crop.y, w = crop.w, h = crop.h;
+    if (dir > 0) return { x: 1 - (y + h), y: x, w: h, h: w };
+    return { x: y, y: 1 - (x + w), w: h, h: w };
+  }
+
+  function rotateGeometry(dir) {
+    if (!state.loaded || state.cropEditing) return;
+    historyFlush();
+    state.geometry.rotate90 = (((state.geometry.rotate90 + (dir > 0 ? 1 : -1)) % 4) + 4) % 4;
+    state.geometry.crop = transformCropForRotate(state.geometry.crop, dir);
+    markHistory(dir > 0 ? '向右旋转 90°' : '向左旋转 90°');
+    rebuildRenderSource({ fit: true });
+  }
+
+  function flipGeometry(axis) {
+    if (!state.loaded || state.cropEditing) return;
+    historyFlush();
+    var crop = state.geometry.crop;
+    if (axis === 'h') {
+      state.geometry.flipH = !state.geometry.flipH;
+      if (crop) state.geometry.crop = { x: 1 - (crop.x + crop.w), y: crop.y, w: crop.w, h: crop.h };
+    } else {
+      state.geometry.flipV = !state.geometry.flipV;
+      if (crop) state.geometry.crop = { x: crop.x, y: 1 - (crop.y + crop.h), w: crop.w, h: crop.h };
+    }
+    markHistory(axis === 'h' ? '水平镜像' : '垂直镜像');
+    rebuildRenderSource();
+  }
+
+  function setStraighten(value) {
+    if (!state.loaded || state.cropEditing) return;
+    var angle = clamp(Number(value), -45, 45);
+    state.geometry.angle = angle;
+    if (els.geoAngleV) els.geoAngleV.textContent = angle.toFixed(1) + '°';
+    if (els.geoAngle && Number(els.geoAngle.value) !== angle) els.geoAngle.value = String(angle);
+    markHistory(Math.abs(angle) < 0.01 ? '拉直归零' : '拉直 ' + angle.toFixed(1) + '°');
+    scheduleGeometryApply(null);
+  }
+
+  function resetGeometry() {
+    if (!state.loaded || state.cropEditing) return;
+    historyFlush();
+    state.geometry = defaultGeometry();
+    markHistory('重置几何');
+    rebuildRenderSource({ fit: true });
+  }
+
+  function updateGeometryUI() {
+    if (!root) return;
+    var g = state.geometry;
+    if (els.geoAngle) els.geoAngle.value = String(g.angle);
+    if (els.geoAngleV) els.geoAngleV.textContent = Number(g.angle).toFixed(1) + '°';
+    if (els.cropAspect) els.cropAspect.value = state.cropAspect;
+    if (els.geoSum) {
+      if (state.cropEditing) els.geoSum.textContent = '裁剪中';
+      else if (geometryIsIdentity(g)) els.geoSum.textContent = '原始';
+      else {
+        var parts = [];
+        if (g.rotate90) parts.push('旋转 ' + (g.rotate90 * 90) + '°');
+        if (g.flipH) parts.push('水平镜像');
+        if (g.flipV) parts.push('垂直镜像');
+        if (Math.abs(g.angle) > 0.01) parts.push('拉直 ' + Number(g.angle).toFixed(1) + '°');
+        if (g.crop) parts.push('已裁剪');
+        els.geoSum.textContent = parts.join(' · ');
+      }
+    }
+    if (els.geoNote) {
+      if (!state.loaded) {
+        els.geoNote.textContent = '拉直会自动放大以避免空白边缘；旋转或翻转后仍可继续裁剪。';
+      } else {
+        var dims = (state.renderW || 0) + ' × ' + (state.renderH || 0);
+        var note = '输出 ' + dims + ' px';
+        if (g.crop) note += ' · 裁剪 ' + Math.round(g.crop.w * 100) + '% × ' + Math.round(g.crop.h * 100) + '%';
+        if (Math.abs(g.angle) > 0.01) note += ' · 拉直已自动放大避免空白边缘';
+        if (state.cropEditing) note += ' · 拖动裁剪框后点击“应用裁剪”';
+        els.geoNote.textContent = note;
+      }
+    }
+    if (els.cropToggle) {
+      els.cropToggle.classList.toggle('is-on', state.cropEditing);
+      els.cropToggle.innerHTML = icon('crop') + (state.cropEditing ? '裁剪中' : '裁剪');
+    }
+    if (els.cropApplyRow) els.cropApplyRow.hidden = !state.cropEditing;
+  }
+
+  function syncCropOverlay() {
+    if (!state.cropEditing || !els.cropOverlay || !els.canvas || !els.drop) return;
+    var cr = els.canvas.getBoundingClientRect();
+    var dr = els.drop.getBoundingClientRect();
+    els.cropOverlay.style.left = Math.round(cr.left - dr.left + els.drop.scrollLeft) + 'px';
+    els.cropOverlay.style.top = Math.round(cr.top - dr.top + els.drop.scrollTop) + 'px';
+    els.cropOverlay.style.width = Math.round(cr.width) + 'px';
+    els.cropOverlay.style.height = Math.round(cr.height) + 'px';
+  }
+
+  function cropOverlayRatio() {
+    if (!els.cropOverlay) return 0;
+    var w = els.cropOverlay.clientWidth || 1;
+    var h = els.cropOverlay.clientHeight || 1;
+    return w / h;
+  }
+
+  function cropNormRatio() {
+    if (state.cropAspect === 'free') return 0;
+    if (state.cropAspect === 'original') return 1;
+    var aspect = CROP_ASPECTS[state.cropAspect] || 0;
+    return aspect ? cropOverlayRatio() / aspect : 0;
+  }
+
+  function clampCropRect(rect) {
+    var r = {
+      x: clamp(Number(rect.x) || 0, 0, 0.98),
+      y: clamp(Number(rect.y) || 0, 0, 0.98),
+      w: clamp(Number(rect.w) || 0.02, 0.02, 1),
+      h: clamp(Number(rect.h) || 0.02, 0.02, 1)
+    };
+    if (r.x + r.w > 1) r.w = 1 - r.x;
+    if (r.y + r.h > 1) r.h = 1 - r.y;
+    return r;
+  }
+
+  function fitCropToRatio(rect) {
+    var nr = cropNormRatio();
+    if (!nr) return clampCropRect(rect);
+    var w = Math.max(0.02, rect.w);
+    var h = w * nr;
+    if (h > rect.h) {
+      h = Math.max(0.02, rect.h);
+      w = h / nr;
+    }
+    var scale = Math.min(1, 0.94 / Math.max(0.0001, w), 0.94 / Math.max(0.0001, h));
+    w = Math.max(0.02, w * scale);
+    h = Math.max(0.02, h * scale);
+    var cx = clamp(rect.x + rect.w / 2, w / 2 + 0.02, 1 - w / 2 - 0.02);
+    var cy = clamp(rect.y + rect.h / 2, h / 2 + 0.02, 1 - h / 2 - 0.02);
+    return clampCropRect({ x: cx - w / 2, y: cy - h / 2, w: w, h: h });
+  }
+
+  function updateCropBox() {
+    if (!els.cropBox || !state.cropEditing) return;
+    var r = clampCropRect(state.cropRect || { x: 0, y: 0, w: 1, h: 1 });
+    state.cropRect = r;
+    els.cropBox.style.left = (r.x * 100).toFixed(3) + '%';
+    els.cropBox.style.top = (r.y * 100).toFixed(3) + '%';
+    els.cropBox.style.width = (r.w * 100).toFixed(3) + '%';
+    els.cropBox.style.height = (r.h * 100).toFixed(3) + '%';
+    els.cropBox.classList.toggle('is-ratio', !!cropNormRatio());
+    updateCropSize();
+  }
+
+  function updateCropSize() {
+    if (!els.cropSize || !state.cropRect) return;
+    var r = state.cropRect;
+    var pw = Math.max(1, Math.round((state.renderW || 0) * r.w));
+    var ph = Math.max(1, Math.round((state.renderH || 0) * r.h));
+    var ratioText = state.cropAspect === 'free' ? '' : ' · ' + state.cropAspect;
+    els.cropSize.textContent = pw + ' × ' + ph + ratioText;
+  }
+
+  function updateCropUI() {
+    if (!root) return;
+    if (els.cropOverlay) els.cropOverlay.hidden = !state.cropEditing;
+    if (state.cropEditing) {
+      els.cropOverlay.hidden = false;
+      syncCropOverlay();
+      updateCropBox();
+    }
+  }
+
+  function beginCropMode() {
+    if (!state.loaded) return;
+    if (state.cropEditing) { cancelCropMode(); return; }
+    historyFlush();
+    state.cropEditing = true;
+    state.cropBackup = state.geometry.crop ? Object.assign({}, state.geometry.crop) : null;
+    state.cropRect = state.cropBackup ? Object.assign({}, state.cropBackup) : { x: 0.07, y: 0.07, w: 0.86, h: 0.86 };
+    state.geometry.crop = null;
+    state.before = false;
+    updateBeforeLabel();
+    applyGeometrySource();
+    state.zoomMode = 'fit';
+    refreshAllMaskTextures();
+    updateGeometryUI();
+    applyZoom();
+    updateCropUI();
+    if (cropNormRatio()) {
+      state.cropRect = fitCropToRatio(state.cropRect);
+      updateCropBox();
+    }
+    scheduleRender();
+    setStatus('裁剪模式：拖动边角调整裁剪框，完成后点击“应用裁剪”。', '');
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches) {
+      var stage = root.querySelector('.raw-stage');
+      if (stage) setTimeout(function () { stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 40);
+    }
+  }
+
+  function applyCropMode() {
+    if (!state.cropEditing) return;
+    state.geometry.crop = clampCropRect(state.cropRect);
+    state.cropEditing = false;
+    state.cropDrag = null;
+    state.cropBackup = null;
+    state.cropRect = null;
+    updateCropUI();
+    markHistory('裁剪');
+    rebuildRenderSource({ fit: true });
+    setStatus('已应用裁剪：' + state.renderW + ' × ' + state.renderH + ' px。', 'ok');
+  }
+
+  function cancelCropMode() {
+    if (!state.cropEditing) return;
+    state.geometry.crop = state.cropBackup;
+    state.cropEditing = false;
+    state.cropDrag = null;
+    state.cropBackup = null;
+    state.cropRect = null;
+    updateCropUI();
+    rebuildRenderSource({ fit: true });
+    setStatus('已取消裁剪。', '');
+  }
+
+  function cropPointFromEvent(e) {
+    var rect = els.cropOverlay.getBoundingClientRect();
+    return {
+      x: clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1),
+      y: clamp((e.clientY - rect.top) / Math.max(1, rect.height), 0, 1)
+    };
+  }
+
+  function rectFromPoints(x0, y0, x1, y1, normRatio) {
+    var dx = x1 - x0;
+    var dy = y1 - y0;
+    var w = Math.abs(dx);
+    var h = Math.abs(dy);
+    if (normRatio > 0) {
+      if (w / Math.max(0.0001, h) < normRatio) w = h * normRatio;
+      else h = w / normRatio;
+      var maxW = dx >= 0 ? 1 - x0 : x0;
+      var maxH = dy >= 0 ? 1 - y0 : y0;
+      var k = Math.min(1, maxW / Math.max(0.0001, w), maxH / Math.max(0.0001, h));
+      w *= k;
+      h *= k;
+    }
+    return clampCropRect({
+      x: dx >= 0 ? x0 : x0 - w,
+      y: dy >= 0 ? y0 : y0 - h,
+      w: w,
+      h: h
+    });
+  }
+
+  function resizeCropRect(base, handle, dx, dy, normRatio) {
+    if (normRatio > 0 && (handle === 'n' || handle === 's' || handle === 'e' || handle === 'w')) {
+      return base;
+    }
+    if (normRatio > 0) {
+      var ax = handle.indexOf('w') >= 0 ? base.x + base.w : base.x;
+      var ay = handle.indexOf('n') >= 0 ? base.y + base.h : base.y;
+      var px = (handle.indexOf('w') >= 0 ? base.x : base.x + base.w) + dx;
+      var py = (handle.indexOf('n') >= 0 ? base.y : base.y + base.h) + dy;
+      var w = Math.abs(px - ax);
+      var h = Math.abs(py - ay);
+      if (w / Math.max(0.0001, h) < normRatio) w = h * normRatio;
+      else h = w / normRatio;
+      var signX = px >= ax ? 1 : -1;
+      var signY = py >= ay ? 1 : -1;
+      var maxW = signX > 0 ? 1 - ax : ax;
+      var maxH = signY > 0 ? 1 - ay : ay;
+      var k = Math.min(1, maxW / Math.max(0.0001, w), maxH / Math.max(0.0001, h));
+      w *= k;
+      h *= k;
+      return clampCropRect({
+        x: signX > 0 ? ax : ax - w,
+        y: signY > 0 ? ay : ay - h,
+        w: w,
+        h: h
+      });
+    }
+    var left = base.x;
+    var top = base.y;
+    var right = base.x + base.w;
+    var bottom = base.y + base.h;
+    if (handle.indexOf('w') >= 0) left = clamp(left + dx, 0, right - 0.02);
+    if (handle.indexOf('e') >= 0) right = clamp(right + dx, left + 0.02, 1);
+    if (handle.indexOf('n') >= 0) top = clamp(top + dy, 0, bottom - 0.02);
+    if (handle.indexOf('s') >= 0) bottom = clamp(bottom + dy, top + 0.02, 1);
+    return clampCropRect({ x: left, y: top, w: right - left, h: bottom - top });
+  }
+
+  function onCropPointerDown(e) {
+    if (!state.cropEditing) return;
+    e.preventDefault();
+    var p = cropPointFromEvent(e);
+    var handleEl = e.target.closest('[data-handle]');
+    var inBox = e.target.closest('[data-crop-box]');
+    var handle = handleEl ? handleEl.getAttribute('data-handle') : (inBox ? 'move' : 'new');
+    if (cropNormRatio() && (handle === 'n' || handle === 's' || handle === 'e' || handle === 'w')) return;
+    state.cropDrag = {
+      mode: handle,
+      sx: p.x,
+      sy: p.y,
+      rect: Object.assign({}, state.cropRect)
+    };
+    if (handle === 'new') {
+      state.cropRect = { x: p.x, y: p.y, w: 0.02, h: 0.02 };
+      updateCropBox();
+    }
+    try { els.cropOverlay.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  }
+
+  function onCropPointerMove(e) {
+    var drag = state.cropDrag;
+    if (!drag || !state.cropEditing) return;
+    e.preventDefault();
+    var p = cropPointFromEvent(e);
+    var dx = p.x - drag.sx;
+    var dy = p.y - drag.sy;
+    var nr = cropNormRatio();
+    if (drag.mode === 'move') {
+      state.cropRect = clampCropRect({
+        x: clamp(drag.rect.x + dx, 0, 1 - drag.rect.w),
+        y: clamp(drag.rect.y + dy, 0, 1 - drag.rect.h),
+        w: drag.rect.w,
+        h: drag.rect.h
+      });
+    } else if (drag.mode === 'new') {
+      state.cropRect = rectFromPoints(drag.sx, drag.sy, p.x, p.y, nr);
+    } else {
+      state.cropRect = resizeCropRect(drag.rect, drag.mode, dx, dy, nr);
+    }
+    updateCropBox();
+  }
+
+  function onCropPointerUp(e) {
+    if (!state.cropDrag) return;
+    state.cropDrag = null;
+    try { els.cropOverlay.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    if (!state.cropRect || state.cropRect.w < 0.025 || state.cropRect.h < 0.025) {
+      state.cropRect = { x: 0.07, y: 0.07, w: 0.86, h: 0.86 };
+      if (cropNormRatio()) state.cropRect = fitCropToRatio(state.cropRect);
+    }
+    updateCropBox();
+  }
+
+  function setCropAspect(value) {
+    state.cropAspect = CROP_ASPECTS.hasOwnProperty(value) ? value : 'free';
+    if (state.cropEditing) {
+      state.cropRect = fitCropToRatio(state.cropRect);
+      updateCropBox();
+    }
+    updateGeometryUI();
   }
 
   /* ------------------------------------------------------------------ *
    * 蒙版
    * ------------------------------------------------------------------ */
 
-  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔' };
+  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: '智能天空', subject: '智能主体' };
 
   function activeMask() {
     for (var i = 0; i < state.masks.length; i++) {
@@ -2601,8 +3620,9 @@
       els.maskFeather.value = '0';
       els.maskFeatherV.textContent = '0';
     }
-    els.brushRow.hidden = !mask || mask.type !== 'brush';
-    if (els.brushExtra) els.brushExtra.hidden = !mask || mask.type !== 'brush';
+    var textured = !!mask && isTexturedMaskType(mask.type);
+    els.brushRow.hidden = !textured;
+    if (els.brushExtra) els.brushExtra.hidden = !textured;
     if (els.brushMode) {
       els.brushMode.querySelectorAll('button').forEach(function (b) {
         var on = !!mask && b.getAttribute('data-brush-mode') === (mask.brushMode || 'add');
@@ -2614,18 +3634,28 @@
       els.brushSize.value = String(mask.brushPct);
       els.brushSizeV.textContent = mask.brushPct + '%';
       var undoStroke = root.querySelector('[data-act="mask-undo-stroke"]');
-      if (undoStroke) undoStroke.disabled = mask.type !== 'brush' || !mask.strokes.length;
+      if (undoStroke) undoStroke.disabled = !textured || !mask.strokes.length;
     }
-    els.canvas.classList.toggle('is-masking', hasMask && mask.enabled);
+    if (els.maskAI) els.maskAI.hidden = !mask || !isSmartMaskType(mask.type);
+    var clearBtn = root.querySelector('[data-act="mask-clear"]');
+    if (clearBtn) {
+      clearBtn.textContent = isSmartMaskType(mask && mask.type) ? '清除笔画' :
+        isTexturedMaskType(mask && mask.type) ? '清除笔画 / 范围' : '清除范围';
+    }
+    els.canvas.classList.toggle('is-masking', hasMask && mask.enabled && !state.cropEditing);
     els.maskNote.classList.toggle('is-empty', !hasMask);
     if (!mask) {
       els.maskNote.innerHTML = '尚未添加蒙版。点击“添加蒙版”后可在预览画面上拖动定义范围，局部调整只作用于蒙版内。';
     } else if (!hasMask) {
-      els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向或画笔后即可在画面上绘制范围。';
+      els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向、画笔或智能识别后即可建立范围。';
     } else if (mask.type === 'linear') {
       els.maskNote.innerHTML = '<b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；多个蒙版按列表顺序叠加。';
     } else if (mask.type === 'radial') {
       els.maskNote.innerHTML = '<b>径向渐变</b>：从中心向外拖动改变椭圆范围；勾选“显示蒙版”可检查当前活动蒙版的覆盖区域。';
+    } else if (mask.type === 'sky') {
+      els.maskNote.innerHTML = '<b>智能天空</b>：在浏览器内按颜色与顶部连通区域识别，人物/建筑边缘可能需用画笔修整。勾选“显示蒙版”检查覆盖，必要时点“重新识别”。';
+    } else if (mask.type === 'subject') {
+      els.maskNote.innerHTML = '<b>智能主体</b>：按中心构图、边缘色差与显著性识别主体，复杂背景可能需要画笔补充或擦除。全部计算在本机完成。';
     } else {
       els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，可调画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
     }
@@ -2641,31 +3671,40 @@
       addMask(type);
       return;
     }
+    type = normalizeMaskType(type);
     if (type === mask.type) return;
-    if (mask.type === 'brush' && type !== 'brush') {
+    if (isTexturedMaskType(mask.type)) {
       if (renderer) renderer.clearMask(mask.id);
       delete previewMaskCanvases[mask.id];
+      clearAIBaseForMask(mask.id);
     }
     mask.type = type;
     mask.show = false;
     mask.current = null;
     mask.dragMode = '';
+    mask.strokes = [];
     if (type === 'linear') {
-      var lg = defaultGeometry('linear');
+      var lg = maskGeometryDefaults('linear');
       mask.p1 = lg.p1;
       mask.p2 = lg.p2;
       mask.feather = 0.45;
     } else if (type === 'radial') {
-      var rg = defaultGeometry('radial');
+      var rg = maskGeometryDefaults('radial');
       mask.p1 = rg.p1;
       mask.p2 = rg.p2;
       mask.feather = 0.45;
     } else if (type === 'brush') {
       mask.feather = 0.35;
+    } else if (isSmartMaskType(type)) {
+      mask.feather = 0.3;
+      mask.show = true;
     }
+    markHistory('切换蒙版类型 · ' + maskTypeLabel(type));
     updateMaskUI();
+    updateAdjustOutputs();
     restoreBaselineIfNeeded();
-    if (type === 'brush') scheduleMaskBuild(mask);
+    if (isSmartMaskType(type)) identifySmartMask(mask, true);
+    else if (type === 'brush') scheduleMaskBuild(mask);
     else scheduleRender();
     dispatch('raw:mask', { type: type, id: mask.id });
   }
@@ -2680,23 +3719,25 @@
 
   function undoMaskStroke() {
     var mask = activeMask();
-    if (!mask || mask.type !== 'brush' || !mask.strokes.length) return;
+    if (!mask || !isTexturedMaskType(mask.type) || !mask.strokes.length) return;
     mask.strokes.pop();
     mask.current = null;
+    markHistory('撤销蒙版笔画');
     updateMaskUI();
     scheduleMaskBuild(mask);
     scheduleRender();
-    setStatus('已撤销一笔画笔。', 'ok');
+    setStatus('已撤销一笔蒙版画笔。', 'ok');
   }
 
   function clearMaskRange() {
     var mask = activeMask();
     if (!mask) return;
+    markHistory('清除蒙版范围');
     if (mask.type === 'linear' || mask.type === 'radial') {
-      var geo = defaultGeometry(mask.type);
+      var geo = maskGeometryDefaults(mask.type);
       mask.p1 = geo.p1;
       mask.p2 = geo.p2;
-    } else if (mask.type === 'brush') {
+    } else if (isTexturedMaskType(mask.type)) {
       mask.strokes = [];
       mask.current = null;
       scheduleMaskBuild(mask);
@@ -2711,13 +3752,16 @@
       return null;
     }
     var mask = createMask(type || 'linear', opts);
+    if (isSmartMaskType(mask.type)) mask.show = true;
     state.masks.push(mask);
     state.activeMaskId = mask.id;
     if (!silent) {
+      markHistory('添加' + maskTypeLabel(mask.type) + '蒙版');
       updateMaskUI();
       updateAdjustOutputs();
       restoreBaselineIfNeeded();
-      if (mask.type === 'brush') scheduleMaskBuild(mask);
+      if (isSmartMaskType(mask.type)) identifySmartMask(mask, true);
+      else if (mask.type === 'brush') scheduleMaskBuild(mask);
       else scheduleRender();
       dispatch('raw:masks', { action: 'add', id: mask.id, count: state.masks.length });
     }
@@ -2735,6 +3779,7 @@
       return null;
     }
     var copy = createMask(src.type);
+    copy.name = src.name + ' 副本';
     copy.enabled = src.enabled;
     copy.show = src.show;
     copy.invert = src.invert;
@@ -2747,16 +3792,19 @@
     copy.strokes = src.strokes.map(function (stroke) {
       return {
         radius: stroke.radius,
+        mode: stroke.mode || 'add',
         points: (stroke.points || []).map(function (p) { return { x: p.x, y: p.y }; })
       };
     });
     var idx = state.masks.indexOf(src);
     state.masks.splice(idx + 1, 0, copy);
     state.activeMaskId = copy.id;
+    markHistory('复制蒙版');
     updateMaskUI();
     updateAdjustOutputs();
     restoreBaselineIfNeeded();
-    if (copy.type === 'brush') scheduleMaskBuild(copy);
+    if (isSmartMaskType(copy.type)) identifySmartMask(copy, false);
+    else if (copy.type === 'brush') scheduleMaskBuild(copy);
     else scheduleRender();
     dispatch('raw:masks', { action: 'duplicate', id: copy.id, count: state.masks.length });
     return copy;
@@ -2768,10 +3816,12 @@
       var removed = state.masks.splice(i, 1)[0];
       if (renderer) renderer.clearMask(removed.id);
       delete previewMaskCanvases[removed.id];
+      clearAIBaseForMask(removed.id);
       if (state.activeMaskId === removed.id) {
         var next = state.masks[Math.min(i, state.masks.length - 1)];
         state.activeMaskId = next ? next.id : null;
       }
+      markHistory('删除蒙版');
       updateMaskUI();
       updateAdjustOutputs();
       restoreBaselineIfNeeded();
@@ -2802,13 +3852,379 @@
     var mask = findMaskById(id);
     if (!mask) return;
     mask.enabled = !!enabled;
+    markHistory(mask.enabled ? '启用蒙版' : '停用蒙版');
     updateMaskUI();
     updateAdjustOutputs();
     scheduleRender();
     dispatch('raw:masks', { action: 'enabled', id: mask.id, enabled: mask.enabled, count: state.masks.length });
   }
 
-  function buildMaskCanvas(mask, targetWidth, srcW, srcH, reuse) {
+  function clearAIBaseForMask(id) {
+    var prefix = String(id) + ':';
+    Object.keys(aiBaseCache).forEach(function (key) {
+      if (key.indexOf(prefix) === 0) delete aiBaseCache[key];
+    });
+  }
+
+  function analysisCanvas(source, maxEdge) {
+    var scale = Math.min(1, maxEdge / Math.max(1, source.width, source.height));
+    var w = Math.max(24, Math.round(source.width * scale));
+    var h = Math.max(24, Math.round(source.height * scale));
+    var c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(source, 0, 0, w, h);
+    return { w: w, h: h, data: ctx.getImageData(0, 0, w, h).data };
+  }
+
+  function maskCanvasFromBinary(binary, w, h, targetWidth, coverage) {
+    var small = document.createElement('canvas');
+    small.width = w;
+    small.height = h;
+    var sctx = small.getContext('2d');
+    var img = sctx.createImageData(w, h);
+    for (var i = 0; i < binary.length; i++) {
+      var v = binary[i] ? 255 : 0;
+      var o = i * 4;
+      img.data[o] = v;
+      img.data[o + 1] = v;
+      img.data[o + 2] = v;
+      img.data[o + 3] = 255;
+    }
+    sctx.putImageData(img, 0, 0);
+    var outW = Math.max(64, Math.min(1024, Math.round(targetWidth)));
+    var outH = Math.max(1, Math.round(outW * h / w));
+    var out = document.createElement('canvas');
+    out.width = outW;
+    out.height = outH;
+    var ctx = out.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    try { ctx.filter = 'blur(' + Math.max(1, outW / 420).toFixed(2) + 'px)'; } catch (e) { /* ignore */ }
+    ctx.drawImage(small, 0, 0, outW, outH);
+    try { ctx.filter = 'none'; } catch (e2) { /* ignore */ }
+    return { canvas: out, coverage: coverage || 0 };
+  }
+
+  // 本地天空识别：颜色评分 + 顶部连通域，避免把蓝色衣服等孤立区域当成天空。
+  function detectSkyBase(source, targetWidth) {
+    var a = analysisCanvas(source, 256);
+    var w = a.w;
+    var h = a.h;
+    var data = a.data;
+    var n = w * h;
+    var bin = new Uint8Array(n);
+    var score = new Float32Array(n);
+    for (var y = 0; y < h; y++) {
+      var top = 1 - y / Math.max(1, h - 1);
+      for (var x = 0; x < w; x++) {
+        var i = y * w + x;
+        var o = i * 4;
+        var r = data[o] / 255;
+        var g = data[o + 1] / 255;
+        var b = data[o + 2] / 255;
+        var l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        var mx = Math.max(r, g, b);
+        var mn = Math.min(r, g, b);
+        var sat = (mx - mn) / Math.max(0.0001, mx);
+        var blueness = b - (r + g) / 2;
+        var blueSky = smoothstep(0.0, 0.08, blueness);
+        var paleSky = smoothstep(0.28, 0.68, l) * (1 - smoothstep(0.28, 0.6, sat));
+        var value = Math.max(blueSky * 0.95, paleSky * 0.9);
+        if (g > b + 0.02 && sat > 0.2) value *= 0.35;
+        var prior = 0.28 + 0.72 * smoothstep(0.05, 0.65, top);
+        value *= prior;
+        score[i] = value;
+        if (value >= 0.26) bin[i] = 1;
+      }
+    }
+    var seen = new Uint8Array(n);
+    var keep = new Uint8Array(n);
+    var stack = new Int32Array(n);
+    var keptArea = 0;
+    for (var start = 0; start < n; start++) {
+      if (!bin[start] || seen[start]) continue;
+      var sp = 0;
+      stack[sp++] = start;
+      seen[start] = 1;
+      var pixels = [];
+      var minY = h;
+      while (sp > 0) {
+        var cur = stack[--sp];
+        pixels.push(cur);
+        var cy = Math.floor(cur / w);
+        if (cy < minY) minY = cy;
+        var cx = cur % w;
+        var neighbors = [cur - 1, cur + 1, cur - w, cur + w];
+        for (var k = 0; k < 4; k++) {
+          var nb = neighbors[k];
+          if (k === 0 && cx === 0) continue;
+          if (k === 1 && cx === w - 1) continue;
+          if (nb < 0 || nb >= n || seen[nb] || !bin[nb]) continue;
+          seen[nb] = 1;
+          stack[sp++] = nb;
+        }
+      }
+      var area = pixels.length;
+      if (minY <= Math.max(2, Math.round(h * 0.12)) && area >= n * 0.002) {
+        for (var q = 0; q < pixels.length; q++) keep[pixels[q]] = 1;
+        keptArea += area;
+      }
+    }
+    var coverage = keptArea / n;
+    return maskCanvasFromBinary(keep, w, h, targetWidth, coverage);
+  }
+
+  // 本地主体识别：以画面中心、与边缘背景的色差、饱和度和局部边缘作显著性评分。
+  function fillMaskHoles(bin, w, h) {
+    var n = w * h;
+    var outside = new Uint8Array(n);
+    var stack = new Int32Array(n);
+    var sp = 0;
+    function push(i) {
+      if (i < 0 || i >= n || outside[i] || bin[i]) return;
+      outside[i] = 1;
+      stack[sp++] = i;
+    }
+    for (var x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+    for (var y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+    while (sp > 0) {
+      var cur = stack[--sp];
+      push(cur - 1);
+      push(cur + 1);
+      push(cur - w);
+      push(cur + w);
+    }
+    var keep = new Uint8Array(n);
+    for (var i = 0; i < n; i++) keep[i] = (bin[i] || !outside[i]) ? 1 : 0;
+    return keep;
+  }
+
+  // 本地主体识别：边缘背景色聚类 + 中心/显著性/边缘密度评分，再做连通域与填洞。
+  function detectSubjectBase(source, targetWidth) {
+    var a = analysisCanvas(source, 256);
+    var w = a.w;
+    var h = a.h;
+    var data = a.data;
+    var n = w * h;
+    var lums = new Float32Array(n);
+    var i, x, y, o;
+    for (i = 0; i < n; i++) {
+      o = i * 4;
+      lums[i] = (0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]) / 255;
+    }
+    // 从画面四边采样背景，做 4 类颜色聚类（天空、地面、山体、深色边缘等）。
+    var border = Math.max(3, Math.round(Math.min(w, h) * 0.04));
+    var samples = [];
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        if (x >= border && x < w - border && y >= border && y < h - border) continue;
+        o = (y * w + x) * 4;
+        samples.push({
+          r: data[o] / 255,
+          g: data[o + 1] / 255,
+          b: data[o + 2] / 255,
+          l: lums[y * w + x]
+        });
+      }
+    }
+    samples.sort(function (p1, p2) { return p1.l - p2.l; });
+    var k = 4;
+    var centroids = [];
+    for (var ci = 0; ci < k; ci++) {
+      var sample = samples[Math.min(samples.length - 1, Math.round((ci + 0.5) / k * samples.length))] ||
+        { r: 0.5, g: 0.5, b: 0.5 };
+      centroids.push([sample.r, sample.g, sample.b]);
+    }
+    for (var it = 0; it < 10; it++) {
+      var sums = [];
+      for (var kk = 0; kk < k; kk++) sums.push([0, 0, 0, 0]);
+      for (var si = 0; si < samples.length; si++) {
+        var sp2 = samples[si];
+        var best = 0;
+        var bestD = Infinity;
+        for (var cj = 0; cj < k; cj++) {
+          var dd = Math.pow(sp2.r - centroids[cj][0], 2) +
+            Math.pow(sp2.g - centroids[cj][1], 2) + Math.pow(sp2.b - centroids[cj][2], 2);
+          if (dd < bestD) { bestD = dd; best = cj; }
+        }
+        sums[best][0] += sp2.r;
+        sums[best][1] += sp2.g;
+        sums[best][2] += sp2.b;
+        sums[best][3]++;
+      }
+      for (var ck = 0; ck < k; ck++) {
+        if (!sums[ck][3]) continue;
+        centroids[ck][0] = sums[ck][0] / sums[ck][3];
+        centroids[ck][1] = sums[ck][1] / sums[ck][3];
+        centroids[ck][2] = sums[ck][2] / sums[ck][3];
+      }
+    }
+    var bgDist = new Float32Array(n);
+    for (i = 0; i < n; i++) {
+      o = i * 4;
+      var r = data[o] / 255;
+      var g = data[o + 1] / 255;
+      var b = data[o + 2] / 255;
+      var minD = Infinity;
+      for (var cq = 0; cq < k; cq++) {
+        var d2 = Math.pow(r - centroids[cq][0], 2) +
+          Math.pow(g - centroids[cq][1], 2) + Math.pow(b - centroids[cq][2], 2);
+        if (d2 < minD) minD = d2;
+      }
+      bgDist[i] = Math.sqrt(minD);
+    }
+    // 5×5 邻域边缘密度，用来区分有细节的主体与平滑的天空/虚化背景。
+    var edge = new Float32Array(n);
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        i = y * w + x;
+        if (x > 0 && y > 0) {
+          edge[i] = Math.abs(lums[i] - lums[i - 1]) + Math.abs(lums[i] - lums[i - w]);
+        }
+      }
+    }
+    var edgeDensity = new Float32Array(n);
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        var sum = 0;
+        var cnt = 0;
+        for (var oy = -2; oy <= 2; oy++) {
+          for (var ox = -2; ox <= 2; ox++) {
+            var yy = y + oy;
+            var xx = x + ox;
+            if (yy < 0 || yy >= h || xx < 0 || xx >= w) continue;
+            sum += edge[yy * w + xx];
+            cnt++;
+          }
+        }
+        edgeDensity[y * w + x] = sum / Math.max(1, cnt);
+      }
+    }
+    var scores = new Float32Array(n);
+    for (i = 0; i < n; i++) {
+      var px = (i % w) / Math.max(1, w - 1);
+      var py = Math.floor(i / w) / Math.max(1, h - 1);
+      var center = Math.exp(-0.5 * (Math.pow((px - 0.5) / 0.32, 2) + Math.pow((py - 0.5) / 0.4, 2)));
+      o = i * 4;
+      var mx = Math.max(data[o], data[o + 1], data[o + 2]) / 255;
+      var mn = Math.min(data[o], data[o + 1], data[o + 2]) / 255;
+      var sat = (mx - mn) / Math.max(0.0001, mx);
+      scores[i] = 0.14 * center +
+        0.52 * Math.min(1, bgDist[i] / 0.42) +
+        0.12 * Math.min(1, sat / 0.6) +
+        0.22 * Math.min(1, edgeDensity[i] / 0.09);
+    }
+    var hist = new Uint32Array(101);
+    for (var hi = 0; hi < n; hi++) hist[clamp(Math.round(scores[hi] * 100), 0, 100)]++;
+    var targetCount = Math.round(n * 0.78);
+    var acc = 0;
+    var thresholdBin = 30;
+    for (var hb = 0; hb <= 100; hb++) {
+      acc += hist[hb];
+      if (acc >= targetCount) { thresholdBin = hb; break; }
+    }
+    var threshold = clamp(thresholdBin / 100, 0.28, 0.6);
+    var bin = new Uint8Array(n);
+    for (var bi = 0; bi < n; bi++) if (scores[bi] >= threshold) bin[bi] = 1;
+    var filled = fillMaskHoles(bin, w, h);
+    var seen = new Uint8Array(n);
+    var stack = new Int32Array(n);
+    var bestPixels = null;
+    var bestArea = 0;
+    for (var start = 0; start < n; start++) {
+      if (!filled[start] || seen[start]) continue;
+      var sp = 0;
+      stack[sp++] = start;
+      seen[start] = 1;
+      var pixels = [];
+      var cxSum = 0;
+      var cySum = 0;
+      while (sp > 0) {
+        var cur = stack[--sp];
+        pixels.push(cur);
+        cxSum += cur % w;
+        cySum += Math.floor(cur / w);
+        var cx = cur % w;
+        var neighbors = [cur - 1, cur + 1, cur - w, cur + w];
+        for (var nbk = 0; nbk < 4; nbk++) {
+          var nb = neighbors[nbk];
+          if (nbk === 0 && cx === 0) continue;
+          if (nbk === 1 && cx === w - 1) continue;
+          if (nb < 0 || nb >= n || seen[nb] || !filled[nb]) continue;
+          seen[nb] = 1;
+          stack[sp++] = nb;
+        }
+      }
+      var area = pixels.length;
+      var cxNorm = (cxSum / Math.max(1, area)) / w;
+      var cyNorm = (cySum / Math.max(1, area)) / h;
+      var central = cxNorm > 0.12 && cxNorm < 0.88 && cyNorm > 0.08 && cyNorm < 0.95;
+      var weighted = area * (central ? 1 : 0.4);
+      if (weighted > bestArea) { bestArea = weighted; bestPixels = pixels; }
+    }
+    var keep = new Uint8Array(n);
+    var keptArea = 0;
+    if (bestPixels && bestPixels.length >= n * 0.003) {
+      for (var bp = 0; bp < bestPixels.length; bp++) keep[bestPixels[bp]] = 1;
+      keptArea = bestPixels.length;
+    } else {
+      // 没有可靠的连通区域时退回中心椭圆，用户仍可用画笔修整。
+      for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+          var ex = (x / Math.max(1, w - 1) - 0.5) / 0.3;
+          var ey = (y / Math.max(1, h - 1) - 0.56) / 0.42;
+          if (ex * ex + ey * ey <= 1) {
+            keep[y * w + x] = 1;
+            keptArea++;
+          }
+        }
+      }
+    }
+    return maskCanvasFromBinary(keep, w, h, targetWidth, keptArea / n);
+  }
+
+  function getSmartBase(mask, targetWidth, srcW, srcH, sourceCanvas, force) {
+    var source = sourceCanvas || state.renderSource;
+    if (!source) return null;
+    var key = mask.id + ':' + Math.round(targetWidth) + ':' + source.width + 'x' + source.height;
+    if (!force && aiBaseCache[key]) return aiBaseCache[key];
+    var base = mask.type === 'sky'
+      ? detectSkyBase(source, targetWidth)
+      : detectSubjectBase(source, targetWidth);
+    aiBaseCache[key] = base;
+    return base;
+  }
+
+  function identifySmartMask(mask, show) {
+    if (!mask || !isSmartMaskType(mask.type) || !state.renderSource) return;
+    clearAIBaseForMask(mask.id);
+    var base = getSmartBase(mask, MASK_PREVIEW_WIDTH, state.renderW, state.renderH, state.renderSource, true);
+    if (show) mask.show = true;
+    if (mask.show) {
+      for (var i = 0; i < state.masks.length; i++) {
+        if (state.masks[i] !== mask) state.masks[i].show = false;
+      }
+    }
+    refreshMaskTexture(mask);
+    markHistory('识别' + maskTypeLabel(mask.type) + '蒙版');
+    updateMaskUI();
+    scheduleRender();
+    var coverage = base ? Math.round(base.coverage * 1000) / 10 : 0;
+    if (coverage >= 0.2) {
+      setStatus('已生成' + maskTypeLabel(mask.type) + '蒙版，覆盖约 ' + coverage +
+        '%。可用画笔补充或擦除，并调节羽化与局部参数。', 'ok');
+    } else {
+      setStatus('未识别到明显的' + (mask.type === 'sky' ? '天空' : '主体') +
+        '。可换一张照片，或改用画笔手动建立范围。', 'warn');
+    }
+    dispatch('raw:mask-ai', { id: mask.id, type: mask.type, coverage: coverage / 100 });
+  }
+
+  function buildMaskCanvas(mask, targetWidth, srcW, srcH, reuse, sourceCanvas) {
     if (!mask) return null;
     var w = Math.max(64, Math.min(2048, Math.round(targetWidth)));
     var h = Math.max(1, Math.round(w * (srcH / Math.max(1, srcW))));
@@ -2821,7 +4237,11 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
-    if (mask.type !== 'brush') return canvas;
+    if (!isTexturedMaskType(mask.type)) return canvas;
+    if (isSmartMaskType(mask.type)) {
+      var base = getSmartBase(mask, w, srcW, srcH, sourceCanvas || state.renderSource, false);
+      if (base && base.canvas) ctx.drawImage(base.canvas, 0, 0, w, h);
+    }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (var i = 0; i < mask.strokes.length; i++) {
@@ -2857,10 +4277,12 @@
     return canvas;
   }
 
-  function refreshMaskTexture(mask) {
+  function refreshMaskTexture(mask, skipSmart) {
     if (!renderer || !state.preview || !mask) return;
-    if (mask.type === 'brush') {
-      var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.preview.w, state.preview.h, previewMaskCanvases[mask.id]);
+    if (skipSmart && isSmartMaskType(mask.type)) return;
+    if (isTexturedMaskType(mask.type)) {
+      var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.renderW || state.preview.w,
+        state.renderH || state.preview.h, previewMaskCanvases[mask.id], state.renderSource);
       previewMaskCanvases[mask.id] = c;
       renderer.setMask(mask.id, c);
     } else {
@@ -2869,14 +4291,18 @@
     }
   }
 
-  function refreshAllMaskTextures() {
+  function refreshAllMaskTextures(skipSmart) {
     if (!renderer || !state.preview) return;
-    for (var i = 0; i < state.masks.length; i++) refreshMaskTexture(state.masks[i]);
+    if (!skipSmart && smartMaskTimer) {
+      clearTimeout(smartMaskTimer);
+      smartMaskTimer = 0;
+    }
+    for (var i = 0; i < state.masks.length; i++) refreshMaskTexture(state.masks[i], skipSmart);
   }
 
   function scheduleMaskBuild(mask) {
     mask = mask || activeMask();
-    if (!mask || mask.type !== 'brush') return;
+    if (!mask || !isTexturedMaskType(mask.type)) return;
     maskBuildQueue[mask.id] = true;
     if (maskBuildRaf) return;
     maskBuildRaf = true;
@@ -2902,11 +4328,11 @@
 
   function onCanvasPointerDown(e) {
     var mask = activeMask();
-    if (!state.loaded || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
+    if (!state.loaded || state.cropEditing || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
     e.preventDefault();
     var uv = canvasUV(e);
     try { els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-    if (mask.type === 'brush') {
+    if (isTexturedMaskType(mask.type)) {
       mask.current = {
         points: [uv],
         radius: Math.max(0.005, mask.brushPct / 200),
@@ -2914,16 +4340,19 @@
       };
       mask.strokes.push(mask.current);
       mask.dragMode = 'brush';
+      markHistory(mask.type === 'brush' ? '画笔涂抹' : '修整' + maskTypeLabel(mask.type) + '蒙版');
       scheduleMaskBuild(mask);
     } else if (mask.type === 'linear') {
       mask.dragMode = 'linear';
       mask._start = uv;
       mask._moved = false;
+      markHistory('调整线性蒙版');
     } else if (mask.type === 'radial') {
       mask.dragMode = 'radial';
       mask._start = uv;
       mask._moved = false;
       mask.p1 = uv;
+      markHistory('调整径向蒙版');
     }
   }
 
@@ -2967,6 +4396,7 @@
     if (mask.dragMode === 'brush') {
       mask.current = null;
       scheduleMaskBuild(mask);
+      historyTouch(mask.type === 'brush' ? '画笔涂抹' : '修整' + maskTypeLabel(mask.type) + '蒙版');
     } else if (mask.dragMode === 'radial' && !mask._moved) {
       mask.p2 = { x: 0.28, y: 0.28 };
       scheduleRender();
@@ -2974,6 +4404,7 @@
     mask.dragMode = '';
     mask._start = null;
     updateMaskUI();
+    if (mask.type === 'linear' || mask.type === 'radial') historyTouch('调整蒙版范围');
     try { els.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   }
 
@@ -2983,8 +4414,8 @@
 
   function applyZoom() {
     if (!state.preview || !els.canvas) return;
-    var w = state.preview.w;
-    var h = state.preview.h;
+    var w = state.renderW || state.preview.w;
+    var h = state.renderH || state.preview.h;
     var scale;
     if (state.zoomMode === 'fit') {
       var availW = Math.max(80, els.drop.clientWidth - 30);
@@ -2999,6 +4430,7 @@
     var pct = Math.round(scale * 100);
     els.zoomVal.textContent = state.zoomMode === 'fit' ? '适应 ' + pct + '%' : pct + '%';
     if (state.zoomMode !== 'fit') els.zoom.value = String(clamp(pct, 25, 200));
+    if (state.cropEditing) syncCropOverlay();
   }
 
   function setZoomPct(pct) {
@@ -3101,14 +4533,14 @@
       r.setSource(sourceCanvas);
       var built = buildCurveLut();
       r.setCurve(built.lut, !built.identity);
-      // 按列表顺序为每个画笔蒙版生成独立纹理；几何蒙版由着色器直接计算。
+      // 按列表顺序为每个像素蒙版生成独立纹理；几何蒙版由着色器直接计算。
       var maskWidth = Math.min(MASK_EXPORT_WIDTH, Math.max(MASK_PREVIEW_WIDTH, width));
       for (var i = 0; i < state.masks.length; i++) {
         var m = state.masks[i];
-        if (m.type !== 'brush' || !m.strokes.length) continue;
-        var mc = buildMaskCanvas(m, maskWidth, width, height, null);
+        if (!isTexturedMaskType(m.type)) continue;
+        var mc = buildMaskCanvas(m, maskWidth, width, height, null, sourceCanvas);
         r.setMask(m.id, mc);
-        // texImage2D 已完成上传，及时释放大画布，避免多画笔蒙版导出占用过多内存。
+        // texImage2D 已完成上传，及时释放大画布，避免多蒙版导出占用过多内存。
         mc.width = 0;
         mc.height = 0;
       }
@@ -3134,13 +4566,13 @@
   }
 
   async function exportPreviewResolution(reason) {
-    if (!state.previewCanvas) throw new Error('没有可导出的预览图。');
+    if (!state.renderSource) throw new Error('没有可导出的预览图。');
     var format = els.exportFormat.value;
     var quality = Number(els.exportQuality.value) / 100;
     var t0 = performance.now();
-    var blob = await renderExportCanvas(state.previewCanvas, state.preview.w, state.preview.h, format, quality);
+    var blob = await renderExportCanvas(state.renderSource, state.renderW, state.renderH, format, quality);
     var ms = performance.now() - t0;
-    finalizeExport(blob, state.preview.w, state.preview.h, format, ms, 'preview', reason);
+    finalizeExport(blob, state.renderW, state.renderH, format, ms, 'preview', reason);
     return blob;
   }
 
@@ -3189,6 +4621,11 @@
       showExportResult('请先载入 RAW 或图片。', true);
       return null;
     }
+    if (state.cropEditing) {
+      setStatus('请先应用或取消裁剪，再导出。', 'warn');
+      showExportResult('请先应用或取消裁剪，再导出。', true);
+      return null;
+    }
     if (state.busy) return null;
 
     var format = opts.format || els.exportFormat.value || 'image/jpeg';
@@ -3206,6 +4643,7 @@
 
     var decoded = null;
     var sourceCanvas = null;
+    var geometryCanvas = null;
     try {
       if (pixels > EXPORT_MAX_PIXELS) {
         throw new Error('too-large');
@@ -3225,13 +4663,17 @@
       var t0 = performance.now();
       decoded = await decodeFullResolution();
       var fullMs = performance.now() - t0;
-      setStatus('正在渲染调整与蒙版…', '', true);
+      setStatus('正在应用几何与渲染…', '', true);
       await nextFrame();
       sourceCanvas = makeExportSourceCanvas(decoded);
-      var blob = await renderExportCanvas(sourceCanvas, decoded.w, decoded.h, format, quality);
+      var composed = composeGeometry(sourceCanvas, state.geometry);
+      geometryCanvas = composed.canvas === sourceCanvas ? null : composed.canvas;
+      var outW = composed.w;
+      var outH = composed.h;
+      var blob = await renderExportCanvas(composed.canvas, outW, outH, format, quality);
       var totalMs = performance.now() - t0;
       var fromPreview = decoded.source === 'preview';
-      finalizeExport(blob, decoded.w, decoded.h, format, totalMs,
+      finalizeExport(blob, outW, outH, format, totalMs,
         fromPreview ? 'preview' : 'full',
         fromPreview ? '源文件只能解码相机内嵌预览，导出像素来自该预览。' : '');
       return state.lastExport;
@@ -3255,6 +4697,7 @@
       }
     } finally {
       if (decoded && decoded.bitmap) { try { decoded.bitmap.close(); } catch (e) { /* ignore */ } }
+      if (geometryCanvas) { geometryCanvas.width = 0; geometryCanvas.height = 0; }
       if (sourceCanvas) { sourceCanvas.width = 0; sourceCanvas.height = 0; }
       setBusy(false);
       els.exportBtn.disabled = !state.loaded;
@@ -3291,24 +4734,38 @@
   }
 
   function resetAll() {
+    if (state.cropEditing) {
+      state.cropEditing = false;
+      state.cropDrag = null;
+      state.cropBackup = null;
+      state.cropRect = null;
+      if (els.cropOverlay) els.cropOverlay.hidden = true;
+    }
     state.adjust = defaultAdjust();
     state.before = false;
     state.curves = createCurves();
+    state.paramCurve = defaultParamCurve();
     state.curveChannel = 'rgb';
     state.curveDragging = -1;
+    state.geometry = defaultGeometry();
     for (var i = 0; i < state.masks.length; i++) {
       if (renderer) renderer.clearMask(state.masks[i].id);
     }
     previewMaskCanvases = Object.create(null);
+    aiBaseCache = Object.create(null);
     var freshMask = createMask('linear');
     state.masks = [freshMask];
     state.activeMaskId = freshMask.id;
     root.querySelectorAll('[data-adj]').forEach(function (input) {
-      var def = findDef(input.getAttribute('data-adj'), ADJUSTMENTS);
+      var def = findDef(input.getAttribute('data-adj'), ALL_ADJUSTMENTS);
       if (def) input.value = def.def;
     });
+    applyGeometrySource();
+    markHistory('重置全部');
     updateAdjustOutputs();
+    updateParamCurveUI();
     updateBeforeLabel();
+    updateGeometryUI();
     updateCurveLut(true);
     updateMaskUI();
     refreshAllMaskTextures();
@@ -3316,7 +4773,7 @@
     state.zoomMode = 'fit';
     requestAnimationFrame(applyZoom);
     showExportResult('', false);
-    setStatus('已重置全部调整与蒙版。', 'ok');
+    setStatus('已重置全部调整、几何与蒙版。', 'ok');
     dispatch('raw:reset', {});
   }
 
@@ -3399,7 +4856,33 @@
           duplicateActiveMask();
         } else if (act === 'mask-remove') {
           removeActiveMask();
+        } else if (act === 'mask-ai-refresh') {
+          identifySmartMask(activeMask(), false);
+        } else if (act === 'rotate-left') {
+          rotateGeometry(-1);
+        } else if (act === 'rotate-right') {
+          rotateGeometry(1);
+        } else if (act === 'flip-h') {
+          flipGeometry('h');
+        } else if (act === 'flip-v') {
+          flipGeometry('v');
+        } else if (act === 'crop-mode') {
+          beginCropMode();
+        } else if (act === 'crop-apply') {
+          applyCropMode();
+        } else if (act === 'crop-cancel') {
+          cancelCropMode();
+        } else if (act === 'geometry-reset') {
+          resetGeometry();
+        } else if (act === 'param-reset') {
+          resetParamCurve();
         }
+        return;
+      }
+      var historyBtn = e.target.closest('[data-history-index]');
+      if (historyBtn) {
+        historyFlush();
+        restoreHistoryEntry(Number(historyBtn.getAttribute('data-history-index')));
         return;
       }
       var brushModeBtn = e.target.closest('[data-brush-mode]');
@@ -3438,9 +4921,15 @@
 
     // 撤销 / 重做快捷键（仅 Camera Raw 页面可见时生效）
     document.addEventListener('keydown', function (e) {
-      if (!state.loaded || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (!state.loaded) return;
       var page = document.getElementById('page-raw');
       if (!page || page.classList.contains('hidden')) return;
+      if (e.key === 'Escape' && state.cropEditing) {
+        e.preventDefault();
+        cancelCropMode();
+        return;
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       var tag = (e.target && e.target.tagName || '').toLowerCase();
       if (tag === 'textarea' || tag === 'select' || (tag === 'input' && e.target.type !== 'range')) return;
       var key = String(e.key || '').toLowerCase();
@@ -3455,6 +4944,37 @@
 
     // 滑杆
     root.querySelectorAll('[data-adj], [data-local]').forEach(bindSlider);
+    root.querySelectorAll('[data-param]').forEach(function (input) {
+      var key = input.getAttribute('data-param');
+      input.addEventListener('input', function () {
+        setParamCurve(key, Number(input.value));
+      });
+      input.addEventListener('dblclick', function () {
+        var def = findDef(key, PARAM_CURVE);
+        if (def) setParamCurve(key, def.def);
+      });
+    });
+
+    // 几何：拉直、裁剪比例、裁剪框拖动
+    if (els.geoAngle) {
+      els.geoAngle.addEventListener('input', function () {
+        setStraighten(Number(els.geoAngle.value));
+      });
+      els.geoAngle.addEventListener('dblclick', function () {
+        setStraighten(0);
+      });
+    }
+    if (els.cropAspect) {
+      els.cropAspect.addEventListener('change', function () {
+        setCropAspect(els.cropAspect.value);
+      });
+    }
+    if (els.cropOverlay) {
+      els.cropOverlay.addEventListener('pointerdown', onCropPointerDown);
+      els.cropOverlay.addEventListener('pointermove', onCropPointerMove);
+      els.cropOverlay.addEventListener('pointerup', onCropPointerUp);
+      els.cropOverlay.addEventListener('pointercancel', onCropPointerUp);
+    }
 
     // 缩放
     els.zoom.addEventListener('input', function () {
@@ -3475,6 +4995,7 @@
       var mask = activeMask();
       if (!mask) return;
       mask.invert = els.maskInvert.checked;
+      markHistory('反转蒙版');
       scheduleRender();
     });
     els.maskShow.addEventListener('change', function () {
@@ -3494,6 +5015,7 @@
       if (!mask) return;
       mask.feather = Number(els.maskFeather.value) / 100;
       els.maskFeatherV.textContent = els.maskFeather.value;
+      markHistory('蒙版羽化');
       scheduleRender();
     });
     els.brushSize.addEventListener('input', function () {
@@ -3619,20 +5141,28 @@
       } : null,
       fullSize: { w: state.fullSize.w, h: state.fullSize.h },
       preview: state.preview ? { w: state.preview.w, h: state.preview.h } : null,
+      renderSize: { w: state.renderW, h: state.renderH },
       decodeMs: state.decodeMs,
       backend: state.backendLabel,
       before: state.before,
       adjust: Object.assign({}, state.adjust),
       local: mask ? Object.assign({}, mask.local) : defaultLocal(),
       curves: curves,
+      paramCurve: Object.assign({}, state.paramCurve),
       curve: activeCurvePoints().map(function (p) { return { x: p.x, y: p.y }; }),
       curveChannel: state.curveChannel,
       curveOn: state.curveOn,
+      geometry: cloneGeometry(state.geometry),
+      cropEditing: !!state.cropEditing,
       masks: masks,
       maskCount: state.masks.length,
       activeMaskId: state.activeMaskId,
       mask: serializeMask(mask),
       zoom: { mode: state.zoomMode, pct: state.zoomPct },
+      history: {
+        index: historyIndex,
+        entries: historyEntries.map(function (entry) { return entry.label; })
+      },
       lastExport: state.lastExport ? {
         size: state.lastExport.size,
         width: state.lastExport.width,
@@ -3661,6 +5191,48 @@
     setLocalAdjustment: function (key, value) { setAdjustment(key, value, true); },
     setCurve: function (points, channel) { setCurvePoints(points, channel); },
     setCurveChannel: setCurveChannel,
+    setParamCurve: function (key, value) { setParamCurve(key, value); },
+    getParamCurve: function () { return Object.assign({}, state.paramCurve); },
+    resetParamCurve: resetParamCurve,
+    setGeometry: function (geometry) {
+      if (!geometry || !state.loaded) return;
+      historyFlush();
+      var g = Object.assign({}, state.geometry, geometry);
+      state.geometry = cloneGeometry(g);
+      markHistory('几何调整');
+      rebuildRenderSource({ fit: true });
+    },
+    rotate: rotateGeometry,
+    flip: flipGeometry,
+    setStraighten: setStraighten,
+    beginCrop: beginCropMode,
+    applyCrop: applyCropMode,
+    cancelCrop: cancelCropMode,
+    setCropAspect: setCropAspect,
+    setCropRect: function (rect) {
+      if (!state.cropEditing || !rect) return;
+      state.cropRect = clampCropRect(rect);
+      updateCropBox();
+    },
+    identifySmartMask: function (type) {
+      var mask = activeMask();
+      if (!mask || !isSmartMaskType(mask.type)) {
+        mask = addMask(type || 'sky');
+        return serializeMask(mask);
+      }
+      identifySmartMask(mask, true);
+      return serializeMask(mask);
+    },
+    getHistory: function () {
+      return {
+        index: historyIndex,
+        entries: historyEntries.map(function (entry) { return { label: entry.label, time: entry.time }; })
+      };
+    },
+    goToHistory: function (index) {
+      historyFlush();
+      restoreHistoryEntry(Number(index));
+    },
     getCurves: function () {
       var out = {};
       CURVE_CHANNELS.forEach(function (ch) {
@@ -3685,7 +5257,7 @@
             if (state.masks[i] !== mask) state.masks[i].show = false;
           }
         }
-        if (mask.type === 'brush') scheduleMaskBuild(mask);
+        if (isTexturedMaskType(mask.type)) scheduleMaskBuild(mask);
         updateMaskUI();
         updateAdjustOutputs();
         restoreBaselineIfNeeded();
@@ -3708,6 +5280,7 @@
     getState: snapshot,
     renderNow: renderNow,
     getCanvas: function () { return els.canvas; },
+    getRenderSource: function () { return state.renderSource; },
     getRoot: function () { return root; }
   };
   api.__mounted = true;
