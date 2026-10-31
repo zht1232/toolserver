@@ -1435,3 +1435,249 @@
   0%, 100% { opacity: 0.45; transform: scale(0.9); }
   50% { opacity: 1; transform: scale(1.15); }
 }
+
+/* ---------- White balance / HSL / color grading ---------- */
+#raw-root .raw-wb-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--raw-line);
+}
+#raw-root .raw-wb-row .raw-btn { gap: 4px; }
+#raw-root .raw-wb-row .raw-btn svg { width: 13px; height: 13px; }
+#raw-root .raw-wb-hint {
+  flex: 1 1 120px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--raw-ink-3);
+}
+#raw-root .raw-wb-row .raw-btn.is-on {
+  color: var(--raw-accent);
+  border-color: var(--raw-accent);
+  background: var(--raw-accent-bg);
+}
+#raw-root canvas.is-picking { cursor: crosshair; }
+#raw-root .raw-color-chips {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 3px 0 8px;
+}
+#raw-root .raw-color-chips button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 5px;
+  border: 1px solid var(--raw-line);
+  border-radius: 6px;
+  background: var(--raw-panel);
+  color: var(--raw-ink-2);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+#raw-root .raw-color-chips button.is-active {
+  border-color: var(--raw-accent);
+  background: var(--raw-accent-bg);
+  color: var(--raw-accent);
+}
+#raw-root .raw-color-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+}
+#raw-root .raw-color-actions {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 10px;
+}
+#raw-root .raw-color-actions .raw-btn { flex: 1; justify-content: center; }
+#raw-root .raw-color-sliders { margin-bottom: 2px; }
+#raw-root .raw-grade-ranges { margin: 4px 0 7px; }
+#raw-root .raw-grade-ranges button { flex: 1; }
+#raw-root .raw-range-panel {
+  margin: 8px 0 9px;
+  padding: 8px;
+  border: 1px solid var(--raw-line);
+  border-radius: 8px;
+  background: var(--raw-panel-2);
+}
+#raw-root .raw-range-panel .raw-slider { margin-bottom: 4px; }
+#raw-root .raw-range-panel .raw-slider:last-child { margin-bottom: 0; }
+#raw-root .raw-range-mode { margin-bottom: 7px; }
+#raw-root .raw-range-mode button { flex: 1; }
+#raw-root .raw-range-color-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+#raw-root .raw-range-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--raw-line-2);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.55);
+  flex: none;
+}
+#raw-root .raw-range-color-row .raw-btn { gap: 3px; }
+#raw-root .raw-range-color-row .raw-btn svg { width: 13px; height: 13px; }
+
+/* ---------- Presets / snapshots ---------- */
+#raw-root .raw-named-row {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 7px;
+}
+#raw-root .raw-text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--raw-line);
+  border-radius: 6px;
+  background: var(--raw-panel);
+  color: var(--raw-ink);
+  font: inherit;
+  font-size: 11px;
+}
+#raw-root .raw-text-input:focus {
+  outline: none;
+  border-color: var(--raw-accent);
+  box-shadow: 0 0 0 2px var(--raw-accent-bg);
+}
+#raw-root .raw-named-row .raw-btn { flex: none; }
+#raw-root .raw-preset-list,
+#raw-root .raw-snapshot-list { display: grid; gap: 4px; margin: 2px 0 8px; }
+#raw-root .raw-named-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+#raw-root .raw-named-apply {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--raw-line);
+  border-radius: 6px;
+  background: var(--raw-panel);
+  color: var(--raw-ink-2);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+#raw-root .raw-named-apply:hover {
+  border-color: var(--raw-accent-line);
+  background: var(--raw-accent-bg);
+  color: var(--raw-accent);
+}
+#raw-root .raw-named-del {
+  flex: none;
+  width: 28px;
+  border: 1px solid var(--raw-line);
+  border-radius: 6px;
+  background: var(--raw-panel);
+  color: var(--raw-ink-3);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+#raw-root .raw-named-del:hover { color: var(--raw-err); border-color: var(--raw-err); }
+#raw-root .raw-builtin-tag {
+  margin-left: auto;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--raw-panel-3);
+  color: var(--raw-ink-3);
+  font-size: 9px;
+}
+#raw-root .raw-list-empty {
+  margin: 2px 0 8px;
+  color: var(--raw-ink-3);
+  font-size: 10.5px;
+}
+
+/* ---------- Batch export ---------- */
+#raw-root .raw-batch-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+#raw-root .raw-batch-max { width: 112px; flex: none; }
+#raw-root .raw-batch-row .raw-btn { flex: none; }
+#raw-root .raw-batch-list {
+  display: grid;
+  gap: 3px;
+  max-height: 132px;
+  overflow: auto;
+  margin: 2px 0 6px;
+}
+#raw-root .raw-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--raw-line);
+  border-radius: 5px;
+  background: var(--raw-panel);
+  font-size: 10.5px;
+}
+#raw-root .raw-batch-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--raw-ink-2);
+}
+#raw-root .raw-batch-size { flex: none; color: var(--raw-ink-3); font-family: var(--raw-mono); font-size: 9.5px; }
+#raw-root .raw-batch-item .raw-named-del { width: 22px; height: 22px; font-size: 12px; }
+#raw-root .raw-batch-progress {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--raw-accent-bg);
+  color: var(--raw-accent);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+/* ---------- Lens profiles ---------- */
+#raw-root .raw-lens-profile-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin: 5px 0 4px;
+}
+#raw-root .raw-lens-profile-row .raw-select { flex: 1 1 auto; min-width: 0; }
+#raw-root .raw-lens-profile-row .raw-btn { flex: none; }
+#raw-root .raw-lens-auto {
+  margin: 2px 0 3px;
+  font-size: 10.5px;
+}
+#raw-root .raw-lens-status {
+  margin: 0 0 8px;
+  color: var(--raw-ink-3);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+/* ---------- Range mask swatch ---------- */
+#raw-root .raw-mask-dot.is-range {
+  background: conic-gradient(from 210deg, #3A4A6B 0 25%, #536159 25% 50%, #C8AE36 50% 75%, #C94B42 75% 100%);
+}

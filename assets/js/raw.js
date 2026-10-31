@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -212,6 +212,32 @@
     { key: 'highlightSplit', label: '高光分界', min: 55, max: 100, step: 1, def: 75, unit: '%' }
   ];
 
+  var HSL_BANDS = [
+    { key: 'red', label: '红', hue: 0, color: '#C94B42' },
+    { key: 'orange', label: '橙', hue: 30, color: '#D98732' },
+    { key: 'yellow', label: '黄', hue: 60, color: '#C8AE36' },
+    { key: 'green', label: '绿', hue: 120, color: '#4C9660' },
+    { key: 'aqua', label: '青', hue: 180, color: '#3E9D9A' },
+    { key: 'blue', label: '蓝', hue: 240, color: '#4A6FB3' },
+    { key: 'purple', label: '紫', hue: 280, color: '#7D5BAD' },
+    { key: 'magenta', label: '洋红', hue: 320, color: '#BB568A' }
+  ];
+
+  var GRADE_RANGES = [
+    { key: 'shadows', label: '阴影', hue: 225 },
+    { key: 'midtones', label: '中间调', hue: 40 },
+    { key: 'highlights', label: '高光', hue: 45 }
+  ];
+
+  var RANGE_MASK_DEFAULTS = {
+    rangeMode: 'luma',
+    rangeLo: 0,
+    rangeHi: 75,
+    rangeFeather: 24,
+    rangeTolerance: 28,
+    rangeColor: [0.5, 0.5, 0.5]
+  };
+
   function defaultAdjust() {
     var o = {};
     ALL_ADJUSTMENTS.forEach(function (d) { o[d.key] = d.def; });
@@ -227,8 +253,74 @@
     PARAM_CURVE.forEach(function (d) { o[d.key] = d.def; });
     return o;
   }
+  function defaultHSL() {
+    var o = {};
+    HSL_BANDS.forEach(function (b) { o[b.key] = { h: 0, s: 0, l: 0 }; });
+    return o;
+  }
+  function defaultGrading() {
+    var o = {};
+    GRADE_RANGES.forEach(function (r) { o[r.key] = { hue: r.hue, sat: 0, lum: 0 }; });
+    return o;
+  }
+  function clampHSL(hsl) {
+    var out = {};
+    HSL_BANDS.forEach(function (b) {
+      var v = hsl && hsl[b.key] || {};
+      out[b.key] = {
+        h: clamp(Number(v.h) || 0, -100, 100),
+        s: clamp(Number(v.s) || 0, -100, 100),
+        l: clamp(Number(v.l) || 0, -100, 100)
+      };
+    });
+    return out;
+  }
+  function clampGrading(grading) {
+    var out = {};
+    GRADE_RANGES.forEach(function (r) {
+      var v = grading && grading[r.key] || {};
+      out[r.key] = {
+        hue: ((Number(v.hue) || 0) % 360 + 360) % 360,
+        sat: clamp(Number(v.sat) || 0, 0, 100),
+        lum: clamp(Number(v.lum) || 0, -100, 100)
+      };
+    });
+    return out;
+  }
+  function hslParamValues() {
+    var out = new Float32Array(HSL_BANDS.length * 3);
+    HSL_BANDS.forEach(function (b, i) {
+      var v = state.hsl[b.key];
+      out[i * 3] = v.h / 100;
+      out[i * 3 + 1] = v.s / 100;
+      out[i * 3 + 2] = v.l / 100;
+    });
+    return out;
+  }
+  function gradeParamValues() {
+    var out = new Float32Array(GRADE_RANGES.length * 3);
+    GRADE_RANGES.forEach(function (r, i) {
+      var v = state.grading[r.key];
+      out[i * 3] = v.hue / 360;
+      out[i * 3 + 1] = v.sat / 100;
+      out[i * 3 + 2] = v.lum / 100;
+    });
+    return out;
+  }
+  function hslIsIdentity() {
+    return HSL_BANDS.every(function (b) {
+      var v = state.hsl[b.key];
+      return Math.abs(v.h) < 1e-9 && Math.abs(v.s) < 1e-9 && Math.abs(v.l) < 1e-9;
+    });
+  }
+  function gradingIsIdentity() {
+    return GRADE_RANGES.every(function (r) { return state.grading[r.key].sat < 1e-9 && Math.abs(state.grading[r.key].lum) < 1e-9; });
+  }
   function defaultGeometry() {
-    return { rotate90: 0, flipH: false, flipV: false, angle: 0, crop: null };
+    return {
+      rotate90: 0, flipH: false, flipV: false, angle: 0, crop: null,
+      perspectiveH: 0, perspectiveV: 0
+    };
   }
   function cloneGeometry(g) {
     g = g || {};
@@ -237,6 +329,8 @@
       flipH: !!g.flipH,
       flipV: !!g.flipV,
       angle: clamp(Number(g.angle) || 0, -45, 45),
+      perspectiveH: clamp(Number(g.perspectiveH) || 0, -100, 100),
+      perspectiveV: clamp(Number(g.perspectiveV) || 0, -100, 100),
       crop: g.crop ? {
         x: clamp(Number(g.crop.x) || 0, 0, 1),
         y: clamp(Number(g.crop.y) || 0, 0, 1),
@@ -244,6 +338,14 @@
         h: clamp(Number(g.crop.h) || 0, 0.001, 1)
       } : null
     };
+  }
+  function geometryHasPerspective(g) {
+    if (!g) {
+      if (!state || !state.geometry) return false;
+      g = state.geometry;
+    }
+    return Math.abs(Number(g.perspectiveH) || 0) > 0.01 ||
+      Math.abs(Number(g.perspectiveV) || 0) > 0.01;
   }
 
   function fmtAdjust(def, v) {
@@ -295,6 +397,17 @@
     'uniform float u_vignette;',
     'uniform float u_grain;',
     'uniform float u_sharpen;',
+    'uniform vec3 u_hsl[8];',
+    'uniform float u_hslOn;',
+    'uniform vec3 u_grade[3];',
+    'uniform float u_gradeOn;',
+    'uniform mat3 u_persp;',
+    'uniform float u_perspOn;',
+    'uniform float u_rangeMode;',
+    'uniform vec2 u_rangeLuma;',
+    'uniform float u_rangeFeather;',
+    'uniform vec3 u_rangeColor;',
+    'uniform float u_rangeTolerance;',
     'uniform float u_lensDistort;',
     'uniform float u_lensVignette;',
     'uniform float u_lensCa;',
@@ -333,6 +446,86 @@
     '  return fract(p.x * p.y);',
     '}',
     '',
+    'vec2 warpUV(vec2 uv) {',
+    '  if (u_perspOn < 0.5) return uv;',
+    '  vec3 p = u_persp * vec3(uv, 1.0);',
+    '  if (abs(p.z) < 1e-5) return uv;',
+    '  return clamp(p.xy / p.z, 0.0, 1.0);',
+    '}',
+    '',
+    'vec3 rgb2hsl(vec3 c) {',
+    '  float mx = max(max(c.r, c.g), c.b);',
+    '  float mn = min(min(c.r, c.g), c.b);',
+    '  float d = mx - mn;',
+    '  float h = 0.0;',
+    '  if (d > 1e-6) {',
+    '    if (mx == c.r) h = mod((c.g - c.b) / d, 6.0);',
+    '    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;',
+    '    else h = (c.r - c.g) / d + 4.0;',
+    '    h /= 6.0;',
+    '  }',
+    '  float l = (mx + mn) * 0.5;',
+    '  float s = d < 1e-6 ? 0.0 : d / (1.0 - abs(2.0 * l - 1.0));',
+    '  return vec3(h, clamp(s, 0.0, 1.0), clamp(l, 0.0, 1.0));',
+    '}',
+    '',
+    'vec3 hsl2rgb(vec3 hsl) {',
+    '  float h = fract(hsl.x);',
+    '  float s = clamp(hsl.y, 0.0, 1.0);',
+    '  float l = clamp(hsl.z, 0.0, 1.0);',
+    '  float c = (1.0 - abs(2.0 * l - 1.0)) * s;',
+    '  float hp = h * 6.0;',
+    '  float x = c * (1.0 - abs(mod(hp, 2.0) - 1.0));',
+    '  vec3 rgb = vec3(0.0);',
+    '  if (hp < 1.0) rgb = vec3(c, x, 0.0);',
+    '  else if (hp < 2.0) rgb = vec3(x, c, 0.0);',
+    '  else if (hp < 3.0) rgb = vec3(0.0, c, x);',
+    '  else if (hp < 4.0) rgb = vec3(0.0, x, c);',
+    '  else if (hp < 5.0) rgb = vec3(x, 0.0, c);',
+    '  else rgb = vec3(c, 0.0, x);',
+    '  return rgb + vec3(l - c * 0.5);',
+    '}',
+    '',
+    'float hueDistance(float a, float b) {',
+    '  float d = abs(fract(a) - fract(b));',
+    '  return min(d, 1.0 - d);',
+    '}',
+    '',
+    'vec3 applyHSL(vec3 g) {',
+    '  if (u_hslOn < 0.5) return g;',
+    '  vec3 hsl = rgb2hsl(clamp(g, 0.0, 1.0));',
+    '  float centers[8] = float[8](0.0, 0.0833333, 0.1666667, 0.3333333, 0.5, 0.6666667, 0.7777778, 0.8888889);',
+    '  vec3 delta = vec3(0.0);',
+    '  float wsum = 0.0;',
+    '  for (int i = 0; i < 8; i++) {',
+    '    float w = 1.0 - smoothstep(0.045, 0.16, hueDistance(hsl.x, centers[i]));',
+    '    delta += u_hsl[i] * w;',
+    '    wsum += w;',
+    '  }',
+    '  if (wsum > 0.0001) delta /= max(1.0, wsum);',
+    '  hsl.x = fract(hsl.x + delta.x * 0.10);',
+    '  hsl.y = clamp(hsl.y * (1.0 + delta.y), 0.0, 1.0);',
+    '  hsl.z = clamp(hsl.z + delta.z * 0.28, 0.0, 1.0);',
+    '  return hsl2rgb(hsl);',
+    '}',
+    '',
+    'vec3 applyGrading(vec3 g) {',
+    '  if (u_gradeOn < 0.5) return g;',
+    '  float l = lumaOf(clamp(g, 0.0, 1.0));',
+    '  float ws = 1.0 - smoothstep(0.12, 0.55, l);',
+    '  float wh = smoothstep(0.45, 0.92, l);',
+    '  float wm = max(0.0, 1.0 - ws - wh);',
+    '  vec3 tint0 = hsl2rgb(vec3(u_grade[0].x, 0.6, 0.5));',
+    '  vec3 tint1 = hsl2rgb(vec3(u_grade[1].x, 0.6, 0.5));',
+    '  vec3 tint2 = hsl2rgb(vec3(u_grade[2].x, 0.6, 0.5));',
+    '  float s0 = u_grade[0].y * ws, s1 = u_grade[1].y * wm, s2 = u_grade[2].y * wh;',
+    '  g = mix(g, g * (0.7 + 0.6 * tint0) + tint0 * 0.05, clamp(s0 * 0.55, 0.0, 1.0));',
+    '  g = mix(g, g * (0.7 + 0.6 * tint1) + tint1 * 0.05, clamp(s1 * 0.55, 0.0, 1.0));',
+    '  g = mix(g, g * (0.7 + 0.6 * tint2) + tint2 * 0.05, clamp(s2 * 0.55, 0.0, 1.0));',
+    '  g *= 1.0 + (u_grade[0].z * ws + u_grade[1].z * wm + u_grade[2].z * wh) * 0.28;',
+    '  return g;',
+    '}',
+    '',
     'float maskValue(vec2 uv) {',
     '  if (u_maskType < 0.5) return 0.0;',
     '  float m = 0.0;',
@@ -345,12 +538,24 @@
     '    float d = length(u_maskEllipse * (uv - u_maskP1));',
     '    float f = mix(0.03, 0.9, clamp(u_maskFeather, 0.0, 1.0));',
     '    m = 1.0 - smoothstep(max(1.0 - f, 0.01), 1.0, d);',
-    '  } else {',
-    '    m = texture(u_mask, uv).r;',
+    '  } else if (u_maskType < 3.5) {',
+    '    m = texture(u_mask, warpUV(uv)).r;',
     '    float f = clamp(u_maskFeather, 0.0, 1.0);',
     '    float lo = clamp(0.42 - f * 0.38, 0.001, 0.49);',
     '    float hi = clamp(0.58 + f * 0.38, 0.51, 0.999);',
     '    m = smoothstep(lo, hi, m);',
+    '  } else {',
+    '    vec3 base = texture(u_image, warpUV(uv)).rgb;',
+    '    float l = lumaOf(base);',
+    '    float f = max(0.003, u_rangeFeather);',
+    '    float lm = smoothstep(u_rangeLuma.x - f, u_rangeLuma.x, l) *',
+    '               (1.0 - smoothstep(u_rangeLuma.y, u_rangeLuma.y + f, l));',
+    '    if (u_rangeMode > 0.5) {',
+    '      float cd = distance(base, u_rangeColor);',
+    '      float tol = max(0.01, u_rangeTolerance);',
+    '      lm *= 1.0 - smoothstep(tol * 0.55, tol, cd);',
+    '    }',
+    '    m = lm;',
     '  }',
     '  return mix(m, 1.0 - m, step(0.5, u_maskInvert));',
     '}',
@@ -406,6 +611,7 @@
     '',
     'vec3 globalAdjust(vec3 src) {',
     '  vec3 lin = srgbToLinear(src);',
+    '  vec2 suv = warpUV(v_uv);',
     '',
     '  // 白平衡（相对相机已应用的白平衡）',
     '  lin.r *= exp2(u_temp * 0.55);',
@@ -436,10 +642,10 @@
     '  vec2 px = 1.0 / u_texSize;',
     '  float sc = max(1.0, u_scale);',
     '  vec2 cpx = px * 1.5 * sc;',
-    '  vec3 blurC = sampleChroma(lensRemap(v_uv + vec2(cpx.x, 0.0)))',
-    '             + sampleChroma(lensRemap(v_uv - vec2(cpx.x, 0.0)))',
-    '             + sampleChroma(lensRemap(v_uv + vec2(0.0, cpx.y)))',
-    '             + sampleChroma(lensRemap(v_uv - vec2(0.0, cpx.y)));',
+    '  vec3 blurC = sampleChroma(lensRemap(suv + vec2(cpx.x, 0.0)))',
+    '             + sampleChroma(lensRemap(suv - vec2(cpx.x, 0.0)))',
+    '             + sampleChroma(lensRemap(suv + vec2(0.0, cpx.y)))',
+    '             + sampleChroma(lensRemap(suv - vec2(0.0, cpx.y)));',
     '  float blurL = lumaOf(blurC * 0.25);',
     '  float detail = lumaOf(src) - blurL;',
     '  if (abs(u_clarity) > 0.0001) {',
@@ -460,7 +666,9 @@
     '  float satAmt = clamp(mx - mn, 0.0, 1.0);',
     '  g = mix(vec3(lum2), g, 1.0 + u_vibrance * 0.9 * (1.0 - satAmt));',
     '  lum2 = lumaOf(g);',
-    '  g = mix(vec3(lum2), g, 1.0 + u_saturation * 0.9);',
+    '  g = mix(vec3(lum2), g, max(0.0, 1.0 + u_saturation));',
+    '  g = applyHSL(clamp(g, 0.0, 1.0));',
+    '  g = applyGrading(g);',
     '  return g;',
     '}',
     '',
@@ -478,11 +686,11 @@
     '  // Pass 0：全局显影；原图对比时直接输出源像素。',
     '  if (u_pass < 0.5) {',
     '    if (u_before > 0.5) {',
-    '      outColor = vec4(texture(u_image, v_uv).rgb, 1.0);',
+    '      outColor = vec4(texture(u_image, warpUV(v_uv)).rgb, 1.0);',
     '      return;',
     '    }',
-    '    vec3 src = sampleChroma(lensRemap(v_uv));',
-    '    src = denoiseSource(src, v_uv);',
+    '    vec3 src = sampleChroma(lensRemap(warpUV(v_uv)));',
+    '    src = denoiseSource(src, warpUV(v_uv));',
     '    outColor = vec4(clamp(globalAdjust(src), 0.0, 1.0), 1.0);',
     '    return;',
     '  }',
@@ -515,10 +723,11 @@
     '    vec2 px = 1.0 / u_texSize;',
     '    float sc = max(1.0, u_scale);',
     '    vec2 spx = px * sc;',
-    '    vec3 n4 = sampleChroma(lensRemap(v_uv + vec2(spx.x, 0.0)))',
-    '            + sampleChroma(lensRemap(v_uv - vec2(spx.x, 0.0)))',
-    '            + sampleChroma(lensRemap(v_uv + vec2(0.0, spx.y)))',
-    '            + sampleChroma(lensRemap(v_uv - vec2(0.0, spx.y)));',
+    '    vec2 suv2 = warpUV(v_uv);',
+    '    vec3 n4 = sampleChroma(lensRemap(suv2 + vec2(spx.x, 0.0)))',
+    '            + sampleChroma(lensRemap(suv2 - vec2(spx.x, 0.0)))',
+    '            + sampleChroma(lensRemap(suv2 + vec2(0.0, spx.y)))',
+    '            + sampleChroma(lensRemap(suv2 - vec2(0.0, spx.y)));',
     '    float sharpDetail = lumaOf(g) - lumaOf(n4 * 0.25);',
     '    g += sharpDetail * u_sharpen * 1.6;',
     '  }',
@@ -557,7 +766,9 @@
     'u_temp', 'u_tint', 'u_vibrance', 'u_saturation', 'u_clarity', 'u_dehaze',
     'u_vignette', 'u_grain', 'u_sharpen', 'u_lensDistort', 'u_lensVignette', 'u_lensCa',
     'u_noiseLuma', 'u_noiseColor', 'u_maskType', 'u_maskInvert', 'u_maskShow',
-    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_maskEllipse', 'u_local', 'u_curveOn', 'u_scale', 'u_seed'
+    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_maskEllipse', 'u_local', 'u_curveOn', 'u_scale', 'u_seed',
+    'u_hslOn', 'u_gradeOn', 'u_perspOn', 'u_rangeMode', 'u_rangeLuma', 'u_rangeFeather',
+    'u_rangeColor', 'u_rangeTolerance'
   ];
 
   function compileShader(gl, type, src) {
@@ -607,6 +818,9 @@
     for (var i = 0; i < UNIFORM_NAMES.length; i++) {
       this.u[UNIFORM_NAMES[i]] = gl.getUniformLocation(prog, UNIFORM_NAMES[i]);
     }
+    this.u.u_hsl = gl.getUniformLocation(prog, 'u_hsl[0]');
+    this.u.u_grade = gl.getUniformLocation(prog, 'u_grade[0]');
+    this.u.u_persp = gl.getUniformLocation(prog, 'u_persp');
 
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
@@ -789,6 +1003,12 @@
     gl.uniform1f(u.u_lensCa, params.lensCa);
     gl.uniform1f(u.u_noiseLuma, params.noiseLuma);
     gl.uniform1f(u.u_noiseColor, params.noiseColor);
+    gl.uniform3fv(u.u_hsl, params.hsl || new Float32Array(24));
+    gl.uniform1f(u.u_hslOn, params.hslOn ? 1 : 0);
+    gl.uniform3fv(u.u_grade, params.grading || new Float32Array(9));
+    gl.uniform1f(u.u_gradeOn, params.gradingOn ? 1 : 0);
+    gl.uniformMatrix3fv(u.u_persp, false, params.persp || new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+    gl.uniform1f(u.u_perspOn, params.perspOn ? 1 : 0);
     gl.uniform1f(u.u_scale, Math.max(1, w / 1600));
     gl.uniform1f(u.u_seed, 17.0);
   };
@@ -805,6 +1025,11 @@
       gl.uniform2f(u.u_maskP2, 0.5, 0.5);
       gl.uniformMatrix2fv(u.u_maskEllipse, false, new Float32Array([1, 0, 0, 1]));
       gl.uniform4f(u.u_local, 0, 0, 0, 0);
+      gl.uniform1f(u.u_rangeMode, 0);
+      gl.uniform2f(u.u_rangeLuma, 0, 1);
+      gl.uniform1f(u.u_rangeFeather, 0.05);
+      gl.uniform3f(u.u_rangeColor, 0.5, 0.5, 0.5);
+      gl.uniform1f(u.u_rangeTolerance, 0.2);
       return;
     }
     var local = mask.local || [0, 0, 0, 0];
@@ -817,6 +1042,14 @@
     gl.uniformMatrix2fv(u.u_maskEllipse, false,
       new Float32Array(mask.ellipse || [1, 0, 0, 1]));
     gl.uniform4f(u.u_local, local[0], local[1], local[2], local[3]);
+    gl.uniform1f(u.u_rangeMode, mask.rangeMode === 'color' ? 1 : 0);
+    gl.uniform2f(u.u_rangeLuma, mask.rangeLo || 0, mask.rangeHi == null ? 1 : mask.rangeHi);
+    gl.uniform1f(u.u_rangeFeather, mask.rangeFeather == null ? 0.05 : mask.rangeFeather);
+    gl.uniform3f(u.u_rangeColor,
+      (mask.rangeColor && mask.rangeColor[0]) || 0.5,
+      (mask.rangeColor && mask.rangeColor[1]) || 0.5,
+      (mask.rangeColor && mask.rangeColor[2]) || 0.5);
+    gl.uniform1f(u.u_rangeTolerance, mask.rangeTolerance == null ? 0.2 : mask.rangeTolerance);
   };
 
   RawRenderer.prototype.draw = function () {
@@ -882,7 +1115,7 @@
       gl.uniform1f(this.u.u_before, 0);
       this.setMaskUniforms(mask);
       this.bindStage(stageTex);
-      this.bindMask(mask.type >= 3 ? mask.id : null);
+      this.bindMask(mask.texture ? mask.id : null);
       this.draw();
       if (destFbo === targets.fboB) {
         stageTex = targets.texB;
@@ -902,7 +1135,7 @@
     this.setMaskUniforms(show);
     gl.uniform1f(this.u.u_maskShow, show ? 1 : 0);
     this.bindStage(stageTex);
-    this.bindMask(show && show.type >= 3 ? show.id : null);
+    this.bindMask(show && show.texture ? show.id : null);
     this.draw();
 
     gl.bindVertexArray(null);
@@ -944,8 +1177,31 @@
       '</div>';
   }
 
+  function colorSliderHTML(scope, key, label, min, max, step, value, suffix) {
+    var id = 'raw-' + scope + '-' + key;
+    return '<div class="raw-slider">' +
+      '<label for="' + id + '">' + label + '</label>' +
+      '<input id="' + id + '" type="range" min="' + min + '" max="' + max + '" step="' + step +
+      '" value="' + value + '" data-' + scope + '="' + key + '" aria-label="' + label + '">' +
+      '<output for="' + id + '" data-out-' + scope + '="' + key + '">' + value + (suffix || '') + '</output>' +
+      '</div>';
+  }
+
   function buildHTML() {
     var basicSliders = ADJUSTMENTS.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
+    var hslChips = HSL_BANDS.map(function (b) {
+      return '<button type="button" data-hsl-band="' + b.key + '"' + (b.key === 'red' ? ' class="is-active"' : '') + '>' +
+        '<span class="raw-color-dot" style="background:' + b.color + '"></span>' + b.label + '</button>';
+    }).join('');
+    var gradeChips = GRADE_RANGES.map(function (r) {
+      return '<button type="button" data-grade-range="' + r.key + '"' + (r.key === 'shadows' ? ' class="is-active"' : '') + '>' + r.label + '</button>';
+    }).join('');
+    var hslSliders = colorSliderHTML('hsl', 'h', '色相', -100, 100, 1, 0) +
+      colorSliderHTML('hsl', 's', '饱和度', -100, 100, 1, 0) +
+      colorSliderHTML('hsl', 'l', '明度', -100, 100, 1, 0);
+    var gradeSliders = colorSliderHTML('grade', 'hue', '色相', 0, 360, 1, 225, '°') +
+      colorSliderHTML('grade', 'sat', '饱和度', 0, 100, 1, 0) +
+      colorSliderHTML('grade', 'lum', '明度', -100, 100, 1, 0);
     var localSliders = LOCALS.map(function (d) { return sliderHTML(d, 'local'); }).join('');
     var lensSliders = LENS.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
     var detailSliders = DETAIL.map(function (d) { return sliderHTML(d, 'adj'); }).join('');
@@ -959,7 +1215,7 @@
         '<div class="raw-head-main">' +
           '<div class="raw-eyebrow">Camera Raw · 本地显影</div>' +
           '<h2>RAW 显影</h2>' +
-          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与 AI 主体（人物/动物）/ AI 天空蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
+          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成白平衡、曝光、曲线、HSL 与颜色分级、裁剪、透视、镜头校正、降噪、范围/AI 蒙版、预设、快照与批量导出。<b>图片不会上传</b>，关闭页面即清除。</p>' +
         '</div>' +
         '<div class="raw-head-actions">' +
           '<button type="button" class="raw-btn primary" data-act="open">' + icon('open') + '打开文件</button>' +
@@ -1066,7 +1322,34 @@
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
               '<div class="raw-sliders" id="raw-adj-sliders">' + basicSliders + '</div>' +
+              '<div class="raw-wb-row">' +
+                '<button type="button" class="raw-btn tiny" data-act="wb-pick" id="raw-wb-pick" title="点击画面中的中性灰区域自动校正白平衡">' + icon('wand') + '白平衡吸管</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="wb-auto" id="raw-wb-auto" title="按画面平均颜色自动校正白平衡">自动</button>' +
+                '<span class="raw-wb-hint" id="raw-wb-hint">先点吸管，再点画面中的灰色区域</span>' +
+              '</div>' +
               '<p class="raw-group-hint" style="margin:9px 0 0;font-size:10.5px;color:var(--raw-ink-3)">双击滑杆可单独复位。曝光以 EV 计算，色温 / 色调为相对相机白平衡的偏移。</p>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group" open id="raw-color-group">' +
+            '<summary>' + icon('sliders') + '<span>HSL 与颜色分级</span><span class="raw-sum-meta" id="raw-color-sum">0 项</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<div class="raw-subhead"><span>HSL · 按色相调整</span><span id="raw-hsl-scope">红</span></div>' +
+              '<div class="raw-color-chips" id="raw-hsl-bands">' + hslChips + '</div>' +
+              '<div class="raw-sliders raw-color-sliders" id="raw-hsl-sliders">' + hslSliders + '</div>' +
+              '<div class="raw-color-actions">' +
+                '<button type="button" class="raw-btn tiny" data-act="hsl-reset-band">重置当前色相</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="hsl-reset-all">全部重置</button>' +
+              '</div>' +
+              '<div class="raw-subhead"><span>颜色分级 · 按明暗区域着色</span><span id="raw-grade-scope">阴影</span></div>' +
+              '<div class="raw-seg raw-grade-ranges" id="raw-grade-ranges">' + gradeChips + '</div>' +
+              '<div class="raw-sliders raw-color-sliders" id="raw-grading-sliders">' + gradeSliders + '</div>' +
+              '<div class="raw-color-actions">' +
+                '<button type="button" class="raw-btn tiny" data-act="grade-reset-range">重置当前色调</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="grade-reset-all">全部重置</button>' +
+              '</div>' +
+              '<p class="raw-group-hint" style="margin:4px 0 0;font-size:10.5px;color:var(--raw-ink-3)">HSL 作用于画面颜色；颜色分级分别给阴影、中间调和高光加色。滑杆双击可复位。</p>' +
             '</div>' +
           '</details>' +
 
@@ -1085,6 +1368,18 @@
                 '<input id="raw-geo-angle" type="range" min="-45" max="45" step="0.1" value="0" data-geo="angle">' +
                 '<output for="raw-geo-angle" id="raw-geo-angle-v">0.0°</output>' +
               '</div>' +
+              '<div class="raw-subhead"><span>透视校正</span><span id="raw-persp-note">水平 / 垂直</span></div>' +
+              '<div class="raw-slider">' +
+                '<label for="raw-persp-h">水平</label>' +
+                '<input id="raw-persp-h" type="range" min="-100" max="100" step="1" value="0">' +
+                '<output for="raw-persp-h" id="raw-persp-h-v">0</output>' +
+              '</div>' +
+              '<div class="raw-slider">' +
+                '<label for="raw-persp-v">垂直</label>' +
+                '<input id="raw-persp-v" type="range" min="-100" max="100" step="1" value="0">' +
+                '<output for="raw-persp-v" id="raw-persp-v-v">0</output>' +
+              '</div>' +
+              '<p class="raw-group-hint raw-geo-note" style="margin-top:2px">透视校正会自动放大画面避免黑边；启用时不能裁剪，调整透视会清空裁剪框。蒙版会跟随透视后的画面。</p>' +
               '<div class="raw-crop-controls">' +
                 '<label class="raw-field-label" for="raw-crop-aspect">比例</label>' +
                 '<select class="raw-select" id="raw-crop-aspect">' +
@@ -1110,7 +1405,14 @@
             '<summary>' + icon('lens') + '<span>镜头校正</span><span class="raw-sum-meta" id="raw-lens-sum">手动</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
-              '<p class="raw-group-hint">没有镜头配置文件，按画面边缘手动校正。畸变正负对应枕形 / 桶形，暗角校正只提亮四角。</p>' +
+              '<p class="raw-group-hint">手动校正可用下方的畸变 / 暗角 / 色差滑杆；把一套校正保存为镜头配置后，载入同一相机和镜头的照片会自动套用。畸变正负对应枕形 / 桶形。</p>' +
+              '<div class="raw-lens-profile-row">' +
+                '<select class="raw-select" id="raw-lens-profile" aria-label="镜头配置"><option value="">未保存镜头配置</option></select>' +
+                '<button type="button" class="raw-btn tiny" data-act="lens-save">保存当前</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="lens-delete">删除</button>' +
+              '</div>' +
+              '<label class="raw-check raw-lens-auto"><input type="checkbox" id="raw-lens-auto" checked>按相机 / 镜头自动套用</label>' +
+              '<p class="raw-lens-status" id="raw-lens-status">未识别镜头配置；手动校正后可保存复用。</p>' +
               '<div class="raw-sliders" id="raw-lens-sliders">' + lensSliders + '</div>' +
             '</div>' +
           '</details>' +
@@ -1157,6 +1459,30 @@
             '</div>' +
           '</details>' +
 
+          '<details class="raw-group" open id="raw-preset-group">' +
+            '<summary>' + icon('lock') + '<span>预设与快照</span><span class="raw-sum-meta" id="raw-preset-sum">—</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<div class="raw-subhead"><span>预设 · 全局显影设置</span><span id="raw-preset-count">0</span></div>' +
+              '<div class="raw-named-row">' +
+                '<input class="raw-text-input" id="raw-preset-name" maxlength="24" placeholder="预设名称">' +
+                '<button type="button" class="raw-btn tiny primary" data-act="preset-save">保存</button>' +
+              '</div>' +
+              '<div class="raw-preset-list" id="raw-preset-list"></div>' +
+              '<div class="raw-color-actions">' +
+                '<button type="button" class="raw-btn tiny" data-act="settings-copy">复制设置</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="settings-paste">粘贴设置</button>' +
+              '</div>' +
+              '<div class="raw-subhead"><span>快照 · 当前图片完整状态</span><span id="raw-snapshot-count">0</span></div>' +
+              '<div class="raw-named-row">' +
+                '<input class="raw-text-input" id="raw-snapshot-name" maxlength="24" placeholder="快照名称">' +
+                '<button type="button" class="raw-btn tiny primary" data-act="snapshot-save">保存</button>' +
+              '</div>' +
+              '<div class="raw-snapshot-list" id="raw-snapshot-list"></div>' +
+              '<p class="raw-group-hint" style="margin:4px 0 0;font-size:10.5px;color:var(--raw-ink-3)">预设保存在本机浏览器，可跨图片套用；快照包含当前图片的蒙版与几何，只保留在本次会话。</p>' +
+            '</div>' +
+          '</details>' +
+
           '<details class="raw-group" open>' +
             '<summary>' + icon('mask') + '<span>蒙版</span><span class="raw-sum-meta" id="raw-mask-sum">1 个 · 蒙版 1</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
@@ -1171,6 +1497,7 @@
                   '<option value="brush">画笔</option>' +
                   '<option value="subject">AI 主体（人物 / 动物）</option>' +
                   '<option value="sky">AI 天空</option>' +
+                  '<option value="range">范围（亮度 / 颜色）</option>' +
                 '</select>' +
                 '<button type="button" class="raw-btn tiny primary" data-act="mask-add">＋ 添加蒙版</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制</button>' +
@@ -1183,9 +1510,28 @@
                 '<button type="button" data-mask="brush">画笔</button>' +
                 '<button type="button" data-mask="subject">AI 主体</button>' +
                 '<button type="button" data-mask="sky">AI 天空</button>' +
+                '<button type="button" data-mask="range">范围</button>' +
               '</div>' +
               '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。蒙版会跟随裁剪、旋转和拉直后的画面内容。</p>' +
               '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
+              '<div class="raw-range-panel" id="raw-range-panel" hidden>' +
+                '<div class="raw-seg raw-range-mode" id="raw-range-mode" role="group" aria-label="范围依据">' +
+                  '<button type="button" data-range-mode="luma" class="is-active">亮度范围</button>' +
+                  '<button type="button" data-range-mode="color">颜色范围</button>' +
+                '</div>' +
+                '<div class="raw-sliders raw-range-sliders" id="raw-range-sliders">' +
+                  '<div class="raw-slider"><label for="raw-range-lo">亮度下限</label><input id="raw-range-lo" type="range" min="0" max="100" step="1" value="0"><output for="raw-range-lo" id="raw-range-lo-v">0</output></div>' +
+                  '<div class="raw-slider"><label for="raw-range-hi">亮度上限</label><input id="raw-range-hi" type="range" min="0" max="100" step="1" value="75"><output for="raw-range-hi" id="raw-range-hi-v">75</output></div>' +
+                  '<div class="raw-slider"><label for="raw-range-feather">范围羽化</label><input id="raw-range-feather" type="range" min="0" max="100" step="1" value="24"><output for="raw-range-feather" id="raw-range-feather-v">24</output></div>' +
+                  '<div class="raw-slider" id="raw-range-tolerance-row"><label for="raw-range-tolerance">颜色容差</label><input id="raw-range-tolerance" type="range" min="0" max="100" step="1" value="28"><output for="raw-range-tolerance" id="raw-range-tolerance-v">28</output></div>' +
+                '</div>' +
+                '<div class="raw-range-color-row" id="raw-range-color-row" hidden>' +
+                  '<span class="raw-range-swatch" id="raw-range-swatch"></span>' +
+                  '<button type="button" class="raw-btn tiny" data-act="range-pick">' + icon('wand') + '吸取颜色</button>' +
+                  '<span class="raw-wb-hint">用吸管点画面中的目标颜色</span>' +
+                '</div>' +
+                '<p class="raw-group-hint" style="margin:6px 0 0;font-size:10.5px;color:var(--raw-ink-3)">范围蒙版按原始像素的亮度或颜色选择区域；如仍需补涂，可另建画笔蒙版。适合天空、肤色、暗部等局部调整。</p>' +
+              '</div>' +
               '<div class="raw-ai-model" id="raw-ai-model" role="status" aria-live="polite" hidden>' +
                 '<span class="raw-spinner raw-ai-spinner" id="raw-ai-spinner" hidden></span>' +
                 '<span class="raw-ai-dot"></span>' +
@@ -1242,6 +1588,20 @@
                 '<output for="raw-quality" id="raw-quality-v">92</output>' +
               '</div>' +
               '<p class="raw-export-note">导出会重新以全分辨率解码原始文件并应用当前调整与蒙版。10 MP 约需数秒；超大文件会先提示耗时，内存不足时自动退回预览分辨率并明确标注。</p>' +
+              '<div class="raw-subhead"><span>批量套用当前显影设置</span><span id="raw-batch-count">0 张</span></div>' +
+              '<p class="raw-group-hint" style="margin:2px 0 6px;font-size:10.5px;color:var(--raw-ink-3)">批量只套用全局显影、HSL、颜色分级与曲线，不包含当前蒙版、裁剪和几何；结果打包为一个 ZIP 下载。默认长边 3000，选择“原始尺寸”会更慢且占用更多内存。全部在浏览器内处理。</p>' +
+              '<div class="raw-batch-row">' +
+                '<button type="button" class="raw-btn tiny" data-act="batch-pick">选择多张</button>' +
+                '<select class="raw-select raw-batch-max" id="raw-batch-max" aria-label="批量导出尺寸">' +
+                  '<option value="1600">长边 1600</option>' +
+                  '<option value="3000" selected>长边 3000</option>' +
+                  '<option value="0">原始尺寸</option>' +
+                '</select>' +
+                '<button type="button" class="raw-btn tiny primary" data-act="batch-run" id="raw-batch-run" disabled>导出 ZIP</button>' +
+              '</div>' +
+              '<input type="file" id="raw-batch-input" multiple accept="' + ACCEPT + '" hidden>' +
+              '<div class="raw-batch-list" id="raw-batch-list"></div>' +
+              '<div class="raw-batch-progress" id="raw-batch-progress" hidden></div>' +
               '<div class="raw-export-result" id="raw-export-result" hidden></div>' +
             '</div>' +
           '</details>' +
@@ -1279,7 +1639,7 @@
   function maskTypeLabel(type) {
     return type === 'linear' ? '线性' : type === 'radial' ? '径向' :
       type === 'brush' ? '画笔' : type === 'sky' ? 'AI 天空' :
-      type === 'subject' ? 'AI 主体' : '未启用';
+      type === 'subject' ? 'AI 主体' : type === 'range' ? '范围' : '未启用';
   }
 
   function maskGeometryDefaults(type) {
@@ -1296,6 +1656,14 @@
     if (opts.feather != null) mask.feather = clamp(Number(opts.feather), 0, 1);
     if (opts.brushPct != null) mask.brushPct = clamp(Number(opts.brushPct), 1, 24);
     if (opts.brushMode === 'subtract' || opts.brushMode === 'add') mask.brushMode = opts.brushMode;
+    if (opts.rangeMode === 'luma' || opts.rangeMode === 'color') mask.rangeMode = opts.rangeMode;
+    if (opts.rangeLo != null) mask.rangeLo = clamp(Number(opts.rangeLo), 0, 100);
+    if (opts.rangeHi != null) mask.rangeHi = clamp(Number(opts.rangeHi), 0, 100);
+    if (opts.rangeFeather != null) mask.rangeFeather = clamp(Number(opts.rangeFeather), 0, 100);
+    if (opts.rangeTolerance != null) mask.rangeTolerance = clamp(Number(opts.rangeTolerance), 0, 100);
+    if (Array.isArray(opts.rangeColor)) {
+      mask.rangeColor = opts.rangeColor.slice(0, 3).map(function (v) { return clamp(Number(v), 0, 1); });
+    }
     var map = null;
     if (opts.p1 || opts.p2 || opts.strokes) map = geometryMap();
     if (opts.p1) mask.p1 = mapPointToCanonical(map, opts.p1);
@@ -1360,6 +1728,12 @@
       strokes: [],
       brushPct: 8,
       brushMode: 'add',
+      rangeMode: RANGE_MASK_DEFAULTS.rangeMode,
+      rangeLo: RANGE_MASK_DEFAULTS.rangeLo,
+      rangeHi: RANGE_MASK_DEFAULTS.rangeHi,
+      rangeFeather: RANGE_MASK_DEFAULTS.rangeFeather,
+      rangeTolerance: RANGE_MASK_DEFAULTS.rangeTolerance,
+      rangeColor: RANGE_MASK_DEFAULTS.rangeColor.slice(),
       local: defaultLocal(),
       current: null,
       dragMode: '',
@@ -1399,6 +1773,10 @@
       before: false,
       curves: createCurves(),
       paramCurve: defaultParamCurve(),
+      hsl: defaultHSL(),
+      grading: defaultGrading(),
+      hslBand: 'red',
+      gradeRange: 'shadows',
       curveChannel: 'rgb',
       curveLut: null,
       curveOn: false,
@@ -1413,6 +1791,7 @@
       activeMaskId: initialMask.id,
       zoomMode: 'fit',
       zoomPct: 100,
+      pickMode: '',
       lastExport: null,
       loadSeq: 0
     };
@@ -1464,6 +1843,15 @@
   var smartMaskTimer = 0;
   var beforeKeyHeld = false;
   var beforeKeyPrevious = false;
+  var PRESET_STORAGE_KEY = 'localtools.raw.presets.v1';
+  var presetsCache = null;
+  var settingsClipboard = null;
+  var snapshotStore = Object.create(null);
+  var batchFiles = [];
+  var batchRunning = false;
+  var LENS_PROFILE_KEY = 'localtools.raw.lensProfiles.v1';
+  var LENS_AUTO_KEY = 'localtools.raw.lensAuto.v1';
+  var lensProfilesCache = null;
 
   function resolveVendorBase() {
     var scripts = Array.prototype.slice.call(document.scripts || []);
@@ -1534,6 +1922,32 @@
       fileNote: $('#raw-file-note', root),
       fileNoteText: $('#raw-file-note span', root),
       adjSum: $('#raw-adj-sum', root),
+      wbPick: $('#raw-wb-pick', root),
+      wbAuto: $('#raw-wb-auto', root),
+      wbHint: $('#raw-wb-hint', root),
+      colorSum: $('#raw-color-sum', root),
+      hslBands: $('#raw-hsl-bands', root),
+      hslScope: $('#raw-hsl-scope', root),
+      gradeRanges: $('#raw-grade-ranges', root),
+      gradeScope: $('#raw-grade-scope', root),
+      rangePanel: $('#raw-range-panel', root),
+      rangeMode: $('#raw-range-mode', root),
+      rangeSwatch: $('#raw-range-swatch', root),
+      rangeLo: $('#raw-range-lo', root),
+      rangeLoV: $('#raw-range-lo-v', root),
+      rangeHi: $('#raw-range-hi', root),
+      rangeHiV: $('#raw-range-hi-v', root),
+      rangeFeather: $('#raw-range-feather', root),
+      rangeFeatherV: $('#raw-range-feather-v', root),
+      rangeTolerance: $('#raw-range-tolerance', root),
+      rangeToleranceV: $('#raw-range-tolerance-v', root),
+      presetSum: $('#raw-preset-sum', root),
+      presetCount: $('#raw-preset-count', root),
+      presetName: $('#raw-preset-name', root),
+      presetList: $('#raw-preset-list', root),
+      snapshotCount: $('#raw-snapshot-count', root),
+      snapshotName: $('#raw-snapshot-name', root),
+      snapshotList: $('#raw-snapshot-list', root),
       curveSum: $('#raw-curve-sum', root),
       curveCanvas: $('#raw-curve', root),
       curveChannels: $('#raw-curve-channels', root),
@@ -1544,6 +1958,10 @@
       geoNote: $('#raw-geo-note', root),
       geoAngle: $('#raw-geo-angle', root),
       geoAngleV: $('#raw-geo-angle-v', root),
+      perspH: $('#raw-persp-h', root),
+      perspHV: $('#raw-persp-h-v', root),
+      perspV: $('#raw-persp-v', root),
+      perspVV: $('#raw-persp-v-v', root),
       cropAspect: $('#raw-crop-aspect', root),
       cropToggle: $('#raw-crop-toggle', root),
       cropApplyRow: $('#raw-crop-apply-row', root),
@@ -1551,6 +1969,9 @@
       cropBox: $('#raw-crop-box', root),
       cropSize: $('#raw-crop-size', root),
       lensSum: $('#raw-lens-sum', root),
+      lensProfile: $('#raw-lens-profile', root),
+      lensAuto: $('#raw-lens-auto', root),
+      lensStatus: $('#raw-lens-status', root),
       detailSum: $('#raw-detail-sum', root),
       maskAI: $('#raw-mask-ai-refresh', root),
       aiModel: $('#raw-ai-model', root),
@@ -1580,7 +2001,13 @@
       qualityV: $('#raw-quality-v', root),
       exportBtn: $('#raw-export-btn', root),
       exportResult: $('#raw-export-result', root),
-      exportSum: $('#raw-export-sum', root)
+      exportSum: $('#raw-export-sum', root),
+      batchInput: $('#raw-batch-input', root),
+      batchMax: $('#raw-batch-max', root),
+      batchRun: $('#raw-batch-run', root),
+      batchCount: $('#raw-batch-count', root),
+      batchList: $('#raw-batch-list', root),
+      batchProgress: $('#raw-batch-progress', root)
     };
 
     var cfg = window.RAWDevelopConfig || {};
@@ -1621,11 +2048,16 @@
     updateMaskUI();
     updateAdjustOutputs();
     updateParamCurveUI();
+    updateColorUI();
     updateCurveUI();
     updateBeforeLabel();
     updateGeometryUI();
     renderHistoryPanel();
     updateHistoryUI();
+    renderPresetList();
+    renderSnapshotList();
+    renderBatchList();
+    renderLensProfiles();
     scheduleRender();
     mountedRoots.push(el);
     return api;
@@ -1756,8 +2188,13 @@
       }
       state.adjust = defaultAdjust();
       state.before = false;
+      state.pickMode = '';
       state.curves = createCurves();
       state.paramCurve = defaultParamCurve();
+      state.hsl = defaultHSL();
+      state.grading = defaultGrading();
+      state.hslBand = 'red';
+      state.gradeRange = 'shadows';
       state.curveChannel = 'rgb';
       state.curveLut = null;
       state.curveOn = false;
@@ -1809,10 +2246,16 @@
       updateFootRight();
       updateAdjustOutputs();
       updateParamCurveUI();
+      updateColorUI();
       updateCurveLut(false);
       updateMaskUI();
+      renderLensProfiles();
+      if (autoApplyLensProfile()) scheduleRender();
+      updateAdjustOutputs();
       updateGeometryUI();
       resetHistory();
+      renderSnapshotList();
+      renderBatchList();
       dispatch('raw:file', { name: name, meta: state.meta, preview: { w: result.preview.w, h: result.preview.h } });
     } catch (err) {
       if (newRaw) { try { newRaw.close(); } catch (e) { /* ignore */ } }
@@ -2149,6 +2592,13 @@
     return type === 'brush' || type === 'sky' || type === 'subject';
   }
 
+  function maskNeedsTexture(mask) {
+    if (!mask) return false;
+    if (isTexturedMaskType(mask.type)) return true;
+    // 透视校正后线性/径向蒙版在输出空间中不再是简单几何形状，改用蒙版纹理跟随画面。
+    return geometryHasPerspective() && (mask.type === 'linear' || mask.type === 'radial');
+  }
+
   function isSmartMaskType(type) {
     return type === 'sky' || type === 'subject';
   }
@@ -2156,6 +2606,7 @@
   function maskTypeCode(type) {
     if (type === 'linear') return 1;
     if (type === 'radial') return 2;
+    if (type === 'range') return 4;
     if (isTexturedMaskType(type)) return 3;
     return 0;
   }
@@ -2192,32 +2643,49 @@
       if (!m.enabled || m.type === 'none') continue;
       if (m.type === 'brush' && !m.strokes.length) continue;
       var geo = maskRenderGeometry(m, map);
+      var textured = maskNeedsTexture(m);
       masks.push({
         id: m.id,
-        type: maskTypeCode(m.type),
+        type: textured ? 3 : maskTypeCode(m.type),
+        texture: textured,
         invert: !!m.invert,
         feather: m.feather,
         p1: geo.p1,
         p2: geo.p2,
         ellipse: geo.ellipse,
-        local: localVector(m.local)
+        local: localVector(m.local),
+        rangeMode: m.rangeMode,
+        rangeLo: m.rangeLo / 100,
+        rangeHi: m.rangeHi / 100,
+        rangeFeather: m.rangeFeather / 100,
+        rangeColor: m.rangeColor,
+        rangeTolerance: m.rangeTolerance / 100
       });
     }
     var showMask = null;
     var am = activeMask();
     if (!isExport && am && am.enabled && am.type !== 'none' && am.show) {
       var showGeo = maskRenderGeometry(am, map);
+      var showTextured = maskNeedsTexture(am);
       showMask = {
         id: am.id,
-        type: maskTypeCode(am.type),
+        type: showTextured ? 3 : maskTypeCode(am.type),
+        texture: showTextured,
         invert: !!am.invert,
         feather: am.feather,
         p1: showGeo.p1,
         p2: showGeo.p2,
         ellipse: showGeo.ellipse,
-        local: localVector(am.local)
+        local: localVector(am.local),
+        rangeMode: am.rangeMode,
+        rangeLo: am.rangeLo / 100,
+        rangeHi: am.rangeHi / 100,
+        rangeFeather: am.rangeFeather / 100,
+        rangeColor: am.rangeColor,
+        rangeTolerance: am.rangeTolerance / 100
       };
     }
+    var perspMat = perspectiveShaderMatrix();
     return {
       before: isExport ? false : state.before,
       exposure: a.exposure,
@@ -2240,6 +2708,12 @@
       lensCa: a.lensCa / 100,
       noiseLuma: a.noiseLuma / 100,
       noiseColor: a.noiseColor / 100,
+      hsl: hslParamValues(),
+      hslOn: !hslIsIdentity(),
+      grading: gradeParamValues(),
+      gradingOn: !gradingIsIdentity(),
+      persp: perspMat.matrix,
+      perspOn: perspMat.active,
       masks: masks,
       showMask: showMask
     };
@@ -2272,6 +2746,12 @@
       radialMat: mask.radialMat ? mask.radialMat.slice() : null,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
+      rangeMode: mask.rangeMode || 'luma',
+      rangeLo: mask.rangeLo,
+      rangeHi: mask.rangeHi,
+      rangeFeather: mask.rangeFeather,
+      rangeTolerance: mask.rangeTolerance,
+      rangeColor: (mask.rangeColor || RANGE_MASK_DEFAULTS.rangeColor).slice(),
       strokes: (mask.strokes || []).map(function (stroke) {
         return {
           radius: stroke.radius,
@@ -2292,6 +2772,10 @@
       adjust: Object.assign({}, state.adjust),
       curves: curves,
       paramCurve: Object.assign({}, state.paramCurve),
+      hsl: JSON.parse(JSON.stringify(state.hsl)),
+      grading: JSON.parse(JSON.stringify(state.grading)),
+      hslBand: state.hslBand,
+      gradeRange: state.gradeRange,
       curveChannel: state.curveChannel,
       geometry: cloneGeometry(state.geometry),
       masks: state.masks.map(cloneHistoryMask)
@@ -2430,9 +2914,14 @@
       });
       normalizeParamSplits(state.paramCurve);
     }
+    state.hsl = clampHSL(snap.hsl);
+    state.grading = clampGrading(snap.grading);
+    state.hslBand = state.hsl[snap.hslBand] ? snap.hslBand : 'red';
+    state.gradeRange = state.grading[snap.gradeRange] ? snap.gradeRange : 'shadows';
     state.curveChannel = state.curves[snap.curveChannel] ? snap.curveChannel : 'rgb';
     state.curveDragging = -1;
     state.before = false;
+    state.pickMode = '';
     state.curveLut = null;
     state.geometry = cloneGeometry(snap.geometry);
     state.cropEditing = false;
@@ -2473,6 +2962,14 @@
         }),
         brushPct: clamp(Number(m.brushPct) || 8, 1, 24),
         brushMode: m.brushMode === 'subtract' ? 'subtract' : 'add',
+        rangeMode: m.rangeMode === 'color' ? 'color' : 'luma',
+        rangeLo: clamp(Number(m.rangeLo) || 0, 0, 100),
+        rangeHi: clamp(m.rangeHi == null ? 100 : Number(m.rangeHi), 0, 100),
+        rangeFeather: clamp(m.rangeFeather == null ? 24 : Number(m.rangeFeather), 0, 100),
+        rangeTolerance: clamp(m.rangeTolerance == null ? 28 : Number(m.rangeTolerance), 0, 100),
+        rangeColor: Array.isArray(m.rangeColor) && m.rangeColor.length >= 3
+          ? m.rangeColor.slice(0, 3).map(function (v) { return clamp(Number(v), 0, 1); })
+          : (m.type === 'range' ? RANGE_MASK_DEFAULTS.rangeColor.slice() : null),
         local: Object.assign(defaultLocal(), m.local || {}),
         current: null,
         dragMode: '',
@@ -2488,6 +2985,7 @@
     });
     updateAdjustOutputs();
     updateParamCurveUI();
+    updateColorUI();
     updateBeforeLabel();
     applyGeometrySource();
     updateCurveLut(false);
@@ -2973,6 +3471,244 @@
     });
   }
 
+  function srgbToLinearChannel(v) {
+    v = clamp(v / 255, 0, 1);
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }
+
+  function solveWhiteBalance(r, g, b) {
+    var lr = Math.log2(Math.max(1e-5, srgbToLinearChannel(r)));
+    var lg = Math.log2(Math.max(1e-5, srgbToLinearChannel(g)));
+    var lb = Math.log2(Math.max(1e-5, srgbToLinearChannel(b)));
+    var u = (2 * lg - lr - lb) / 0.84;
+    var t = (lb - lr) / 1.10;
+    return {
+      temperature: clamp(Math.round(t * 100), -100, 100),
+      tint: clamp(Math.round(u * 100), -100, 100)
+    };
+  }
+
+  function sampleRenderSource(uv) {
+    if (!state.renderSource) return null;
+    var src = state.renderSource;
+    var suv = geometryHasPerspective() ? perspectiveOutputToSourceUV(uv) : uv;
+    var sx = clamp(Math.round(suv.x * (src.width - 1)), 0, src.width - 1);
+    var sy = clamp(Math.round(suv.y * (src.height - 1)), 0, src.height - 1);
+    try {
+      var ctx = src.getContext('2d', { willReadFrequently: true });
+      var d = ctx.getImageData(sx, sy, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function applyWhiteBalanceSample(rgb, label) {
+    if (!rgb) return;
+    var solved = solveWhiteBalance(rgb[0], rgb[1], rgb[2]);
+    state.adjust.temperature = solved.temperature;
+    state.adjust.tint = solved.tint;
+    updateAdjustOutputs();
+    markHistory(label || '白平衡吸管');
+    scheduleRender();
+    setStatus('白平衡已校正：色温 ' + (solved.temperature > 0 ? '+' : '') + solved.temperature +
+      '，色调 ' + (solved.tint > 0 ? '+' : '') + solved.tint + '。', 'ok');
+  }
+
+  function autoWhiteBalance() {
+    if (!state.loaded || !state.renderSource) return;
+    var src = state.renderSource;
+    var ctx = src.getContext('2d', { willReadFrequently: true });
+    var step = Math.max(1, Math.floor(Math.max(src.width, src.height) / 96));
+    var sums = [0, 0, 0];
+    var n = 0;
+    try {
+      var data = ctx.getImageData(0, 0, src.width, src.height).data;
+      for (var y = 0; y < src.height; y += step) {
+        for (var x = 0; x < src.width; x += step) {
+          var o = (y * src.width + x) * 4;
+          var r = data[o], g = data[o + 1], b = data[o + 2];
+          var l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          if (l < 18 || l > 238) continue;
+          sums[0] += r; sums[1] += g; sums[2] += b; n++;
+        }
+      }
+    } catch (e) {
+      setStatus('无法读取画面像素，请重试。', 'warn');
+      return;
+    }
+    if (!n) {
+      setStatus('画面中没有足够的中性区域可用于自动白平衡。', 'warn');
+      return;
+    }
+    applyWhiteBalanceSample([sums[0] / n, sums[1] / n, sums[2] / n], '自动白平衡');
+  }
+
+  function setPickMode(mode) {
+    state.pickMode = mode || '';
+    els.canvas.classList.toggle('is-picking', !!state.pickMode);
+    if (els.wbPick) els.wbPick.classList.toggle('is-on', state.pickMode === 'whitebalance');
+    if (els.wbHint) {
+      els.wbHint.textContent = state.pickMode === 'whitebalance'
+        ? '点击画面中的中性灰区域'
+        : state.pickMode === 'range'
+          ? '点击画面中的目标颜色'
+          : '先点吸管，再点画面中的灰色区域';
+    }
+    if (state.pickMode) setStatus(state.pickMode === 'whitebalance'
+      ? '白平衡吸管：请在画面上点击中性灰区域。'
+      : '颜色范围吸管：请在画面上点击要选择的颜色。', '');
+  }
+
+  function handleCanvasPick(uv) {
+    var mode = state.pickMode;
+    var rgb = sampleRenderSource(uv);
+    setPickMode('');
+    if (!rgb) {
+      setStatus('无法读取该位置的像素。', 'warn');
+      return;
+    }
+    if (mode === 'whitebalance') {
+      applyWhiteBalanceSample(rgb);
+    } else if (mode === 'range') {
+      var mask = activeMask();
+      if (!mask || mask.type !== 'range') return;
+      mask.rangeColor = [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+      mask.rangeMode = 'color';
+      updateRangeUI();
+      updateMaskUI();
+      markHistory('颜色范围吸管');
+      scheduleRender();
+      setStatus('已吸取颜色，颜色容差可调大或调小。', 'ok');
+    }
+  }
+
+  function hslBandLabel(key) {
+    for (var i = 0; i < HSL_BANDS.length; i++) {
+      if (HSL_BANDS[i].key === key) return HSL_BANDS[i].label;
+    }
+    return '红';
+  }
+
+  function updateColorUI() {
+    if (!root) return;
+    if (els.hslBands) {
+      els.hslBands.querySelectorAll('[data-hsl-band]').forEach(function (b) {
+        var on = b.getAttribute('data-hsl-band') === state.hslBand;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    var band = state.hsl[state.hslBand] || state.hsl.red;
+    var bandDef = null;
+    for (var i = 0; i < HSL_BANDS.length; i++) {
+      if (HSL_BANDS[i].key === state.hslBand) { bandDef = HSL_BANDS[i]; break; }
+    }
+    if (els.hslScope) els.hslScope.textContent = bandDef ? bandDef.label : '红';
+    ['h', 's', 'l'].forEach(function (key) {
+      var input = root.querySelector('[data-hsl="' + key + '"]');
+      var out = root.querySelector('[data-out-hsl="' + key + '"]');
+      if (input && Number(input.value) !== band[key]) input.value = String(band[key]);
+      if (out) {
+        out.textContent = (band[key] > 0 ? '+' : '') + band[key];
+        out.classList.toggle('is-set', Math.abs(band[key]) > 1e-9);
+      }
+    });
+    if (els.gradeRanges) {
+      els.gradeRanges.querySelectorAll('[data-grade-range]').forEach(function (b) {
+        var on = b.getAttribute('data-grade-range') === state.gradeRange;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    var grade = state.grading[state.gradeRange] || state.grading.shadows;
+    var gradeDef = null;
+    for (var j = 0; j < GRADE_RANGES.length; j++) {
+      if (GRADE_RANGES[j].key === state.gradeRange) { gradeDef = GRADE_RANGES[j]; break; }
+    }
+    if (els.gradeScope) els.gradeScope.textContent = gradeDef ? gradeDef.label : '阴影';
+    if (root) {
+      var hueInput = root.querySelector('[data-grade="hue"]');
+      var satInput = root.querySelector('[data-grade="sat"]');
+      var lumInput = root.querySelector('[data-grade="lum"]');
+      if (hueInput && Number(hueInput.value) !== grade.hue) hueInput.value = String(grade.hue);
+      if (satInput && Number(satInput.value) !== grade.sat) satInput.value = String(grade.sat);
+      if (lumInput && Number(lumInput.value) !== grade.lum) lumInput.value = String(grade.lum);
+      var hueOut = root.querySelector('[data-out-grade="hue"]');
+      var satOut = root.querySelector('[data-out-grade="sat"]');
+      var lumOut = root.querySelector('[data-out-grade="lum"]');
+      if (hueOut) hueOut.textContent = Math.round(grade.hue) + '°';
+      if (satOut) { satOut.textContent = String(grade.sat); satOut.classList.toggle('is-set', grade.sat > 0); }
+      if (lumOut) { lumOut.textContent = (grade.lum > 0 ? '+' : '') + grade.lum; lumOut.classList.toggle('is-set', Math.abs(grade.lum) > 1e-9); }
+    }
+    if (els.colorSum) {
+      var count = 0;
+      HSL_BANDS.forEach(function (b) {
+        var v = state.hsl[b.key];
+        if (Math.abs(v.h) > 1e-9 || Math.abs(v.s) > 1e-9 || Math.abs(v.l) > 1e-9) count++;
+      });
+      GRADE_RANGES.forEach(function (r) {
+        var v = state.grading[r.key];
+        if (v.sat > 1e-9 || Math.abs(v.lum) > 1e-9) count++;
+      });
+      els.colorSum.textContent = count ? count + ' 项' : '0 项';
+    }
+  }
+
+  function setHSL(key, value, silent) {
+    var band = state.hsl[state.hslBand];
+    if (!band || (key !== 'h' && key !== 's' && key !== 'l')) return;
+    band[key] = clamp(Math.round(Number(value)), -100, 100);
+    updateColorUI();
+    markHistory('HSL · ' + hslBandLabel(state.hslBand));
+    scheduleRender();
+    if (silent) historyFlush();
+  }
+
+  function setGrading(key, value, silent) {
+    var range = state.grading[state.gradeRange];
+    if (!range || (key !== 'hue' && key !== 'sat' && key !== 'lum')) return;
+    if (key === 'hue') range.hue = ((Math.round(Number(value)) % 360) + 360) % 360;
+    else if (key === 'sat') range.sat = clamp(Math.round(Number(value)), 0, 100);
+    else range.lum = clamp(Math.round(Number(value)), -100, 100);
+    updateColorUI();
+    markHistory('颜色分级 · ' + (state.gradeRange === 'shadows' ? '阴影' : state.gradeRange === 'midtones' ? '中间调' : '高光'));
+    scheduleRender();
+    if (silent) historyFlush();
+  }
+
+  function resetHSLBand() {
+    if (!state.hsl[state.hslBand]) return;
+    state.hsl[state.hslBand] = { h: 0, s: 0, l: 0 };
+    updateColorUI();
+    markHistory('重置 HSL · 当前色相');
+    scheduleRender();
+  }
+
+  function resetHSLAll() {
+    state.hsl = defaultHSL();
+    updateColorUI();
+    markHistory('重置 HSL');
+    scheduleRender();
+  }
+
+  function resetGradeRange() {
+    if (!state.grading[state.gradeRange]) return;
+    var def = state.grading[state.gradeRange];
+    def.sat = 0;
+    def.lum = 0;
+    updateColorUI();
+    markHistory('重置颜色分级 · 当前色调');
+    scheduleRender();
+  }
+
+  function resetGradeAll() {
+    state.grading = defaultGrading();
+    updateColorUI();
+    markHistory('重置颜色分级');
+    scheduleRender();
+  }
+
   function setParamCurve(key, value, silent) {
     var def = findDef(key, PARAM_CURVE);
     if (!def) return;
@@ -3126,13 +3862,13 @@
 
   function normalizeMaskType(type) {
     return type === 'radial' || type === 'brush' || type === 'none' ||
-      type === 'sky' || type === 'subject' ? type : 'linear';
+      type === 'sky' || type === 'subject' || type === 'range' ? type : 'linear';
   }
 
   function geometryIsIdentity(g) {
     g = g || state.geometry;
     return !g.rotate90 && !g.flipH && !g.flipV &&
-      Math.abs(g.angle) < 0.01 && !g.crop;
+      Math.abs(g.angle) < 0.01 && !g.crop && !geometryHasPerspective(g);
   }
 
   // 预览和导出共用同一条几何管线：旋转/镜像 → 拉直（自动放大防黑边）→ 裁剪。
@@ -3300,13 +4036,132 @@
     };
   }
 
+  var perspectiveCache = { key: '', data: null };
+
+  function mat3Mul(a, b) {
+    var out = new Array(9);
+    for (var r = 0; r < 3; r++) {
+      for (var c = 0; c < 3; c++) {
+        out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+      }
+    }
+    return out;
+  }
+
+  function mat3Inv(m) {
+    var a = m[0], b = m[1], c = m[2];
+    var d = m[3], e = m[4], f = m[5];
+    var g = m[6], h = m[7], i = m[8];
+    var det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (Math.abs(det) < 1e-12) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    var inv = 1 / det;
+    return [
+      (e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv,
+      (f * g - d * i) * inv, (a * i - c * g) * inv, (c * d - a * f) * inv,
+      (d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv
+    ];
+  }
+
+  function mat3Apply(m, x, y) {
+    var w = m[6] * x + m[7] * y + m[8];
+    if (Math.abs(w) < 1e-9) w = 1e-9;
+    return { x: (m[0] * x + m[1] * y + m[2]) / w, y: (m[3] * x + m[4] * y + m[5]) / w };
+  }
+
+  function perspectiveTransform() {
+    var g = state && state.geometry ? state.geometry : {};
+    var ph = clamp(Number(g.perspectiveH) || 0, -100, 100);
+    var pv = clamp(Number(g.perspectiveV) || 0, -100, 100);
+    var key = ph + ':' + pv;
+    if (perspectiveCache.key === key && perspectiveCache.data) return perspectiveCache.data;
+    if (Math.abs(ph) < 0.01 && Math.abs(pv) < 0.01) {
+      perspectiveCache = { key: key, data: { active: false, H: [1,0,0,0,1,0,0,0,1], inv: [1,0,0,0,1,0,0,0,1] } };
+      return perspectiveCache.data;
+    }
+    var ay = (ph / 100) * 28 * Math.PI / 180;
+    var ax = (pv / 100) * 28 * Math.PI / 180;
+    var cy = Math.cos(ay), sy = Math.sin(ay);
+    var cx = Math.cos(ax), sx = Math.sin(ax);
+    var R = [
+      cy, 0, sy,
+      sx * sy, cx, -sx * cy,
+      -cx * sy, sx, cx * cy
+    ];
+    var d = 2.0;
+    // 以画面中心为原点，把源平面旋转后做透视投影。
+    var H = [
+      R[0], R[1], 0,
+      R[3], R[4], 0,
+      -R[6] / d, -R[7] / d, 1
+    ];
+    var corners = [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]];
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    corners.forEach(function (p) {
+      var q = mat3Apply(H, p[0], p[1]);
+      minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x);
+      minY = Math.min(minY, q.y); maxY = Math.max(maxY, q.y);
+    });
+    var bw = Math.max(1e-6, maxX - minX);
+    var bh = Math.max(1e-6, maxY - minY);
+    var cover = Math.max(1 / bw, 1 / bh);
+    var cx0 = (minX + maxX) * 0.5;
+    var cy0 = (minY + maxY) * 0.5;
+    var S = [cover, 0, 0, 0, cover, 0, 0, 0, 1];
+    var T = [1, 0, 0.5 - cover * cx0, 0, 1, 0.5 - cover * cy0, 0, 0, 1];
+    var Hfinal = mat3Mul(T, mat3Mul(S, H));
+    var data = { active: true, H: Hfinal, inv: mat3Inv(Hfinal) };
+    perspectiveCache = { key: key, data: data };
+    return data;
+  }
+
+  function perspectiveShaderMatrix() {
+    var t = perspectiveTransform();
+    if (!t.active) return { active: false, matrix: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]) };
+    // 着色器采样：输出 uv → 源中心坐标 → 源 uv。
+    var A = mat3Mul([1, 0, 0.5, 0, 1, 0.5, 0, 0, 1], t.inv);
+    var m = new Float32Array(9);
+    for (var c = 0; c < 3; c++) for (var r = 0; r < 3; r++) m[c * 3 + r] = A[r * 3 + c];
+    return { active: true, matrix: m };
+  }
+
+  function perspectiveOutputToSourceUV(p) {
+    var t = perspectiveTransform();
+    if (!t.active) return { x: p.x, y: p.y };
+    var q = mat3Apply(t.inv, p.x, p.y);
+    return { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) };
+  }
+
+  function perspectiveSourceToOutputUV(p) {
+    var t = perspectiveTransform();
+    if (!t.active) return { x: p.x, y: p.y };
+    var q = mat3Apply(t.H, p.x, p.y);
+    return { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) };
+  }
+
+  function setPerspective(key, value) {
+    if (!state.loaded || state.cropEditing) return;
+    var g = state.geometry;
+    var v = clamp(Number(value), -100, 100);
+    if (key === 'h') g.perspectiveH = v;
+    else if (key === 'v') g.perspectiveV = v;
+    else return;
+    if (geometryHasPerspective(g) && g.crop) {
+      g.crop = null;
+      setStatus('启用透视校正后已清空裁剪框；如需裁剪请先把透视归零。', 'warn');
+    }
+    markHistory('透视校正 · ' + (key === 'h' ? '水平' : '垂直'));
+    perspectiveCache.key = '';
+    rebuildRenderSource({ fit: false });
+  }
+
   function mapPointToOutput(map, p) {
     var q = map.matrix.transformPoint({ x: p.x, y: p.y });
     return { x: q.x, y: q.y };
   }
 
   function mapPointToCanonical(map, p) {
-    var q = map.inverse.transformPoint({ x: p.x, y: p.y });
+    var uv = geometryHasPerspective() ? perspectiveOutputToSourceUV(p) : p;
+    var q = map.inverse.transformPoint({ x: uv.x, y: uv.y });
     return { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) };
   }
 
@@ -3445,6 +4300,10 @@
     var g = state.geometry;
     if (els.geoAngle) els.geoAngle.value = String(g.angle);
     if (els.geoAngleV) els.geoAngleV.textContent = Number(g.angle).toFixed(1) + '°';
+    if (els.perspH) els.perspH.value = String(Math.round(g.perspectiveH || 0));
+    if (els.perspHV) els.perspHV.textContent = String(Math.round(g.perspectiveH || 0));
+    if (els.perspV) els.perspV.value = String(Math.round(g.perspectiveV || 0));
+    if (els.perspVV) els.perspVV.textContent = String(Math.round(g.perspectiveV || 0));
     if (els.cropAspect) els.cropAspect.value = state.cropAspect;
     if (els.geoSum) {
       if (state.cropEditing) els.geoSum.textContent = '裁剪中';
@@ -3456,6 +4315,8 @@
         if (g.flipV) parts.push('垂直镜像');
         if (Math.abs(g.angle) > 0.01) parts.push('拉直 ' + Number(g.angle).toFixed(1) + '°');
         if (g.crop) parts.push('已裁剪');
+        if (Math.abs(g.perspectiveH || 0) > 0.01) parts.push('水平透视 ' + Math.round(g.perspectiveH));
+        if (Math.abs(g.perspectiveV || 0) > 0.01) parts.push('垂直透视 ' + Math.round(g.perspectiveV));
         els.geoSum.textContent = parts.join(' · ');
       }
     }
@@ -3467,12 +4328,16 @@
         var note = '输出 ' + dims + ' px';
         if (g.crop) note += ' · 裁剪 ' + Math.round(g.crop.w * 100) + '% × ' + Math.round(g.crop.h * 100) + '%';
         if (Math.abs(g.angle) > 0.01) note += ' · 拉直已自动放大避免空白边缘';
+        if (geometryHasPerspective(g)) note += ' · 透视校正已启用（自动放大）';
         if (state.cropEditing) note += ' · 拖动裁剪框后点击“应用裁剪”';
         els.geoNote.textContent = note;
       }
     }
     if (els.cropToggle) {
+      var perspOn = geometryHasPerspective(g);
       els.cropToggle.classList.toggle('is-on', state.cropEditing);
+      els.cropToggle.disabled = perspOn && !state.cropEditing;
+      els.cropToggle.title = perspOn ? '透视校正启用时不能裁剪，请先把透视归零' : '裁剪 (C)';
       els.cropToggle.innerHTML = icon('crop') + (state.cropEditing ? '裁剪中' : '裁剪');
     }
     if (els.cropApplyRow) els.cropApplyRow.hidden = !state.cropEditing;
@@ -3564,6 +4429,10 @@
 
   function beginCropMode() {
     if (!state.loaded) return;
+    if (geometryHasPerspective()) {
+      setStatus('透视校正启用时不能裁剪；请先把透视滑杆归零。', 'warn');
+      return;
+    }
     if (state.cropEditing) { cancelCropMode(); return; }
     historyFlush();
     state.cropEditing = true;
@@ -3751,7 +4620,7 @@
    * 蒙版
    * ------------------------------------------------------------------ */
 
-  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: 'AI 天空', subject: 'AI 主体' };
+  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: 'AI 天空', subject: 'AI 主体', range: '范围' };
 
   function activeMask() {
     for (var i = 0; i < state.masks.length; i++) {
@@ -3824,6 +4693,37 @@
     }
   }
 
+  function updateRangeUI() {
+    var mask = activeMask();
+    var isRange = !!mask && mask.type === 'range';
+    if (els.rangePanel) els.rangePanel.hidden = !isRange;
+    if (!isRange) return;
+    if (els.rangeMode) {
+      els.rangeMode.querySelectorAll('[data-range-mode]').forEach(function (b) {
+        var on = b.getAttribute('data-range-mode') === (mask.rangeMode || 'luma');
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    els.rangeLo.value = String(Math.round(mask.rangeLo));
+    els.rangeLoV.textContent = String(Math.round(mask.rangeLo));
+    els.rangeHi.value = String(Math.round(mask.rangeHi));
+    els.rangeHiV.textContent = String(Math.round(mask.rangeHi));
+    els.rangeFeather.value = String(Math.round(mask.rangeFeather));
+    els.rangeFeatherV.textContent = String(Math.round(mask.rangeFeather));
+    els.rangeTolerance.value = String(Math.round(mask.rangeTolerance));
+    els.rangeToleranceV.textContent = String(Math.round(mask.rangeTolerance));
+    var colorRow = root.querySelector('#raw-range-color-row');
+    if (colorRow) colorRow.hidden = mask.rangeMode !== 'color';
+    var toleranceRow = root.querySelector('#raw-range-tolerance-row');
+    if (toleranceRow) toleranceRow.hidden = mask.rangeMode !== 'color';
+    if (els.rangeSwatch) {
+      var c = mask.rangeColor || [0.5, 0.5, 0.5];
+      els.rangeSwatch.style.background = 'rgb(' + Math.round(c[0] * 255) + ',' +
+        Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ')';
+    }
+  }
+
   function updateMaskUI() {
     var mask = activeMask();
     var hasMask = !!mask && mask.type !== 'none';
@@ -3878,6 +4778,7 @@
     }
     els.canvas.classList.toggle('is-masking', hasMask && mask.enabled && !state.cropEditing);
     els.maskNote.classList.toggle('is-empty', !hasMask);
+    updateRangeUI();
     if (!mask) {
       els.maskNote.innerHTML = '尚未添加蒙版。点击“添加蒙版”后可在预览画面上拖动定义范围，局部调整只作用于蒙版内。';
     } else if (!hasMask) {
@@ -3890,6 +4791,8 @@
       els.maskNote.innerHTML = '<b>AI 天空</b>：优先使用本地 ADE20K 语义分割模型识别天空；模型不可用时回退到颜色/连通域识别。复杂边缘可用画笔修整，勾选“显示蒙版”检查覆盖。';
     } else if (mask.type === 'subject') {
       els.maskNote.innerHTML = '<b>AI 主体</b>：本地 ADE20K 语义分割模型识别画面中的人物与动物（首次按需加载，图片不上传）；模型不可用时回退到构图识别。分割结果可用画笔修整。';
+    } else if (mask.type === 'range') {
+      els.maskNote.innerHTML = '<b>范围蒙版</b>：按原始像素的亮度区间或目标颜色选择区域；调整亮度上下限、羽化与颜色容差即可实时看到范围。需要补涂时可另建画笔蒙版。';
     } else {
       els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，可调画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
     }
@@ -3914,7 +4817,15 @@
       clearAIBaseForMask(mask.id);
     }
     mask.type = type;
-    mask.show = false;
+    mask.show = isSmartMaskType(type) || type === 'range';
+    if (type === 'range') {
+      mask.rangeMode = RANGE_MASK_DEFAULTS.rangeMode;
+      mask.rangeLo = RANGE_MASK_DEFAULTS.rangeLo;
+      mask.rangeHi = RANGE_MASK_DEFAULTS.rangeHi;
+      mask.rangeFeather = RANGE_MASK_DEFAULTS.rangeFeather;
+      mask.rangeTolerance = RANGE_MASK_DEFAULTS.rangeTolerance;
+      mask.rangeColor = RANGE_MASK_DEFAULTS.rangeColor.slice();
+    }
     mask.current = null;
     mask.dragMode = '';
     mask.strokes = [];
@@ -3969,6 +4880,13 @@
       mask.strokes = [];
       mask.current = null;
       scheduleMaskBuild(mask);
+    } else if (mask.type === 'range') {
+      mask.rangeMode = RANGE_MASK_DEFAULTS.rangeMode;
+      mask.rangeLo = RANGE_MASK_DEFAULTS.rangeLo;
+      mask.rangeHi = RANGE_MASK_DEFAULTS.rangeHi;
+      mask.rangeFeather = RANGE_MASK_DEFAULTS.rangeFeather;
+      mask.rangeTolerance = RANGE_MASK_DEFAULTS.rangeTolerance;
+      mask.rangeColor = RANGE_MASK_DEFAULTS.rangeColor.slice();
     }
     updateMaskUI();
     scheduleRender();
@@ -3980,7 +4898,10 @@
       return null;
     }
     var mask = createMask(type || 'linear', opts);
-    if (isSmartMaskType(mask.type)) mask.show = true;
+    if (isSmartMaskType(mask.type) || mask.type === 'range') {
+      mask.show = true;
+      for (var si = 0; si < state.masks.length; si++) state.masks[si].show = false;
+    }
     state.masks.push(mask);
     state.activeMaskId = mask.id;
     if (!silent) {
@@ -4017,6 +4938,12 @@
     copy.radialMat = src.radialMat ? src.radialMat.slice() : null;
     copy.brushPct = src.brushPct;
     copy.brushMode = src.brushMode || 'add';
+    copy.rangeMode = src.rangeMode;
+    copy.rangeLo = src.rangeLo;
+    copy.rangeHi = src.rangeHi;
+    copy.rangeFeather = src.rangeFeather;
+    copy.rangeTolerance = src.rangeTolerance;
+    copy.rangeColor = (src.rangeColor || RANGE_MASK_DEFAULTS.rangeColor).slice();
     copy.local = Object.assign({}, src.local);
     copy.strokes = src.strokes.map(function (stroke) {
       return {
@@ -4101,7 +5028,8 @@
       return Number(v).toFixed(4);
     }).join(',') : '';
     return state.loadSeq + ':' + (g.rotate90 || 0) + ':' + (g.flipH ? 1 : 0) + (g.flipV ? 1 : 0) +
-      ':' + (Number(g.angle) || 0).toFixed(2) + ':' + crop;
+      ':' + (Number(g.angle) || 0).toFixed(2) + ':' + crop +
+      ':' + (Number(g.perspectiveH) || 0).toFixed(2) + ':' + (Number(g.perspectiveV) || 0).toFixed(2);
   }
 
   function aiKindForType(type) {
@@ -4924,7 +5852,39 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
-    if (!isTexturedMaskType(mask.type)) return canvas;
+    if (!maskNeedsTexture(mask)) return canvas;
+    if (!isTexturedMaskType(mask.type)) {
+      // 透视校正后，线性/径向范围不再能用着色器简单几何表示：
+      // 先在仿射输出空间生成蒙版纹理，再由着色器的透视采样把它贴回画面。
+      var pmap = geometryMap();
+      if (mask.type === 'linear') {
+        var lp1 = mapPointToOutput(pmap, mask.p1);
+        var lp2 = mapPointToOutput(pmap, mask.p2);
+        var lx1 = lp1.x * w, ly1 = lp1.y * h;
+        var lx2 = lp2.x * w, ly2 = lp2.y * h;
+        var grad = ctx.createLinearGradient(lx1, ly1, lx2, ly2);
+        var f = clamp(mask.feather, 0, 1);
+        grad.addColorStop(0, '#000000');
+        grad.addColorStop(clamp(0.5 - f * 0.5, 0.001, 0.998), '#000000');
+        grad.addColorStop(clamp(0.5 + f * 0.5, 0.002, 0.999), '#FFFFFF');
+        grad.addColorStop(1, '#FFFFFF');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+      } else if (mask.type === 'radial') {
+        var rc = mapPointToOutput(pmap, mask.p1);
+        var rm = outputRadialMatrix(pmap, mask.radialMat);
+        var ri = mat2Inv(rm);
+        ctx.save();
+        ctx.translate(rc.x * w, rc.y * h);
+        ctx.transform(ri[0] * w, ri[1] * h, ri[2] * w, ri[3] * h, 0, 0);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(0, 0, 1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      return canvas;
+    }
     if (isSmartMaskType(mask.type)) {
       var base = getSmartBase(mask, w, srcW, srcH, sourceCanvas || state.renderSource, false);
       if (base && base.canvas) ctx.drawImage(base.canvas, 0, 0, w, h);
@@ -4974,7 +5934,7 @@
       var skipKind = aiKindForType(mask.type);
       if (!(skipKind && ensureAIKindBase(skipKind))) return;
     }
-    if (isTexturedMaskType(mask.type)) {
+    if (maskNeedsTexture(mask)) {
       var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.renderW || state.preview.w,
         state.renderH || state.preview.h, previewMaskCanvases[mask.id], state.renderSource);
       previewMaskCanvases[mask.id] = c;
@@ -5021,6 +5981,11 @@
   }
 
   function onCanvasPointerDown(e) {
+    if (state.loaded && !state.cropEditing && state.pickMode && !state.before) {
+      e.preventDefault();
+      handleCanvasPick(canvasUV(e));
+      return;
+    }
     var mask = activeMask();
     if (!state.loaded || state.cropEditing || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
     e.preventDefault();
@@ -5241,7 +6206,7 @@
       var maskWidth = Math.min(MASK_EXPORT_WIDTH, Math.max(MASK_PREVIEW_WIDTH, width));
       for (var i = 0; i < state.masks.length; i++) {
         var m = state.masks[i];
-        if (!isTexturedMaskType(m.type)) continue;
+        if (!maskNeedsTexture(m)) continue;
         var mc = buildMaskCanvas(m, maskWidth, width, height, null, sourceCanvas);
         r.setMask(m.id, mc);
         // texImage2D 已完成上传，及时释放大画布，避免多蒙版导出占用过多内存。
@@ -5456,8 +6421,13 @@
     }
     state.adjust = defaultAdjust();
     state.before = false;
+    state.pickMode = '';
     state.curves = createCurves();
     state.paramCurve = defaultParamCurve();
+    state.hsl = defaultHSL();
+    state.grading = defaultGrading();
+    state.hslBand = 'red';
+    state.gradeRange = 'shadows';
     state.curveChannel = 'rgb';
     state.curveDragging = -1;
     state.geometry = defaultGeometry();
@@ -5477,6 +6447,7 @@
     markHistory('重置全部');
     updateAdjustOutputs();
     updateParamCurveUI();
+    updateColorUI();
     updateBeforeLabel();
     updateGeometryUI();
     updateCurveLut(true);
@@ -5491,6 +6462,598 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * 镜头配置
+   * ------------------------------------------------------------------ */
+
+  function readLensProfiles() {
+    if (lensProfilesCache) return lensProfilesCache;
+    var saved = [];
+    try {
+      var raw = window.localStorage && window.localStorage.getItem(LENS_PROFILE_KEY);
+      var parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) saved = parsed;
+    } catch (e) { saved = []; }
+    lensProfilesCache = saved.filter(function (p) {
+      return p && p.id && p.values && isFinite(Number(p.values.lensDistort));
+    });
+    return lensProfilesCache;
+  }
+
+  function writeLensProfiles() {
+    try { window.localStorage.setItem(LENS_PROFILE_KEY, JSON.stringify(readLensProfiles())); }
+    catch (e) { /* storage unavailable */ }
+  }
+
+  function lensMeta() {
+    var m = state.meta;
+    var camera = '';
+    var lens = '';
+    if (m) {
+      camera = (m.camera && (m.camera.name ||
+        [m.camera.canonicalMake, m.camera.canonicalModel].filter(Boolean).join(' '))) || '';
+      lens = (m.lens && (m.lens.model || m.lens.focalRange)) || '';
+    }
+    return { camera: String(camera || ''), lens: String(lens || '') };
+  }
+
+  function lensProfileKey() {
+    var lm = lensMeta();
+    if (!lm.camera && !lm.lens) return '';
+    return (lm.camera + '||' + lm.lens).toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function readLensAuto() {
+    try {
+      var v = window.localStorage && window.localStorage.getItem(LENS_AUTO_KEY);
+      if (v === '0' || v === '1') return v === '1';
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  function writeLensAuto(v) {
+    try { window.localStorage.setItem(LENS_AUTO_KEY, v ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+
+  function renderLensProfiles(selectedId) {
+    if (!els.lensProfile) return;
+    var profiles = readLensProfiles();
+    var selected = selectedId || els.lensProfile.value || '';
+    var lm = lensMeta();
+    var currentKey = lensProfileKey();
+    var matched = profiles.filter(function (p) { return p.key === currentKey; })[0];
+    if (!selected && matched) selected = matched.id;
+    els.lensProfile.innerHTML = '<option value="">未保存镜头配置</option>' + profiles.map(function (p) {
+      return '<option value="' + escapeHTML(p.id) + '">' + escapeHTML(p.name) +
+        (p.key === currentKey ? ' · 当前镜头' : '') + '</option>';
+    }).join('');
+    if (selected && profiles.some(function (p) { return p.id === selected; })) {
+      els.lensProfile.value = selected;
+    }
+    if (els.lensAuto) els.lensAuto.checked = readLensAuto();
+    if (els.lensStatus) {
+      if (matched) {
+        els.lensStatus.textContent = '已匹配镜头配置「' + matched.name + '」' +
+          (readLensAuto() ? '，载入时自动套用。' : '，可手动应用。');
+      } else if (lm.lens) {
+        els.lensStatus.textContent = '镜头：' + lm.lens + ' · 尚未保存配置。';
+      } else {
+        els.lensStatus.textContent = '未识别镜头元数据；仍可手动校正后保存为自定义配置。';
+      }
+    }
+  }
+
+  function applyLensValues(profile, silent) {
+    if (!profile || !profile.values) return;
+    LENS.forEach(function (d) {
+      var v = Number(profile.values[d.key]);
+      if (isFinite(v)) state.adjust[d.key] = clamp(v, d.min, d.max);
+    });
+    if (!silent) {
+      updateAdjustOutputs();
+      markHistory('镜头配置 · ' + profile.name);
+      scheduleRender();
+      setStatus('已套用镜头配置「' + profile.name + '」。', 'ok');
+    }
+  }
+
+  function autoApplyLensProfile() {
+    if (!readLensAuto()) return false;
+    var key = lensProfileKey();
+    if (!key) return false;
+    var profile = readLensProfiles().filter(function (p) { return p.key === key; })[0];
+    if (!profile) return false;
+    applyLensValues(profile, true);
+    return true;
+  }
+
+  function saveLensProfileFromUI() {
+    if (!state.loaded) return;
+    var lm = lensMeta();
+    var key = lensProfileKey();
+    var name = lm.lens || '自定义镜头';
+    if (lm.camera) name += ' · ' + lm.camera;
+    var profiles = readLensProfiles();
+    var existing = profiles.filter(function (p) { return p.key === key; })[0];
+    var values = {};
+    LENS.forEach(function (d) { values[d.key] = state.adjust[d.key]; });
+    if (existing) {
+      existing.name = name;
+      existing.values = values;
+      existing.updatedAt = Date.now();
+    } else {
+      profiles.push({ id: 'lens-' + Date.now(), key: key, name: name.slice(0, 60), camera: lm.camera, lens: lm.lens, values: values, createdAt: Date.now() });
+    }
+    lensProfilesCache = profiles;
+    writeLensProfiles();
+    renderLensProfiles(existing ? existing.id : profiles[profiles.length - 1].id);
+    setStatus('已保存镜头配置「' + name + '」。', 'ok');
+  }
+
+  function applySelectedLensProfile() {
+    var id = els.lensProfile && els.lensProfile.value;
+    var profile = readLensProfiles().filter(function (p) { return p.id === id; })[0];
+    if (!profile) {
+      setStatus('请先选择一个镜头配置。', 'warn');
+      return;
+    }
+    applyLensValues(profile, false);
+    renderLensProfiles(profile.id);
+  }
+
+  function deleteSelectedLensProfile() {
+    var id = els.lensProfile && els.lensProfile.value;
+    if (!id) return;
+    lensProfilesCache = readLensProfiles().filter(function (p) { return p.id !== id; });
+    writeLensProfiles();
+    renderLensProfiles('');
+    setStatus('已删除镜头配置。', 'ok');
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 预设 / 快照 / 设置剪贴板
+   * ------------------------------------------------------------------ */
+
+  function readPresetStore() {
+    if (presetsCache) return presetsCache;
+    var saved = [];
+    try {
+      var raw = window.localStorage && window.localStorage.getItem(PRESET_STORAGE_KEY);
+      var parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) saved = parsed;
+    } catch (e) { saved = []; }
+    presetsCache = saved.filter(function (p) { return p && p.id && p.name && p.settings; });
+    return presetsCache;
+  }
+
+  function writePresetStore() {
+    try {
+      window.localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(readPresetStore()));
+    } catch (e) { /* 无痕模式或存储已满时仅保留本次会话 */ }
+  }
+
+  function builtinPresets() {
+    var clear = normalizeDevelopSettings({
+      adjust: { contrast: 12, highlights: -28, shadows: 22, whites: 8, vibrance: 14, clarity: 10, dehaze: 8, saturation: 4 },
+      paramCurve: { shadows: 12, darks: 5, highlights: -12 },
+      hsl: { blue: { h: 0, s: 10, l: 0 }, aqua: { h: 0, s: 8, l: 0 } }
+    });
+    var portrait = normalizeDevelopSettings({
+      adjust: { contrast: -6, highlights: -30, shadows: 18, vibrance: 8, clarity: -12, saturation: -4, temperature: 7 },
+      paramCurve: { shadows: 8, highlights: -8 },
+      hsl: { orange: { h: 0, s: 8, l: 4 }, red: { h: 0, s: 5, l: 3 } }
+    });
+    var mono = normalizeDevelopSettings({
+      adjust: { contrast: 16, highlights: -12, shadows: 10, clarity: 12, saturation: -100 }
+    });
+    return [
+      { id: 'builtin-clear', name: '清透风光', builtin: true, settings: clear },
+      { id: 'builtin-portrait', name: '柔和人像', builtin: true, settings: portrait },
+      { id: 'builtin-mono', name: '黑白', builtin: true, settings: mono }
+    ];
+  }
+
+  function allPresets() {
+    return builtinPresets().concat(readPresetStore());
+  }
+
+  function developSettings() {
+    var curves = {};
+    CURVE_CHANNELS.forEach(function (ch) {
+      curves[ch.key] = state.curves[ch.key].map(function (p) { return { x: p.x, y: p.y }; });
+    });
+    return {
+      adjust: Object.assign({}, state.adjust),
+      curves: curves,
+      paramCurve: Object.assign({}, state.paramCurve),
+      hsl: JSON.parse(JSON.stringify(state.hsl)),
+      grading: JSON.parse(JSON.stringify(state.grading))
+    };
+  }
+
+  function normalizeDevelopSettings(data) {
+    data = data || {};
+    var adjust = defaultAdjust();
+    ALL_ADJUSTMENTS.forEach(function (d) {
+      var v = data.adjust && data.adjust[d.key];
+      if (v != null && isFinite(Number(v))) adjust[d.key] = clamp(Number(v), d.min, d.max);
+    });
+    var curves = createCurves();
+    CURVE_CHANNELS.forEach(function (ch) {
+      var pts = data.curves && data.curves[ch.key];
+      if (Array.isArray(pts) && pts.length >= 2) {
+        curves[ch.key] = pts.map(function (p) {
+          return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) };
+        }).sort(function (a, b) { return a.x - b.x; });
+      }
+    });
+    var param = defaultParamCurve();
+    PARAM_CURVE.forEach(function (d) {
+      var v = data.paramCurve && data.paramCurve[d.key];
+      if (v != null && isFinite(Number(v))) param[d.key] = clamp(Number(v), d.min, d.max);
+    });
+    normalizeParamSplits(param);
+    return {
+      adjust: adjust,
+      curves: curves,
+      paramCurve: param,
+      hsl: clampHSL(data.hsl),
+      grading: clampGrading(data.grading)
+    };
+  }
+
+  function applyDevelopSettings(settings, label) {
+    settings = normalizeDevelopSettings(settings);
+    state.adjust = settings.adjust;
+    state.curves = settings.curves;
+    state.paramCurve = settings.paramCurve;
+    state.hsl = settings.hsl;
+    state.grading = settings.grading;
+    state.curveLut = null;
+    updateAdjustOutputs();
+    updateParamCurveUI();
+    updateColorUI();
+    updateCurveLut(false);
+    markHistory(label || '应用预设');
+    scheduleRender();
+    restoreBaselineIfNeeded();
+  }
+
+  function renderPresetList() {
+    if (!els.presetList) return;
+    var presets = allPresets();
+    if (!presets.length) {
+      els.presetList.innerHTML = '<p class="raw-list-empty">还没有预设。</p>';
+    } else {
+      els.presetList.innerHTML = presets.map(function (p) {
+        return '<div class="raw-named-item">' +
+          '<button type="button" class="raw-named-apply" data-preset-apply="' + escapeHTML(p.id) + '">' +
+            escapeHTML(p.name) + (p.builtin ? '<span class="raw-builtin-tag">内置</span>' : '') +
+          '</button>' +
+          (p.builtin ? '' : '<button type="button" class="raw-named-del" data-preset-delete="' + escapeHTML(p.id) + '" title="删除预设">×</button>') +
+          '</div>';
+      }).join('');
+    }
+    if (els.presetCount) els.presetCount.textContent = String(presets.length);
+    if (els.presetSum) els.presetSum.textContent = presets.length ? presets.length + ' 个' : '—';
+  }
+
+  function savePresetNamed(name) {
+    if (!state.loaded) return null;
+    name = String(name || '').trim();
+    if (!name) name = '预设 ' + (readPresetStore().length + 1);
+    var preset = { id: 'preset-' + Date.now(), name: name.slice(0, 24), settings: developSettings() };
+    var store = readPresetStore();
+    store.push(preset);
+    presetsCache = store;
+    writePresetStore();
+    renderPresetList();
+    return preset;
+  }
+
+  function savePresetFromUI() {
+    var preset = savePresetNamed(els.presetName ? els.presetName.value : '');
+    if (!preset) return;
+    if (els.presetName) els.presetName.value = '';
+    setStatus('已保存预设「' + preset.name + '」，可在其它图片上套用。', 'ok');
+  }
+
+  function applyPresetById(id) {
+    var preset = allPresets().filter(function (p) { return p.id === id; })[0];
+    if (!preset || !state.loaded) return;
+    applyDevelopSettings(preset.settings, '预设 · ' + preset.name);
+    setStatus('已套用预设「' + preset.name + '」。', 'ok');
+  }
+
+  function deletePresetById(id) {
+    var store = readPresetStore().filter(function (p) { return p.id !== id; });
+    presetsCache = store;
+    writePresetStore();
+    renderPresetList();
+  }
+
+  function snapshotKey() {
+    return state.fileName || '__empty__';
+  }
+
+  function currentSnapshots() {
+    return snapshotStore[snapshotKey()] || [];
+  }
+
+  function renderSnapshotList() {
+    if (!els.snapshotList) return;
+    var list = currentSnapshots();
+    if (!list.length) {
+      els.snapshotList.innerHTML = '<p class="raw-list-empty">当前图片还没有快照。</p>';
+    } else {
+      els.snapshotList.innerHTML = list.map(function (s) {
+        return '<div class="raw-named-item">' +
+          '<button type="button" class="raw-named-apply" data-snapshot-apply="' + escapeHTML(s.id) + '">' + escapeHTML(s.name) + '</button>' +
+          '<button type="button" class="raw-named-del" data-snapshot-delete="' + escapeHTML(s.id) + '" title="删除快照">×</button>' +
+          '</div>';
+      }).join('');
+    }
+    if (els.snapshotCount) els.snapshotCount.textContent = String(list.length);
+  }
+
+  function saveSnapshotNamed(name) {
+    if (!state.loaded) return null;
+    var list = currentSnapshots();
+    name = String(name || '').trim() || ('快照 ' + (list.length + 1));
+    var snap = { id: 'snap-' + Date.now(), name: name.slice(0, 24), snap: historySnapshot(), time: Date.now() };
+    list.push(snap);
+    snapshotStore[snapshotKey()] = list;
+    renderSnapshotList();
+    return snap;
+  }
+
+  function saveSnapshotFromUI() {
+    var snap = saveSnapshotNamed(els.snapshotName ? els.snapshotName.value : '');
+    if (!snap) return;
+    if (els.snapshotName) els.snapshotName.value = '';
+    setStatus('已保存快照「' + snap.name + '」。', 'ok');
+  }
+
+  function applySnapshotById(id) {
+    var snap = currentSnapshots().filter(function (s) { return s.id === id; })[0];
+    if (!snap || !state.loaded) return;
+    historyFlush();
+    restoreHistory(snap.snap);
+    markHistory('应用快照 · ' + snap.name);
+    historyCommit();
+    updateColorUI();
+    renderSnapshotList();
+    if (hasAIMask() && !aiRawValid()) scheduleAISceneSegmentation(120, false);
+    setStatus('已恢复快照「' + snap.name + '」。', 'ok');
+  }
+
+  function deleteSnapshotById(id) {
+    var list = currentSnapshots().filter(function (s) { return s.id !== id; });
+    snapshotStore[snapshotKey()] = list;
+    renderSnapshotList();
+  }
+
+  function copySettings() {
+    if (!state.loaded) return;
+    settingsClipboard = developSettings();
+    setStatus('已复制当前显影设置。', 'ok');
+  }
+
+  function pasteSettings() {
+    if (!state.loaded || !settingsClipboard) {
+      setStatus('还没有复制的显影设置。', 'warn');
+      return;
+    }
+    applyDevelopSettings(settingsClipboard, '粘贴显影设置');
+    setStatus('已粘贴显影设置。', 'ok');
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 批量导出
+   * ------------------------------------------------------------------ */
+
+  function renderBatchList() {
+    if (!els.batchList) return;
+    if (!batchFiles.length) {
+      els.batchList.innerHTML = '<p class="raw-list-empty">尚未选择批量文件。</p>';
+    } else {
+      els.batchList.innerHTML = batchFiles.map(function (f, i) {
+        return '<div class="raw-batch-item">' +
+          '<span class="raw-batch-name" title="' + escapeHTML(f.name) + '">' + escapeHTML(f.name) + '</span>' +
+          '<span class="raw-batch-size">' + formatBytes(f.size) + '</span>' +
+          '<button type="button" class="raw-named-del" data-batch-remove="' + i + '" title="移除">×</button>' +
+          '</div>';
+      }).join('');
+    }
+    if (els.batchCount) els.batchCount.textContent = batchFiles.length + ' 张';
+    if (els.batchRun) els.batchRun.disabled = !batchFiles.length || batchRunning || !state.loaded;
+  }
+
+  function addBatchFiles(fileList) {
+    if (!fileList) return;
+    var added = 0;
+    var limit = 40;
+    for (var i = 0; i < fileList.length && batchFiles.length < limit; i++) {
+      var f = fileList[i];
+      if (!f || (!isImageFile(f) && !/\.[a-z0-9]+$/i.test(f.name || ''))) continue;
+      if (!RAW_RE.test(f.name || '') && !IMAGE_RE.test(f.name || '')) continue;
+      var dup = batchFiles.some(function (b) { return b.name === f.name && b.size === f.size; });
+      if (!dup) { batchFiles.push(f); added++; }
+    }
+    renderBatchList();
+    if (added) setStatus('已加入 ' + added + ' 个文件到批量队列。', 'ok');
+  }
+
+  function updateBatchProgress(text, pct) {
+    if (!els.batchProgress) return;
+    if (!text) { els.batchProgress.hidden = true; els.batchProgress.textContent = ''; return; }
+    els.batchProgress.hidden = false;
+    els.batchProgress.textContent = text + (pct != null ? ' · ' + Math.round(pct) + '%' : '');
+  }
+
+  function batchDownloadName() {
+    var d = new Date();
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    return 'localtools-raw-batch-' + d.getFullYear() + two(d.getMonth() + 1) + two(d.getDate()) +
+      '-' + two(d.getHours()) + two(d.getMinutes()) + '.zip';
+  }
+
+  async function decodeBatchCanvas(file, maxEdge) {
+    var canvas;
+    if (isImageFile(file)) {
+      var bmp;
+      try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+      catch (e) { bmp = await createImageBitmap(file); }
+      var bw = bmp.width, bh = bmp.height;
+      canvas = document.createElement('canvas');
+      canvas.width = bw; canvas.height = bh;
+      var bctx = canvas.getContext('2d');
+      bctx.fillStyle = '#FFFFFF';
+      bctx.fillRect(0, 0, bw, bh);
+      bctx.drawImage(bmp, 0, 0);
+      try { bmp.close(); } catch (e2) { /* ignore */ }
+    } else {
+      var fr = await ensureFlashRaw();
+      var raw = await fr.FlashRaw.open(file);
+      try {
+        var frame = await raw.decode({
+          output: 'rgba8', demosaic: 'bilinear', crop: true,
+          corruptionPolicy: 'recover', previewFallback: true
+        });
+        var imageData = frame.toImageData();
+        canvas = document.createElement('canvas');
+        canvas.width = frame.width;
+        canvas.height = frame.height;
+        canvas.getContext('2d').putImageData(imageData, 0, 0);
+        try { frame.free(); } catch (e3) { /* ignore */ }
+      } finally {
+        try { raw.close(); } catch (e4) { /* ignore */ }
+      }
+    }
+    if (maxEdge > 0 && Math.max(canvas.width, canvas.height) > maxEdge) {
+      var scale = maxEdge / Math.max(canvas.width, canvas.height);
+      var small = document.createElement('canvas');
+      small.width = Math.max(1, Math.round(canvas.width * scale));
+      small.height = Math.max(1, Math.round(canvas.height * scale));
+      var sctx = small.getContext('2d');
+      sctx.imageSmoothingEnabled = true;
+      sctx.imageSmoothingQuality = 'high';
+      sctx.drawImage(canvas, 0, 0, small.width, small.height);
+      canvas.width = 0;
+      canvas.height = 0;
+      canvas = small;
+    }
+    return canvas;
+  }
+
+  async function renderBatchFile(file, settings, format, quality, maxEdge) {
+    var source = await decodeBatchCanvas(file, maxEdge);
+    var saved = {
+      adjust: state.adjust, curves: state.curves, paramCurve: state.paramCurve,
+      hsl: state.hsl, grading: state.grading, masks: state.masks,
+      geometry: state.geometry, curveLut: state.curveLut
+    };
+    try {
+      state.adjust = settings.adjust;
+      state.curves = settings.curves;
+      state.paramCurve = settings.paramCurve;
+      state.hsl = settings.hsl;
+      state.grading = settings.grading;
+      state.masks = [];
+      state.geometry = defaultGeometry();
+      state.curveLut = null;
+      return await renderExportCanvas(source, source.width, source.height, format, quality);
+    } finally {
+      state.adjust = saved.adjust;
+      state.curves = saved.curves;
+      state.paramCurve = saved.paramCurve;
+      state.hsl = saved.hsl;
+      state.grading = saved.grading;
+      state.masks = saved.masks;
+      state.geometry = saved.geometry;
+      state.curveLut = saved.curveLut;
+      source.width = 0;
+      source.height = 0;
+    }
+  }
+
+  async function runBatchExport() {
+    if (batchRunning || !batchFiles.length) return;
+    if (!state.loaded) {
+      setStatus('请先载入一张图片，批量会套用当前显影设置。', 'warn');
+      return;
+    }
+    if (!window.RawZip) {
+      setStatus('ZIP 打包模块未加载，无法批量导出。', 'err');
+      return;
+    }
+    var format = els.exportFormat.value;
+    var quality = Number(els.exportQuality.value) / 100;
+    var maxEdge = Number(els.batchMax.value) || 0;
+    var settings = developSettings();
+    var zipEntries = [];
+    var errors = [];
+    var used = Object.create(null);
+    batchRunning = true;
+    renderBatchList();
+    setBusy(true, '正在批量导出', '逐个文件在本机解码、显影并打包为 ZIP，不上传服务器。');
+    try {
+      for (var i = 0; i < batchFiles.length; i++) {
+        var f = batchFiles[i];
+        updateBatchProgress('正在处理 ' + (i + 1) + ' / ' + batchFiles.length + ' · ' + f.name,
+          (i / batchFiles.length) * 100);
+        setStatus('批量导出：' + f.name + '（' + (i + 1) + '/' + batchFiles.length + '）', '', true);
+        await nextFrame();
+        try {
+          var blob = await renderBatchFile(f, settings, format, quality, maxEdge);
+          var ext = format === 'image/png' ? 'png' : 'jpg';
+          var name = baseName(f.name) + '-raw.' + ext;
+          if (used[name]) {
+            var n = 2;
+            while (used[baseName(f.name) + '-' + n + '-raw.' + ext]) n++;
+            name = baseName(f.name) + '-' + n + '-raw.' + ext;
+          }
+          used[name] = true;
+          zipEntries.push({ name: name, data: blob });
+        } catch (err) {
+          console.warn('[raw] batch file failed', f.name, err);
+          errors.push(f.name + ': ' + describeError(err));
+        }
+      }
+      if (errors.length) {
+        zipEntries.push({ name: '_errors.txt', data: errors.join('\n') });
+      }
+      if (!zipEntries.length) throw new Error('没有可导出的文件。');
+      updateBatchProgress('正在打包 ZIP', 96);
+      await nextFrame();
+      var zip = await window.RawZip.create(zipEntries);
+      var url = URL.createObjectURL(zip);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = batchDownloadName();
+      a.style.display = 'none';
+      root.appendChild(a);
+      try { a.click(); } catch (e) { /* ignore */ }
+      setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 30000);
+      updateBatchProgress('完成：' + zipEntries.length + ' 个文件', 100);
+      setStatus('批量导出完成：' + zipEntries.length + ' 个文件已打包为 ZIP。', 'ok');
+      showExportResult('批量导出完成：' + zipEntries.length + ' 个文件，ZIP ' + formatBytes(zip.size) + '。', false);
+      dispatch('raw:batch', { count: zipEntries.length, errors: errors.length, size: zip.size });
+    } catch (err) {
+      console.error('[raw] batch export failed', err);
+      updateBatchProgress('');
+      setStatus('批量导出失败：' + describeError(err), 'err');
+      showExportResult('批量导出失败：' + describeError(err), true);
+    } finally {
+      batchRunning = false;
+      setBusy(false);
+      renderBatchList();
+      updateFootRight();
+      scheduleRender();
+      if (els.exportBtn) els.exportBtn.disabled = !state.loaded;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
    * 事件绑定
    * ------------------------------------------------------------------ */
 
@@ -5500,6 +7063,23 @@
       handleFiles(els.input.files);
       els.input.value = '';
     });
+    if (els.batchInput) {
+      els.batchInput.addEventListener('change', function () {
+        addBatchFiles(els.batchInput.files);
+        els.batchInput.value = '';
+      });
+    }
+    if (els.lensProfile) {
+      els.lensProfile.addEventListener('change', function () {
+        if (els.lensProfile.value) applySelectedLensProfile();
+      });
+    }
+    if (els.lensAuto) {
+      els.lensAuto.addEventListener('change', function () {
+        writeLensAuto(!!els.lensAuto.checked);
+        setStatus(els.lensAuto.checked ? '载入匹配镜头时会自动套用配置。' : '已关闭镜头配置自动套用。', '');
+      });
+    }
     els.empty.addEventListener('click', openPicker);
     els.empty.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
@@ -5559,6 +7139,39 @@
           setZoomPct(100);
         } else if (act === 'reset') {
           resetAll();
+        } else if (act === 'wb-pick') {
+          if (!state.loaded) return;
+          setPickMode(state.pickMode === 'whitebalance' ? '' : 'whitebalance');
+        } else if (act === 'wb-auto') {
+          autoWhiteBalance();
+        } else if (act === 'preset-save') {
+          savePresetFromUI();
+        } else if (act === 'snapshot-save') {
+          saveSnapshotFromUI();
+        } else if (act === 'settings-copy') {
+          copySettings();
+        } else if (act === 'settings-paste') {
+          pasteSettings();
+        } else if (act === 'lens-save') {
+          saveLensProfileFromUI();
+        } else if (act === 'lens-delete') {
+          deleteSelectedLensProfile();
+        } else if (act === 'batch-pick') {
+          if (els.batchInput) els.batchInput.click();
+        } else if (act === 'batch-run') {
+          runBatchExport();
+        } else if (act === 'range-pick') {
+          var rangeMask = activeMask();
+          if (!rangeMask || rangeMask.type !== 'range') return;
+          setPickMode(state.pickMode === 'range' ? '' : 'range');
+        } else if (act === 'hsl-reset-band') {
+          resetHSLBand();
+        } else if (act === 'hsl-reset-all') {
+          resetHSLAll();
+        } else if (act === 'grade-reset-range') {
+          resetGradeRange();
+        } else if (act === 'grade-reset-all') {
+          resetGradeAll();
         } else if (act === 'mask-clear') {
           clearMaskRange();
         } else if (act === 'mask-undo-stroke') {
@@ -5605,6 +7218,43 @@
         setBrushMode(brushModeBtn.getAttribute('data-brush-mode'));
         return;
       }
+      var batchRemove = e.target.closest('[data-batch-remove]');
+      if (batchRemove) {
+        var bi = Number(batchRemove.getAttribute('data-batch-remove'));
+        if (bi >= 0 && bi < batchFiles.length) { batchFiles.splice(bi, 1); renderBatchList(); }
+        return;
+      }
+      var presetApply = e.target.closest('[data-preset-apply]');
+      if (presetApply) { applyPresetById(presetApply.getAttribute('data-preset-apply')); return; }
+      var presetDel = e.target.closest('[data-preset-delete]');
+      if (presetDel) { deletePresetById(presetDel.getAttribute('data-preset-delete')); return; }
+      var snapApply = e.target.closest('[data-snapshot-apply]');
+      if (snapApply) { applySnapshotById(snapApply.getAttribute('data-snapshot-apply')); return; }
+      var snapDel = e.target.closest('[data-snapshot-delete]');
+      if (snapDel) { deleteSnapshotById(snapDel.getAttribute('data-snapshot-delete')); return; }
+      var hslBandBtn = e.target.closest('[data-hsl-band]');
+      if (hslBandBtn) {
+        state.hslBand = hslBandBtn.getAttribute('data-hsl-band');
+        updateColorUI();
+        return;
+      }
+      var gradeRangeBtn = e.target.closest('[data-grade-range]');
+      if (gradeRangeBtn) {
+        state.gradeRange = gradeRangeBtn.getAttribute('data-grade-range');
+        updateColorUI();
+        return;
+      }
+      var rangeModeBtn = e.target.closest('[data-range-mode]');
+      if (rangeModeBtn) {
+        var rm = activeMask();
+        if (!rm || rm.type !== 'range') return;
+        rm.rangeMode = rangeModeBtn.getAttribute('data-range-mode');
+        updateRangeUI();
+        updateMaskUI();
+        markHistory('范围蒙版依据');
+        scheduleRender();
+        return;
+      }
       var maskPick = e.target.closest('[data-mask-pick]');
       if (maskPick) {
         setActiveMask(maskPick.getAttribute('data-mask-pick'));
@@ -5648,6 +7298,11 @@
       var page = document.getElementById('page-raw');
       if (!page || page.classList.contains('hidden')) return;
       if (e.key === 'Escape') {
+        if (state.pickMode) {
+          e.preventDefault();
+          setPickMode('');
+          return;
+        }
         if (beforeKeyHeld) {
           e.preventDefault();
           releaseBeforeKey();
@@ -5715,6 +7370,36 @@
         if (def) setParamCurve(key, def.def);
       });
     });
+    root.querySelectorAll('[data-hsl]').forEach(function (input) {
+      var key = input.getAttribute('data-hsl');
+      input.addEventListener('input', function () { setHSL(key, Number(input.value)); });
+      input.addEventListener('dblclick', function () { setHSL(key, 0); });
+    });
+    root.querySelectorAll('[data-grade]').forEach(function (input) {
+      var key = input.getAttribute('data-grade');
+      input.addEventListener('input', function () { setGrading(key, Number(input.value)); });
+      input.addEventListener('dblclick', function () {
+        setGrading(key, key === 'hue' ? 0 : 0);
+      });
+    });
+    function bindRangeInputs() {
+      if (!els.rangeLo) return;
+      function applyRange(prop, value) {
+        var mask = activeMask();
+        if (!mask || mask.type !== 'range') return;
+        mask[prop] = clamp(Number(value), 0, 100);
+        if (prop === 'rangeLo' && mask.rangeLo > mask.rangeHi - 1) mask.rangeHi = Math.min(100, mask.rangeLo + 1);
+        if (prop === 'rangeHi' && mask.rangeHi < mask.rangeLo + 1) mask.rangeLo = Math.max(0, mask.rangeHi - 1);
+        updateRangeUI();
+        markHistory('范围蒙版');
+        scheduleRender();
+      }
+      els.rangeLo.addEventListener('input', function () { applyRange('rangeLo', els.rangeLo.value); });
+      els.rangeHi.addEventListener('input', function () { applyRange('rangeHi', els.rangeHi.value); });
+      els.rangeFeather.addEventListener('input', function () { applyRange('rangeFeather', els.rangeFeather.value); });
+      els.rangeTolerance.addEventListener('input', function () { applyRange('rangeTolerance', els.rangeTolerance.value); });
+    }
+    bindRangeInputs();
 
     // 几何：拉直、裁剪比例、裁剪框拖动
     if (els.geoAngle) {
@@ -5724,6 +7409,14 @@
       els.geoAngle.addEventListener('dblclick', function () {
         setStraighten(0);
       });
+    }
+    if (els.perspH) {
+      els.perspH.addEventListener('input', function () { setPerspective('h', els.perspH.value); });
+      els.perspH.addEventListener('dblclick', function () { setPerspective('h', 0); });
+    }
+    if (els.perspV) {
+      els.perspV.addEventListener('input', function () { setPerspective('v', els.perspV.value); });
+      els.perspV.addEventListener('dblclick', function () { setPerspective('v', 0); });
     }
     if (els.cropAspect) {
       els.cropAspect.addEventListener('change', function () {
@@ -5874,6 +7567,12 @@
       strokeCount: mask.strokes.length,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
+      rangeMode: mask.rangeMode || 'luma',
+      rangeLo: mask.rangeLo,
+      rangeHi: mask.rangeHi,
+      rangeFeather: mask.rangeFeather,
+      rangeTolerance: mask.rangeTolerance,
+      rangeColor: (mask.rangeColor || RANGE_MASK_DEFAULTS.rangeColor).slice(),
       adjusted: maskHasAdjustments(mask),
       local: Object.assign({}, mask.local)
     };
@@ -5911,6 +7610,10 @@
       local: mask ? Object.assign({}, mask.local) : defaultLocal(),
       curves: curves,
       paramCurve: Object.assign({}, state.paramCurve),
+      hsl: JSON.parse(JSON.stringify(state.hsl)),
+      grading: JSON.parse(JSON.stringify(state.grading)),
+      hslBand: state.hslBand,
+      gradeRange: state.gradeRange,
       curve: activeCurvePoints().map(function (p) { return { x: p.x, y: p.y }; }),
       curveChannel: state.curveChannel,
       curveOn: state.curveOn,
@@ -5972,6 +7675,20 @@
     setLocalAdjustment: function (key, value) { setAdjustment(key, value, true); },
     setCurve: function (points, channel) { setCurvePoints(points, channel); },
     setCurveChannel: setCurveChannel,
+    setHSL: function (band, key, value) {
+      if (band && state.hsl[band]) state.hslBand = band;
+      setHSL(key, value);
+      return state.hsl;
+    },
+    getColor: function () {
+      return { hsl: JSON.parse(JSON.stringify(state.hsl)), grading: JSON.parse(JSON.stringify(state.grading)), hslBand: state.hslBand, gradeRange: state.gradeRange };
+    },
+    setGrading: function (range, key, value) {
+      if (range && state.grading[range]) state.gradeRange = range;
+      setGrading(key, value);
+      return state.grading;
+    },
+    setPerspective: setPerspective,
     setParamCurve: function (key, value) { setParamCurve(key, value); },
     getParamCurve: function () { return Object.assign({}, state.paramCurve); },
     resetParamCurve: resetParamCurve,
@@ -6059,6 +7776,22 @@
     setMaskEnabled: setMaskEnabled,
     getMasks: function () { return state.masks.map(serializeMask); },
     getState: snapshot,
+    getPresets: function () {
+      return allPresets().map(function (p) { return { id: p.id, name: p.name, builtin: !!p.builtin }; });
+    },
+    savePreset: savePresetNamed,
+    applyPreset: applyPresetById,
+    getSnapshots: function () {
+      return currentSnapshots().map(function (s) { return { id: s.id, name: s.name, time: s.time }; });
+    },
+    saveSnapshot: saveSnapshotNamed,
+    applySnapshot: applySnapshotById,
+    saveLensProfile: saveLensProfileFromUI,
+    getLensProfiles: function () {
+      return readLensProfiles().map(function (p) { return { id: p.id, name: p.name, key: p.key, values: Object.assign({}, p.values) }; });
+    },
+    addBatchFiles: addBatchFiles,
+    runBatchExport: runBatchExport,
     retryAISubject: retryAISceneSegmentation,
     retryAISegmentation: retryAISceneSegmentation,
     renderNow: renderNow,
