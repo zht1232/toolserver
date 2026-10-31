@@ -21,7 +21,7 @@
       loading = false;
       loaded = true;
     }, { once: true });
-    frame.src = 'editor/?v=20261031-06';
+    frame.src = 'editor/?v=20261031-10';
   }
 
   ['retouch-open', 'retouch-start'].forEach(function (id) {

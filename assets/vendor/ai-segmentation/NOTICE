@@ -1,0 +1,10 @@
+PP-MobileSeg Base (ADE20K)
+Copyright 2023 PaddlePaddle Authors
+
+This product includes software and model weights from PaddleSeg
+(https://github.com/PaddlePaddle/PaddleSeg), licensed under the Apache
+License, Version 2.0.
+
+The bundled model was exported from the official Paddle inference model
+to ONNX using paddle2onnx. See SOURCE.md for exact inputs, outputs and
+class indices used by this site.

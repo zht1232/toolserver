@@ -1,0 +1,1 @@
+import{t as e}from"./history-state-factory-4_zpZqCe.js";import{$ as t,tt as n,xt as r}from"./index-D1_7EF25.js";var i=(i,a,o)=>{let s=r(a.activeSelection),c=t(a.activeSelection,o),l=()=>{i.commit(`setActiveSelection`,c),n(i)};l(),e(`selection_${a.name}_scale_${o}`,{undo(){i.commit(`setActiveSelection`,s),n(i)},redo(){l()}})};export{i as t};

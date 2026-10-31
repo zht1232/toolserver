@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -25,7 +25,9 @@
   var MASK_EXPORT_WIDTH = 2048;
   var MAX_MASKS = 8;
   var MAX_HISTORY = 40;
-  var AI_SEGMENT_INPUT_EDGE = 768;
+  var AI_MODEL_INPUT = 512;
+  var AI_MODEL_FILE = 'pp_mobileseg_base.onnx';
+  var AI_CLASS_SETS = { sky: [2], subject: [12, 126] };
   var IDENTITY_CURVE = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
   var CURVE_CHANNELS = [
     { key: 'rgb', label: 'RGB', short: 'RGB', color: '#0C7A69', curve: '#0C7A69' },
@@ -304,6 +306,7 @@
     'uniform float u_maskFeather;',
     'uniform vec2 u_maskP1;',
     'uniform vec2 u_maskP2;',
+    'uniform mat2 u_maskEllipse;',
     'uniform vec4 u_local;',
     'uniform float u_curveOn;',
     'uniform float u_scale;',
@@ -339,8 +342,7 @@
     '    float f = mix(0.03, 0.9, clamp(u_maskFeather, 0.0, 1.0));',
     '    m = smoothstep(0.5 - f * 0.5, 0.5 + f * 0.5, t);',
     '  } else if (u_maskType < 2.5) {',
-    '    vec2 r = max(abs(u_maskP2), vec2(0.002));',
-    '    float d = length((uv - u_maskP1) / r);',
+    '    float d = length(u_maskEllipse * (uv - u_maskP1));',
     '    float f = mix(0.03, 0.9, clamp(u_maskFeather, 0.0, 1.0));',
     '    m = 1.0 - smoothstep(max(1.0 - f, 0.01), 1.0, d);',
     '  } else {',
@@ -555,7 +557,7 @@
     'u_temp', 'u_tint', 'u_vibrance', 'u_saturation', 'u_clarity', 'u_dehaze',
     'u_vignette', 'u_grain', 'u_sharpen', 'u_lensDistort', 'u_lensVignette', 'u_lensCa',
     'u_noiseLuma', 'u_noiseColor', 'u_maskType', 'u_maskInvert', 'u_maskShow',
-    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_local', 'u_curveOn', 'u_scale', 'u_seed'
+    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_maskEllipse', 'u_local', 'u_curveOn', 'u_scale', 'u_seed'
   ];
 
   function compileShader(gl, type, src) {
@@ -801,6 +803,7 @@
       gl.uniform1f(u.u_maskFeather, 0.5);
       gl.uniform2f(u.u_maskP1, 0.5, 0.5);
       gl.uniform2f(u.u_maskP2, 0.5, 0.5);
+      gl.uniformMatrix2fv(u.u_maskEllipse, false, new Float32Array([1, 0, 0, 1]));
       gl.uniform4f(u.u_local, 0, 0, 0, 0);
       return;
     }
@@ -811,6 +814,8 @@
     gl.uniform1f(u.u_maskFeather, mask.feather);
     gl.uniform2f(u.u_maskP1, mask.p1[0], mask.p1[1]);
     gl.uniform2f(u.u_maskP2, mask.p2[0], mask.p2[1]);
+    gl.uniformMatrix2fv(u.u_maskEllipse, false,
+      new Float32Array(mask.ellipse || [1, 0, 0, 1]));
     gl.uniform4f(u.u_local, local[0], local[1], local[2], local[3]);
   };
 
@@ -954,7 +959,7 @@
         '<div class="raw-head-main">' +
           '<div class="raw-eyebrow">Camera Raw · 本地显影</div>' +
           '<h2>RAW 显影</h2>' +
-          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与 AI 人像 / 智能天空蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
+          '<p>解码 CR2 / CR3 / NEF / ARW / DNG / RAF / ORW 等相机原始文件，在浏览器内完成曝光、点曲线与参数曲线、裁剪旋转、镜头校正、降噪与 AI 主体（人物/动物）/ AI 天空蒙版调整，并导出 JPEG / PNG。<b>图片不会上传</b>，关闭页面即清除。</p>' +
         '</div>' +
         '<div class="raw-head-actions">' +
           '<button type="button" class="raw-btn primary" data-act="open">' + icon('open') + '打开文件</button>' +
@@ -1164,8 +1169,8 @@
                   '<option value="linear">线性渐变</option>' +
                   '<option value="radial">径向渐变</option>' +
                   '<option value="brush">画笔</option>' +
-                  '<option value="subject">AI 主体（本地模型）</option>' +
-                  '<option value="sky">智能天空</option>' +
+                  '<option value="subject">AI 主体（人物 / 动物）</option>' +
+                  '<option value="sky">AI 天空</option>' +
                 '</select>' +
                 '<button type="button" class="raw-btn tiny primary" data-act="mask-add">＋ 添加蒙版</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制</button>' +
@@ -1177,14 +1182,14 @@
                 '<button type="button" data-mask="radial">径向渐变</button>' +
                 '<button type="button" data-mask="brush">画笔</button>' +
                 '<button type="button" data-mask="subject">AI 主体</button>' +
-                '<button type="button" data-mask="sky">智能天空</button>' +
+                '<button type="button" data-mask="sky">AI 天空</button>' +
               '</div>' +
-              '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。</p>' +
+              '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。蒙版会跟随裁剪、旋转和拉直后的画面内容。</p>' +
               '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
               '<div class="raw-ai-model" id="raw-ai-model" role="status" aria-live="polite" hidden>' +
                 '<span class="raw-spinner raw-ai-spinner" id="raw-ai-spinner" hidden></span>' +
                 '<span class="raw-ai-dot"></span>' +
-                '<span class="raw-ai-model-text" id="raw-ai-model-text">AI 人像分割模型 · 按需加载</span>' +
+                '<span class="raw-ai-model-text" id="raw-ai-model-text">AI 场景分割模型 · 按需加载</span>' +
                 '<button type="button" class="raw-btn tiny" data-act="ai-subject-retry" id="raw-ai-retry" hidden>重试</button>' +
               '</div>' +
               '<div class="raw-mask-actions">' +
@@ -1273,7 +1278,7 @@
 
   function maskTypeLabel(type) {
     return type === 'linear' ? '线性' : type === 'radial' ? '径向' :
-      type === 'brush' ? '画笔' : type === 'sky' ? '智能天空' :
+      type === 'brush' ? '画笔' : type === 'sky' ? 'AI 天空' :
       type === 'subject' ? 'AI 主体' : '未启用';
   }
 
@@ -1291,15 +1296,27 @@
     if (opts.feather != null) mask.feather = clamp(Number(opts.feather), 0, 1);
     if (opts.brushPct != null) mask.brushPct = clamp(Number(opts.brushPct), 1, 24);
     if (opts.brushMode === 'subtract' || opts.brushMode === 'add') mask.brushMode = opts.brushMode;
-    if (opts.p1) mask.p1 = { x: clamp(Number(opts.p1.x), 0, 1), y: clamp(Number(opts.p1.y), 0, 1) };
-    if (opts.p2) mask.p2 = { x: clamp(Number(opts.p2.x), 0, 1), y: clamp(Number(opts.p2.y), 0, 1) };
+    var map = null;
+    if (opts.p1 || opts.p2 || opts.strokes) map = geometryMap();
+    if (opts.p1) mask.p1 = mapPointToCanonical(map, opts.p1);
+    if (opts.p2) {
+      if (mask.type === 'radial') {
+        var rx = Math.max(0.002, Math.abs(Number(opts.p2.x) || 0.28));
+        var ry = Math.max(0.002, Math.abs(Number(opts.p2.y) || 0.28));
+        mask.p2 = { x: rx, y: ry };
+        mask.radialMat = canonicalRadialMatrix(map, rx, ry);
+      } else {
+        mask.p2 = mapPointToCanonical(map, opts.p2);
+      }
+    }
     if (opts.strokes) {
       mask.strokes = opts.strokes.map(function (stroke) {
         var pts = stroke.points || stroke || [];
         return {
-          radius: stroke.radius != null ? Number(stroke.radius) : Math.max(0.005, mask.brushPct / 200),
+          radius: (stroke.radius != null ? Number(stroke.radius) : Math.max(0.005, mask.brushPct / 200)) /
+            Math.max(1e-6, map.radiusFactor),
           mode: stroke.mode === 'subtract' ? 'subtract' : 'add',
-          points: pts.map(function (p) { return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) }; })
+          points: pts.map(function (p) { return mapPointToCanonical(map, p); })
         };
       });
     }
@@ -1311,6 +1328,19 @@
     return mask;
   }
 
+  function applyDefaultMaskGeometry(mask) {
+    var geo = maskGeometryDefaults(mask.type);
+    var map = geometryMap();
+    mask.p1 = mapPointToCanonical(map, geo.p1);
+    if (mask.type === 'radial') {
+      mask.p2 = { x: geo.p2.x, y: geo.p2.y };
+      mask.radialMat = canonicalRadialMatrix(map, geo.p2.x, geo.p2.y);
+    } else {
+      mask.p2 = mapPointToCanonical(map, geo.p2);
+      mask.radialMat = null;
+    }
+  }
+
   function createMask(type, opts) {
     maskSeq += 1;
     type = normalizeMaskType(type);
@@ -1318,7 +1348,7 @@
     var smart = isSmartMaskType(type);
     var mask = {
       id: 'mask-' + maskSeq,
-      name: smart ? (type === 'sky' ? '天空 ' : 'AI 主体 ') + maskSeq : '蒙版 ' + maskSeq,
+      name: smart ? (type === 'sky' ? 'AI 天空 ' : 'AI 主体 ') + maskSeq : '蒙版 ' + maskSeq,
       type: type,
       enabled: true,
       show: false,
@@ -1326,6 +1356,7 @@
       feather: type === 'brush' ? 0.35 : smart ? 0.3 : 0.45,
       p1: geo.p1,
       p2: geo.p2,
+      radialMat: null,
       strokes: [],
       brushPct: 8,
       brushMode: 'add',
@@ -1335,6 +1366,7 @@
       _start: null,
       _moved: false
     };
+    applyDefaultMaskGeometry(mask);
     return applyMaskOptions(mask, opts);
   }
 
@@ -1399,20 +1431,19 @@
   var curveCtx = null;
   var vendorBase = '';
   var aiVendorBase = '';
+  var aiOrtBase = '';
   var flashrawPromise = null;
-  var aiSegmenter = { promise: null, instance: null, status: 'idle', error: null };
-  var aiSubjectBase = null;
-  var aiSubjectRaw = null;
-  var aiSubjectState = {
+  var aiSession = { promise: null, session: null, ort: null, status: 'idle', error: null };
+  var aiRaw = null; // 当前预览的 ADE20K 类别图及派生蒙版缓存
+  var aiSceneState = {
     running: false,
     queued: false,
     timer: 0,
     seq: 0,
     status: 'idle',
-    coverage: 0,
+    error: '',
     failedPreview: null,
-    noPerson: false,
-    error: ''
+    lastInferMs: 0
   };
   var rafPending = false;
   var maskBuildQueue = Object.create(null);
@@ -1562,9 +1593,15 @@
     if (cfg.aiVendorBase) {
       aiVendorBase = new URL(cfg.aiVendorBase, document.baseURI).href;
     } else {
-      aiVendorBase = new URL('../mediapipe-selfie/', vendorBase).href;
+      aiVendorBase = new URL('../ai-segmentation/', vendorBase).href;
     }
     if (!/\/$/.test(aiVendorBase)) aiVendorBase += '/';
+    if (cfg.aiOrtBase) {
+      aiOrtBase = new URL(cfg.aiOrtBase, document.baseURI).href;
+    } else {
+      aiOrtBase = new URL('../onnxruntime-web/', vendorBase).href;
+    }
+    if (!/\/$/.test(aiOrtBase)) aiOrtBase += '/';
     curveCanvas = els.curveCanvas;
     curveCtx = curveCanvas.getContext('2d');
 
@@ -1707,18 +1744,15 @@
       }
       previewMaskCanvases = Object.create(null);
       aiBaseCache = Object.create(null);
-      aiSubjectBase = null;
-      aiSubjectRaw = null;
-      aiSubjectState.seq += 1;
-      aiSubjectState.status = 'idle';
-      aiSubjectState.failedPreview = null;
-      aiSubjectState.noPerson = false;
-      aiSubjectState.coverage = 0;
-      aiSubjectState.error = '';
-      aiSubjectState.queued = false;
-      if (aiSubjectState.timer) {
-        clearTimeout(aiSubjectState.timer);
-        aiSubjectState.timer = 0;
+      aiRaw = null;
+      aiSceneState.seq += 1;
+      aiSceneState.status = 'idle';
+      aiSceneState.failedPreview = null;
+      aiSceneState.error = '';
+      aiSceneState.queued = false;
+      if (aiSceneState.timer) {
+        clearTimeout(aiSceneState.timer);
+        aiSceneState.timer = 0;
       }
       state.adjust = defaultAdjust();
       state.before = false;
@@ -1728,10 +1762,10 @@
       state.curveLut = null;
       state.curveOn = false;
       state.curveDragging = -1;
+      state.geometry = defaultGeometry();
       var freshMask = createMask('linear');
       state.masks = [freshMask];
       state.activeMaskId = freshMask.id;
-      state.geometry = defaultGeometry();
       state.cropEditing = false;
       state.cropDrag = null;
       state.cropRect = null;
@@ -2130,33 +2164,57 @@
     return [l.exposure, l.contrast / 100, l.temperature / 100, l.saturation / 100];
   }
 
+  function maskRenderGeometry(mask, map) {
+    var p1 = [mask.p1.x, mask.p1.y];
+    var p2 = [mask.p2.x, mask.p2.y];
+    var ellipse = [1, 0, 0, 1];
+    if (mask.type === 'linear') {
+      var o1 = mapPointToOutput(map, mask.p1);
+      var o2 = mapPointToOutput(map, mask.p2);
+      p1 = [o1.x, o1.y];
+      p2 = [o2.x, o2.y];
+    } else if (mask.type === 'radial') {
+      var center = mapPointToOutput(map, mask.p1);
+      var canonical = mask.radialMat ||
+        [Math.abs(mask.p2.x) || 0.28, 0, 0, Math.abs(mask.p2.y) || 0.28];
+      ellipse = mat2Inv(outputRadialMatrix(map, canonical));
+      p1 = [center.x, center.y];
+    }
+    return { p1: p1, p2: p2, ellipse: ellipse };
+  }
+
   function renderParams(isExport) {
     var a = state.adjust;
     var masks = [];
+    var map = geometryMap();
     for (var i = 0; i < state.masks.length; i++) {
       var m = state.masks[i];
       if (!m.enabled || m.type === 'none') continue;
       if (m.type === 'brush' && !m.strokes.length) continue;
+      var geo = maskRenderGeometry(m, map);
       masks.push({
         id: m.id,
         type: maskTypeCode(m.type),
         invert: !!m.invert,
         feather: m.feather,
-        p1: [m.p1.x, m.p1.y],
-        p2: [m.p2.x, m.p2.y],
+        p1: geo.p1,
+        p2: geo.p2,
+        ellipse: geo.ellipse,
         local: localVector(m.local)
       });
     }
     var showMask = null;
     var am = activeMask();
     if (!isExport && am && am.enabled && am.type !== 'none' && am.show) {
+      var showGeo = maskRenderGeometry(am, map);
       showMask = {
         id: am.id,
         type: maskTypeCode(am.type),
         invert: !!am.invert,
         feather: am.feather,
-        p1: [am.p1.x, am.p1.y],
-        p2: [am.p2.x, am.p2.y],
+        p1: showGeo.p1,
+        p2: showGeo.p2,
+        ellipse: showGeo.ellipse,
         local: localVector(am.local)
       };
     }
@@ -2211,6 +2269,7 @@
       feather: mask.feather,
       p1: { x: mask.p1.x, y: mask.p1.y },
       p2: { x: mask.p2.x, y: mask.p2.y },
+      radialMat: mask.radialMat ? mask.radialMat.slice() : null,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
       strokes: (mask.strokes || []).map(function (stroke) {
@@ -2401,6 +2460,8 @@
         feather: clamp(Number(m.feather), 0, 1),
         p1: { x: clamp(Number(m.p1 && m.p1.x), 0, 1), y: clamp(Number(m.p1 && m.p1.y), 0, 1) },
         p2: { x: clamp(Number(m.p2 && m.p2.x), 0, 1), y: clamp(Number(m.p2 && m.p2.y), 0, 1) },
+        radialMat: Array.isArray(m.radialMat) && m.radialMat.length === 4
+          ? m.radialMat.map(Number) : null,
         strokes: (m.strokes || []).map(function (stroke) {
           return {
             radius: Number(stroke.radius) || 0.04,
@@ -3146,6 +3207,119 @@
     return { canvas: oriented, w: oriented.width, h: oriented.height };
   }
 
+  function mat2Mul(a, b) {
+    return [
+      a[0] * b[0] + a[2] * b[1],
+      a[1] * b[0] + a[3] * b[1],
+      a[0] * b[2] + a[2] * b[3],
+      a[1] * b[2] + a[3] * b[3]
+    ];
+  }
+
+  function mat2Inv(m) {
+    var det = m[0] * m[3] - m[2] * m[1];
+    if (Math.abs(det) < 1e-9) return [1, 0, 0, 1];
+    var inv = 1 / det;
+    return [m[3] * inv, -m[1] * inv, -m[2] * inv, m[0] * inv];
+  }
+
+  // 手动蒙版保存于原始图像坐标；此矩阵把原始预览坐标映射到当前几何输出坐标。
+  function geometryMap() {
+    if (!state || !state.preview) {
+      return {
+        matrix: new DOMMatrix(),
+        inverse: new DOMMatrix(),
+        W: 1, H: 1, outW: 1, outH: 1,
+        radiusFactor: 1,
+        L2: [1, 0, 0, 1]
+      };
+    }
+    var W = state.preview.w;
+    var H = state.preview.h;
+    var g = state.geometry;
+    var rot = (((Number(g.rotate90) || 0) % 4) + 4) % 4;
+    var swap = rot % 2 === 1;
+    var OW = swap ? H : W;
+    var OH = swap ? W : H;
+    var m = new DOMMatrix()
+      .translate(OW / 2, OH / 2)
+      .rotate(rot * 90)
+      .scale(g.flipH ? -1 : 1, g.flipV ? -1 : 1)
+      .translate(-W / 2, -H / 2);
+    var angle = clamp(Number(g.angle) || 0, -45, 45);
+    if (Math.abs(angle) > 0.001) {
+      var rad = angle * Math.PI / 180;
+      var c = Math.abs(Math.cos(rad));
+      var sn = Math.abs(Math.sin(rad));
+      var cover = Math.max((OW * c + OH * sn) / OW, (OW * sn + OH * c) / OH);
+      var straight = new DOMMatrix()
+        .translate(OW / 2, OH / 2)
+        .rotate(angle)
+        .scale(cover)
+        .translate(-OW / 2, -OH / 2);
+      m = straight.multiply(m);
+    }
+    var outW = OW;
+    var outH = OH;
+    var crop = g.crop;
+    if (crop && crop.w > 0.001 && crop.h > 0.001) {
+      var cx = clamp(Number(crop.x) || 0, 0, 0.999);
+      var cy = clamp(Number(crop.y) || 0, 0, 0.999);
+      var cw = clamp(Number(crop.w) || 1, 0.001, 1 - cx);
+      var ch = clamp(Number(crop.h) || 1, 0.001, 1 - cy);
+      var sx = Math.round(cx * OW);
+      var sy = Math.round(cy * OH);
+      var sw = Math.max(1, Math.min(OW - sx, Math.round(cw * OW)));
+      var sh = Math.max(1, Math.min(OH - sy, Math.round(ch * OH)));
+      m = new DOMMatrix().translate(-sx, -sy).multiply(m);
+      outW = sw;
+      outH = sh;
+    }
+    var norm = new DOMMatrix()
+      .scale(1 / Math.max(1, outW), 1 / Math.max(1, outH))
+      .multiply(m)
+      .multiply(new DOMMatrix().scale(W, H));
+    var inv;
+    try {
+      inv = norm.inverse();
+    } catch (e) {
+      inv = new DOMMatrix();
+    }
+    var det = Math.abs(m.a * m.d - m.b * m.c);
+    var scale = Math.sqrt(Math.max(1e-9, det));
+    return {
+      matrix: norm,
+      inverse: inv,
+      W: W,
+      H: H,
+      outW: outW,
+      outH: outH,
+      radiusFactor: Math.max(1e-6, W * scale / Math.max(1, outW)),
+      L2: [norm.a, norm.b, norm.c, norm.d],
+      scale: scale
+    };
+  }
+
+  function mapPointToOutput(map, p) {
+    var q = map.matrix.transformPoint({ x: p.x, y: p.y });
+    return { x: q.x, y: q.y };
+  }
+
+  function mapPointToCanonical(map, p) {
+    var q = map.inverse.transformPoint({ x: p.x, y: p.y });
+    return { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) };
+  }
+
+  // D_c 为原始坐标下的椭圆基；渲染时先用 L2 变换到输出坐标再求逆。
+  function canonicalRadialMatrix(map, radiusX, radiusY) {
+    return mat2Mul(mat2Inv(map.L2),
+      [Math.max(0.002, radiusX), 0, 0, Math.max(0.002, radiusY)]);
+  }
+
+  function outputRadialMatrix(map, radialMat) {
+    return mat2Mul(map.L2, radialMat || [0.28, 0, 0, 0.28]);
+  }
+
   function applyGeometrySource() {
     if (!state.previewCanvas) return;
     var composed = composeGeometry(state.previewCanvas, state.geometry);
@@ -3154,23 +3328,18 @@
     state.renderH = composed.h;
     els.canvas.width = composed.w;
     els.canvas.height = composed.h;
-    if (aiSubjectState.timer) {
-      clearTimeout(aiSubjectState.timer);
-      aiSubjectState.timer = 0;
+    if (aiSceneState.timer) {
+      clearTimeout(aiSceneState.timer);
+      aiSceneState.timer = 0;
     }
     aiBaseCache = Object.create(null);
-    if (aiSubjectRawValid()) {
-      if (!aiSubjectBase || aiSubjectBase.geometryKey !== geometrySignature()) {
-        aiSubjectBase = null;
-        ensureAISubjectBaseForGeometry();
-      }
+    if (aiRawValid()) {
+      aiRaw.bases = Object.create(null);
+      var aiKind = activeAIKind();
+      if (aiKind) ensureAIKindBase(aiKind);
       updateAIModelUI();
-    } else if (aiSubjectBase) {
-      aiSubjectBase = null;
-      aiSubjectState.coverage = 0;
-      if (!aiSubjectState.running && aiSubjectState.failedPreview !== state.previewCanvas) {
-        aiSubjectState.status = 'idle';
-      }
+    } else if (aiRaw) {
+      aiRaw = null;
       updateAIModelUI();
     }
     if (renderer) {
@@ -3582,7 +3751,7 @@
    * 蒙版
    * ------------------------------------------------------------------ */
 
-  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: '智能天空', subject: 'AI 主体' };
+  var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔', sky: 'AI 天空', subject: 'AI 主体' };
 
   function activeMask() {
     for (var i = 0; i < state.masks.length; i++) {
@@ -3712,15 +3881,15 @@
     if (!mask) {
       els.maskNote.innerHTML = '尚未添加蒙版。点击“添加蒙版”后可在预览画面上拖动定义范围，局部调整只作用于蒙版内。';
     } else if (!hasMask) {
-      els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向、画笔或智能识别后即可建立范围。';
+      els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向、画笔或 AI 主体 / AI 天空后即可建立范围。';
     } else if (mask.type === 'linear') {
       els.maskNote.innerHTML = '<b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；多个蒙版按列表顺序叠加。';
     } else if (mask.type === 'radial') {
       els.maskNote.innerHTML = '<b>径向渐变</b>：从中心向外拖动改变椭圆范围；勾选“显示蒙版”可检查当前活动蒙版的覆盖区域。';
     } else if (mask.type === 'sky') {
-      els.maskNote.innerHTML = '<b>智能天空</b>：在浏览器内按颜色与顶部连通区域识别，人物/建筑边缘可能需用画笔修整。勾选“显示蒙版”检查覆盖，必要时点“重新识别”。';
+      els.maskNote.innerHTML = '<b>AI 天空</b>：优先使用本地 ADE20K 语义分割模型识别天空；模型不可用时回退到颜色/连通域识别。复杂边缘可用画笔修整，勾选“显示蒙版”检查覆盖。';
     } else if (mask.type === 'subject') {
-      els.maskNote.innerHTML = '<b>AI 主体</b>：优先运行本地 MediaPipe 人像分割模型（约 10 MB，仅首次加载，图片不上传）；未检测到人像时自动回退到构图识别。分割结果可用画笔修整。';
+      els.maskNote.innerHTML = '<b>AI 主体</b>：本地 ADE20K 语义分割模型识别画面中的人物与动物（首次按需加载，图片不上传）；模型不可用时回退到构图识别。分割结果可用画笔修整。';
     } else {
       els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，可调画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
     }
@@ -3749,15 +3918,10 @@
     mask.current = null;
     mask.dragMode = '';
     mask.strokes = [];
+    applyDefaultMaskGeometry(mask);
     if (type === 'linear') {
-      var lg = maskGeometryDefaults('linear');
-      mask.p1 = lg.p1;
-      mask.p2 = lg.p2;
       mask.feather = 0.45;
     } else if (type === 'radial') {
-      var rg = maskGeometryDefaults('radial');
-      mask.p1 = rg.p1;
-      mask.p2 = rg.p2;
       mask.feather = 0.45;
     } else if (type === 'brush') {
       mask.feather = 0.35;
@@ -3800,9 +3964,7 @@
     if (!mask) return;
     markHistory('清除蒙版范围');
     if (mask.type === 'linear' || mask.type === 'radial') {
-      var geo = maskGeometryDefaults(mask.type);
-      mask.p1 = geo.p1;
-      mask.p2 = geo.p2;
+      applyDefaultMaskGeometry(mask);
     } else if (isTexturedMaskType(mask.type)) {
       mask.strokes = [];
       mask.current = null;
@@ -3852,6 +4014,7 @@
     copy.feather = src.feather;
     copy.p1 = { x: src.p1.x, y: src.p1.y };
     copy.p2 = { x: src.p2.x, y: src.p2.y };
+    copy.radialMat = src.radialMat ? src.radialMat.slice() : null;
     copy.brushPct = src.brushPct;
     copy.brushMode = src.brushMode || 'add';
     copy.local = Object.assign({}, src.local);
@@ -3941,73 +4104,48 @@
       ':' + (Number(g.angle) || 0).toFixed(2) + ':' + crop;
   }
 
-  function hasSubjectMask() {
+  function aiKindForType(type) {
+    return type === 'subject' ? 'subject' : type === 'sky' ? 'sky' : null;
+  }
+
+  function hasAIMask() {
     for (var i = 0; i < state.masks.length; i++) {
-      if (state.masks[i].type === 'subject') return true;
+      var kind = aiKindForType(state.masks[i].type);
+      if (kind) return true;
     }
     return false;
   }
 
-  function buildSegmentationInput(source, maxEdge) {
-    var w = source.width;
-    var h = source.height;
-    var scale = Math.min(1, maxEdge / Math.max(1, w, h));
-    var cw = Math.max(32, Math.round(w * scale));
-    var ch = Math.max(32, Math.round(h * scale));
-    var canvas = document.createElement('canvas');
-    canvas.width = cw;
-    canvas.height = ch;
-    var ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(source, 0, 0, cw, ch);
-    return canvas;
-  }
-
-  function maskCanvasFromConfidence(conf, targetWidth) {
-    try {
-      var w = conf.width;
-      var h = conf.height;
-      var data = conf.getAsFloat32Array();
-      var n = w * h;
-      var small = document.createElement('canvas');
-      small.width = w;
-      small.height = h;
-      var sctx = small.getContext('2d');
-      var img = sctx.createImageData(w, h);
-      var covered = 0;
-      for (var i = 0; i < n; i++) {
-        var p = clamp(Number(data[i]) || 0, 0, 1);
-        if (p >= 0.5) covered++;
-        var v = Math.round(p * 255);
-        var o = i * 4;
-        img.data[o] = v;
-        img.data[o + 1] = v;
-        img.data[o + 2] = v;
-        img.data[o + 3] = 255;
-      }
-      sctx.putImageData(img, 0, 0);
-      var outW = Math.max(64, Math.min(1024, Math.round(targetWidth)));
-      var outH = Math.max(1, Math.round(outW * h / w));
-      var out = document.createElement('canvas');
-      out.width = outW;
-      out.height = outH;
-      var ctx = out.getContext('2d');
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, outW, outH);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      try { ctx.filter = 'blur(' + Math.max(1, outW / 640).toFixed(2) + 'px)'; } catch (e) { /* ignore */ }
-      ctx.drawImage(small, 0, 0, outW, outH);
-      try { ctx.filter = 'none'; } catch (e2) { /* ignore */ }
-      return { canvas: out, coverage: covered / n };
-    } catch (e3) {
-      return null;
+  function hasAIMaskKind(kind) {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (aiKindForType(state.masks[i].type) === kind) return true;
     }
+    return false;
   }
 
-  function aiSubjectRawValid() {
-    return !!(aiSubjectRaw && aiSubjectRaw.preview === state.previewCanvas);
+  function hasEnabledAIMask() {
+    for (var i = 0; i < state.masks.length; i++) {
+      var kind = aiKindForType(state.masks[i].type);
+      if (kind && state.masks[i].enabled) return true;
+    }
+    return false;
+  }
+
+  function aiRawValid() {
+    return !!(aiRaw && aiRaw.preview === state.previewCanvas &&
+      aiRaw.classes && aiRaw.classes.length === AI_MODEL_INPUT * AI_MODEL_INPUT);
+  }
+
+  function aiStatsForRaw(raw) {
+    var sky = 0;
+    var subject = 0;
+    var n = raw.classes.length;
+    for (var i = 0; i < n; i++) {
+      var c = raw.classes[i];
+      if (c === 2) sky++;
+      else if (c === 12 || c === 126) subject++;
+    }
+    return { sky: sky / n, subject: subject / n };
   }
 
   function measureMaskCoverage(canvas) {
@@ -4031,104 +4169,190 @@
     }
   }
 
-  // 模型始终在“未旋转/未裁剪”的原始预览上推理，再把蒙版按当前几何重采样；
-  // 这样旋转后不会把画面边缘误当成人物，也避免每次几何变化都重新推理。
-  function ensureAISubjectBaseForGeometry() {
-    if (!aiSubjectRawValid()) return null;
+  // 模型在方形输入上输出类别图；这里反向拉伸回原始预览宽高比，再按当前几何重采样。
+  function aiCanonicalMaskForKind(kind) {
+    if (!aiRawValid()) return null;
+    if (aiRaw.canonical[kind]) return aiRaw.canonical[kind];
+    var classes = AI_CLASS_SETS[kind] || [];
+    var size = AI_MODEL_INPUT;
+    var small = document.createElement('canvas');
+    small.width = size;
+    small.height = size;
+    var sctx = small.getContext('2d');
+    var img = sctx.createImageData(size, size);
+    for (var i = 0; i < aiRaw.classes.length; i++) {
+      var on = classes.indexOf(aiRaw.classes[i]) >= 0;
+      var v = on ? 255 : 0;
+      var o = i * 4;
+      img.data[o] = v;
+      img.data[o + 1] = v;
+      img.data[o + 2] = v;
+      img.data[o + 3] = 255;
+    }
+    sctx.putImageData(img, 0, 0);
+    var preview = state.previewCanvas;
+    var outW = MASK_PREVIEW_WIDTH;
+    var outH = Math.max(1, Math.round(outW * preview.height / Math.max(1, preview.width)));
+    var out = document.createElement('canvas');
+    out.width = outW;
+    out.height = outH;
+    var ctx = out.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    try { ctx.filter = 'blur(1.4px)'; } catch (e) { /* ignore */ }
+    ctx.drawImage(small, 0, 0, outW, outH);
+    try { ctx.filter = 'none'; } catch (e2) { /* ignore */ }
+    var base = {
+      canvas: out,
+      coverage: aiRaw.stats ? aiRaw.stats[kind] || 0 : 0
+    };
+    aiRaw.canonical[kind] = base;
+    return base;
+  }
+
+  function ensureAIKindBase(kind) {
+    if (!aiRawValid()) return null;
     var sig = geometrySignature();
-    if (aiSubjectBase && aiSubjectBase.geometryKey === sig) return aiSubjectBase;
-    var composed = composeGeometry(aiSubjectRaw.canvas, state.geometry);
-    aiSubjectBase = {
+    var cached = aiRaw.bases[kind];
+    if (cached && cached.geometryKey === sig) return cached;
+    var canonical = aiCanonicalMaskForKind(kind);
+    if (!canonical) return null;
+    var composed = composeGeometry(canonical.canvas, state.geometry);
+    var base = {
       canvas: composed.canvas,
       coverage: measureMaskCoverage(composed.canvas),
+      rawCoverage: canonical.coverage,
       geometryKey: sig,
       at: Date.now()
     };
-    return aiSubjectBase;
+    aiRaw.bases[kind] = base;
+    return base;
   }
 
-  function hasEnabledSubjectMask() {
-    for (var i = 0; i < state.masks.length; i++) {
-      if (state.masks[i].type === 'subject' && state.masks[i].enabled) return true;
-    }
-    return false;
-  }
-
-  function aiSubjectPendingForExport() {
-    if (!hasEnabledSubjectMask()) return false;
-    if (ensureAISubjectBaseForGeometry()) return false;
-    if (aiSubjectState.failedPreview === state.previewCanvas) return false;
+  function aiPendingForExport() {
+    if (!hasEnabledAIMask()) return false;
+    if (aiRawValid()) return false;
+    if (aiSceneState.failedPreview === state.previewCanvas) return false;
     return true;
   }
 
-  function ensureAISegmenter() {
-    if (aiSegmenter.instance) return Promise.resolve(aiSegmenter.instance);
-    if (aiSegmenter.promise) return aiSegmenter.promise;
-    aiSegmenter.status = 'loading';
-    aiSegmenter.error = null;
-    updateAIModelUI();
-    aiSegmenter.promise = (async function () {
-      var mod = await import(aiVendorBase + 'vision_bundle.js');
-      if (!mod || !mod.FilesetResolver || !mod.ImageSegmenter) {
-        throw new Error('MediaPipe runtime exports missing');
+  function activeAIKind() {
+    var mask = activeMask();
+    return mask ? aiKindForType(mask.type) : null;
+  }
+
+  function buildAIModelInput(source, ort) {
+    var canvas = document.createElement('canvas');
+    canvas.width = AI_MODEL_INPUT;
+    canvas.height = AI_MODEL_INPUT;
+    var ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, 0, 0, AI_MODEL_INPUT, AI_MODEL_INPUT);
+    var pixels = ctx.getImageData(0, 0, AI_MODEL_INPUT, AI_MODEL_INPUT).data;
+    var n = AI_MODEL_INPUT * AI_MODEL_INPUT;
+    var data = new Float32Array(n * 3);
+    var mean = [0.485, 0.456, 0.406];
+    var std = [0.229, 0.224, 0.225];
+    for (var i = 0; i < n; i++) {
+      for (var k = 0; k < 3; k++) {
+        data[k * n + i] = (pixels[i * 4 + k] / 255 - mean[k]) / std[k];
       }
-      var fileset = await mod.FilesetResolver.forVisionTasks(aiVendorBase + 'wasm');
-      var segmenter = await mod.ImageSegmenter.createFromOptions(fileset, {
-        baseOptions: {
-          modelAssetPath: aiVendorBase + 'selfie_segmenter.tflite',
-          delegate: 'CPU'
-        },
-        runningMode: 'IMAGE',
-        outputConfidenceMasks: true,
-        outputCategoryMask: false
-      });
-      aiSegmenter.instance = segmenter;
-      aiSegmenter.status = 'ready';
-      updateAIModelUI();
-      return segmenter;
+    }
+    return new ort.Tensor('float32', data, [1, 3, AI_MODEL_INPUT, AI_MODEL_INPUT]);
+  }
+
+  function ensureAIORT() {
+    if (aiSession.ort) return Promise.resolve(aiSession.ort);
+    if (aiSession.ortPromise) return aiSession.ortPromise;
+    aiSession.ortPromise = (async function () {
+      var mod = await import(aiOrtBase + 'ort.wasm.min.mjs');
+      if (!mod || !mod.InferenceSession || !mod.Tensor) {
+        throw new Error('ONNX Runtime Web 模块导出缺失');
+      }
+      mod.env.wasm.wasmPaths = aiOrtBase;
+      mod.env.wasm.numThreads = 1;
+      mod.env.logLevel = 'fatal';
+      aiSession.ort = mod;
+      return mod;
     })().catch(function (err) {
-      aiSegmenter.status = 'failed';
-      aiSegmenter.error = err;
-      aiSegmenter.promise = null;
+      aiSession.ortPromise = null;
+      throw err;
+    });
+    return aiSession.ortPromise;
+  }
+
+  function ensureAISession() {
+    if (aiSession.session) return Promise.resolve(aiSession.session);
+    if (aiSession.promise) return aiSession.promise;
+    aiSession.status = 'loading';
+    aiSession.error = null;
+    updateAIModelUI();
+    aiSession.promise = (async function () {
+      var ort = await ensureAIORT();
+      var session = await ort.InferenceSession.create(aiVendorBase + AI_MODEL_FILE, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+        logSeverityLevel: 4
+      });
+      aiSession.session = session;
+      aiSession.status = 'ready';
+      updateAIModelUI();
+      return session;
+    })().catch(function (err) {
+      aiSession.status = 'failed';
+      aiSession.error = err;
+      aiSession.promise = null;
       updateAIModelUI();
       throw err;
     });
-    return aiSegmenter.promise;
+    return aiSession.promise;
   }
 
   function updateAIModelUI() {
     if (!els.aiModel) return;
-    var mask = activeMask();
-    var subject = !!mask && mask.type === 'subject';
+    var kind = activeAIKind();
     if (els.maskAI) {
-      els.maskAI.disabled = subject && (!!aiSubjectState.running || state.cropEditing);
-      els.maskAI.innerHTML = icon('wand') + (subject ? '重新分割' : '重新识别');
+      els.maskAI.disabled = !!kind && (!!aiSceneState.running || state.cropEditing);
+      els.maskAI.innerHTML = icon('wand') + (kind ? '重新分割' : '重新识别');
     }
-    els.aiModel.hidden = !subject;
-    if (!subject) return;
-    els.aiRetry.disabled = !!state.cropEditing || !!aiSubjectState.running;
-    var text = 'AI 人像分割模型 · 按需加载';
+    els.aiModel.hidden = !kind;
+    if (!kind) return;
+    els.aiRetry.disabled = !!state.cropEditing || !!aiSceneState.running;
+    var label = kind === 'sky' ? 'AI 天空' : 'AI 主体';
+    var text = label + ' · 按需识别';
     var spinning = false;
     var retry = false;
     var tone = '';
-    var aiBase = ensureAISubjectBaseForGeometry();
-    if (aiSegmenter.status === 'loading' || (aiSubjectState.status === 'loading' && !aiSegmenter.instance && aiSegmenter.status !== 'failed')) {
-      text = '正在加载本地 AI 模型（首次约 10 MB，不上传图片）…';
+    if (aiSession.status === 'loading' ||
+        (aiSceneState.status === 'loading' && !aiSession.session && aiSession.status !== 'failed')) {
+      text = '正在加载本地 AI 分割模型（首次约 35 MB，不上传图片）…';
       spinning = true;
       tone = 'is-loading';
-    } else if (aiSubjectState.status === 'loading') {
-      text = '正在识别人像…';
+    } else if (aiSceneState.status === 'loading') {
+      text = '正在识别' + (kind === 'sky' ? '天空' : '人物与动物') + '…';
       spinning = true;
       tone = 'is-loading';
-    } else if (aiBase) {
-      text = 'AI 人像分割 · 覆盖约 ' + (aiBase.coverage * 100).toFixed(1) + '%';
-      tone = 'is-ok';
-    } else if (aiSubjectState.failedPreview === state.previewCanvas) {
-      text = aiSubjectState.noPerson
-        ? '未检测到人像 · 已回退构图识别'
-        : 'AI 模型不可用 · 已回退构图识别';
-      retry = true;
-      tone = 'is-warn';
+    } else {
+      var base = ensureAIKindBase(kind);
+      if (base) {
+        if (base.coverage >= 0.002) {
+          text = label + ' · 覆盖约 ' + (base.coverage * 100).toFixed(1) + '%';
+          tone = 'is-ok';
+        } else {
+          text = kind === 'sky'
+            ? '未检测到天空 · 可用画笔修整'
+            : '未检测到人物或动物 · 可用画笔修整';
+          retry = true;
+          tone = 'is-warn';
+        }
+      } else if (aiSceneState.failedPreview === state.previewCanvas) {
+        text = 'AI 模型不可用 · 已回退' + (kind === 'sky' ? '颜色识别' : '构图识别');
+        retry = true;
+        tone = 'is-warn';
+      }
     }
     els.aiModel.className = 'raw-ai-model' + (tone ? ' ' + tone : '');
     els.aiModelText.textContent = text;
@@ -4136,18 +4360,18 @@
     els.aiRetry.hidden = !retry;
   }
 
-  function scheduleAISubjectSegmentation(delay, force) {
-    if (!state.loaded || !state.previewCanvas || state.busy || state.cropEditing || !hasSubjectMask()) return;
-    if (aiSubjectState.running) {
-      if (force) aiSubjectState.queued = true;
+  function scheduleAISceneSegmentation(delay, force) {
+    if (!state.loaded || !state.previewCanvas || state.busy || state.cropEditing || !hasAIMask()) return;
+    if (aiSceneState.running) {
+      if (force) aiSceneState.queued = true;
       return;
     }
-    if (!force && aiSubjectRawValid()) return;
-    if (!force && aiSubjectState.failedPreview === state.previewCanvas) return;
-    if (aiSubjectState.timer) clearTimeout(aiSubjectState.timer);
-    aiSubjectState.timer = setTimeout(function () {
-      aiSubjectState.timer = 0;
-      runAISubjectSegmentation({ force: !!force });
+    if (!force && aiRawValid()) return;
+    if (!force && aiSceneState.failedPreview === state.previewCanvas) return;
+    if (aiSceneState.timer) clearTimeout(aiSceneState.timer);
+    aiSceneState.timer = setTimeout(function () {
+      aiSceneState.timer = 0;
+      runAISceneSegmentation({ force: !!force });
     }, delay == null ? 220 : delay);
   }
 
@@ -4155,131 +4379,124 @@
     if (!state.busy) setStatus(text, kind);
   }
 
-  async function runAISubjectSegmentation(opts) {
+  async function runAISceneSegmentation(opts) {
     opts = opts || {};
-    if (aiSubjectState.running) {
-      if (opts.force) aiSubjectState.queued = true;
+    if (aiSceneState.running) {
+      if (opts.force) aiSceneState.queued = true;
       return;
     }
-    if (!state.loaded || !state.previewCanvas || !hasSubjectMask()) return;
-    if (!opts.force && aiSubjectRawValid()) return;
-    if (!opts.force && aiSubjectState.failedPreview === state.previewCanvas) return;
+    if (!state.loaded || !state.previewCanvas || !hasAIMask()) return;
+    if (!opts.force && aiRawValid()) return;
+    if (!opts.force && aiSceneState.failedPreview === state.previewCanvas) return;
     var previewRef = state.previewCanvas;
-    var seq = ++aiSubjectState.seq;
-    var firstLoad = !aiSegmenter.instance;
-    aiSubjectState.running = true;
-    aiSubjectState.status = 'loading';
+    var seq = ++aiSceneState.seq;
+    var firstLoad = !aiSession.session;
+    aiSceneState.running = true;
+    aiSceneState.status = 'loading';
     updateAIModelUI();
     setStatus(firstLoad
-      ? '正在加载本地 AI 人像分割模型（首次约 10 MB，图片不上传）…'
-      : '正在识别人像…', '', true);
-    var result = null;
+      ? '正在加载本地 AI 分割模型（首次约 35 MB，图片不上传）…'
+      : '正在识别天空、人物与动物…', '', true);
     try {
-      var segmenter = await ensureAISegmenter();
-      if (seq !== aiSubjectState.seq || previewRef !== state.previewCanvas || !hasSubjectMask()) {
-        aiSubjectState.status = 'idle';
+      var session = await ensureAISession();
+      if (seq !== aiSceneState.seq || previewRef !== state.previewCanvas || !hasAIMask()) {
+        aiSceneState.status = 'idle';
         return;
       }
-      setStatus('正在识别人像…', '', true);
+      setStatus('正在识别天空、人物与动物…', '', true);
       await nextFrame();
-      var input = buildSegmentationInput(previewRef, AI_SEGMENT_INPUT_EDGE);
+      var ort = aiSession.ort;
+      var input = buildAIModelInput(previewRef, ort);
       var t0 = performance.now();
-      result = segmenter.segment(input);
-      var masks = result.confidenceMasks || [];
-      if (!masks.length) throw new Error('AI 分割模型没有返回蒙版');
-      var built = maskCanvasFromConfidence(masks[0], MASK_PREVIEW_WIDTH);
-      if (!built) throw new Error('无法读取 AI 分割蒙版');
+      var outputs = await session.run({ [session.inputNames[0]]: input });
+      var outputName = session.outputNames[0];
+      var output = outputs[outputName];
       var inferMs = performance.now() - t0;
-      if (seq !== aiSubjectState.seq || previewRef !== state.previewCanvas || !hasSubjectMask()) {
-        aiSubjectState.status = 'idle';
+      if (!output || !output.data || output.data.length !== AI_MODEL_INPUT * AI_MODEL_INPUT) {
+        throw new Error('AI 分割模型输出尺寸不是 ' + AI_MODEL_INPUT + '×' + AI_MODEL_INPUT);
+      }
+      if (seq !== aiSceneState.seq || previewRef !== state.previewCanvas || !hasAIMask()) {
+        aiSceneState.status = 'idle';
         return;
       }
-      aiSubjectState.coverage = built.coverage;
-      aiSubjectState.error = '';
-      if (built.coverage < 0.012) {
-        aiSubjectRaw = null;
-        aiSubjectBase = null;
-        aiSubjectState.status = 'ready';
-        aiSubjectState.failedPreview = previewRef;
-        aiSubjectState.noPerson = true;
-        aiBaseCache = Object.create(null);
-        refreshSubjectMaskTextures();
-        updateAIModelUI();
-        setAIStatus('AI 模型未检测到人像，已使用构图识别。可用画笔修整或换一张人像照片。', 'warn');
-      } else {
-        aiSubjectRaw = { canvas: built.canvas, coverage: built.coverage, preview: previewRef };
-        aiSubjectBase = null;
-        ensureAISubjectBaseForGeometry();
-        aiSubjectState.status = 'ready';
-        aiSubjectState.failedPreview = null;
-        aiSubjectState.noPerson = false;
-        aiBaseCache = Object.create(null);
-        refreshSubjectMaskTextures();
-        updateAIModelUI();
-        var shownCoverage = aiSubjectBase ? aiSubjectBase.coverage : built.coverage;
-        setAIStatus('AI 人像分割完成，覆盖约 ' + (shownCoverage * 100).toFixed(1) +
-          '%。本地推理 ' + Math.round(inferMs) + ' ms，可用画笔修整。', 'ok');
-      }
+      var classes = new Int32Array(output.data.length);
+      for (var ci = 0; ci < output.data.length; ci++) classes[ci] = output.data[ci] | 0;
+      aiRaw = {
+        preview: previewRef,
+        classes: classes,
+        stats: null,
+        canonical: Object.create(null),
+        bases: Object.create(null)
+      };
+      aiRaw.stats = aiStatsForRaw(aiRaw);
+      aiSceneState.status = 'ready';
+      aiSceneState.error = '';
+      aiSceneState.failedPreview = null;
+      aiSceneState.lastInferMs = inferMs;
+      refreshAIMaskTextures();
+      updateAIModelUI();
+      setAIStatus('AI 分割完成：天空约 ' + (aiRaw.stats.sky * 100).toFixed(1) +
+        '%，人物/动物约 ' + (aiRaw.stats.subject * 100).toFixed(1) +
+        '%。本地推理 ' + Math.round(inferMs) + ' ms。', 'ok');
     } catch (err) {
-      console.warn('[raw] AI subject segmentation failed', err);
-      if (seq === aiSubjectState.seq) {
-        aiSubjectRaw = null;
-        aiSubjectBase = null;
-        aiSubjectState.status = 'failed';
-        aiSubjectState.failedPreview = previewRef;
-        aiSubjectState.noPerson = false;
-        aiSubjectState.error = String(err && (err.message || err));
+      console.warn('[raw] AI scene segmentation failed', err);
+      if (seq === aiSceneState.seq) {
+        aiRaw = null;
+        aiSceneState.status = 'failed';
+        aiSceneState.failedPreview = previewRef;
+        aiSceneState.error = String(err && (err.message || err));
         aiBaseCache = Object.create(null);
-        refreshSubjectMaskTextures();
+        refreshAIMaskTextures();
         updateAIModelUI();
-        setAIStatus('AI 分割模型加载失败，已回退到构图识别。可点“重新分割”重试。', 'warn');
+        setAIStatus('AI 模型不可用，已回退到本地' +
+          '识别。可点“重新分割”重试。', 'warn');
       }
     } finally {
-      try { if (result && result.close) result.close(); } catch (e) { /* ignore */ }
-      var isLatest = seq === aiSubjectState.seq;
-      aiSubjectState.running = false;
+      var isLatest = seq === aiSceneState.seq;
+      aiSceneState.running = false;
       updateAIModelUI();
-      if (isLatest && aiSubjectState.status === 'idle' && els.status &&
-          /^正在(加载本地 AI|识别人像)/.test(els.status.textContent || '')) {
+      if (isLatest && aiSceneState.status === 'idle' && els.status &&
+          /^正在(加载本地 AI|识别天空)/.test(els.status.textContent || '')) {
         setStatus(baselineStatus(), 'ok');
       }
-      if (hasSubjectMask() && !aiSubjectRawValid() &&
-          aiSubjectState.failedPreview !== state.previewCanvas && !aiSubjectState.queued) {
-        scheduleAISubjectSegmentation(80, false);
+      if (hasAIMask() && !aiRawValid() &&
+          aiSceneState.failedPreview !== state.previewCanvas && !aiSceneState.queued) {
+        scheduleAISceneSegmentation(80, false);
       }
-      if (aiSubjectState.queued) {
-        aiSubjectState.queued = false;
-        scheduleAISubjectSegmentation(60, true);
+      if (aiSceneState.queued) {
+        aiSceneState.queued = false;
+        scheduleAISceneSegmentation(60, true);
       }
     }
   }
 
-  function refreshSubjectMaskTextures() {
+  function refreshAIMaskTextures() {
     if (!renderer || !state.preview) return;
     aiBaseCache = Object.create(null);
+    if (aiRawValid()) aiRaw.bases = Object.create(null);
     for (var i = 0; i < state.masks.length; i++) {
-      if (state.masks[i].type === 'subject') refreshMaskTexture(state.masks[i]);
+      if (aiKindForType(state.masks[i].type)) refreshMaskTexture(state.masks[i]);
     }
     updateMaskUI();
     scheduleRender();
   }
 
-  function retryAISubject() {
+  function retryAISceneSegmentation() {
     var mask = activeMask();
-    if (!mask || mask.type !== 'subject') return;
+    if (!mask || !aiKindForType(mask.type)) return;
     if (state.cropEditing) {
-      setStatus('请先应用或取消裁剪，再运行 AI 人像分割。', 'warn');
+      setStatus('请先应用或取消裁剪，再运行 AI 分割。', 'warn');
       return;
     }
-    aiSubjectState.failedPreview = null;
-    aiSubjectState.noPerson = false;
-    aiSubjectState.error = '';
-    aiSubjectState.status = 'idle';
-    if (aiSegmenter.status === 'failed' && !aiSegmenter.instance) {
-      aiSegmenter.promise = null;
+    aiSceneState.failedPreview = null;
+    aiSceneState.error = '';
+    aiSceneState.status = 'idle';
+    if (aiSession.status === 'failed' && !aiSession.session) {
+      aiSession.promise = null;
+      aiSession.status = 'idle';
     }
     updateAIModelUI();
-    scheduleAISubjectSegmentation(0, true);
+    scheduleAISceneSegmentation(0, true);
   }
 
   function analysisCanvas(source, maxEdge) {
@@ -4606,11 +4823,14 @@
   function getSmartBase(mask, targetWidth, srcW, srcH, sourceCanvas, force) {
     var source = sourceCanvas || state.renderSource;
     if (!source) return null;
-    if (mask.type === 'subject') {
-      var aiBase = ensureAISubjectBaseForGeometry();
-      if (aiBase) return aiBase;
-      if (aiSubjectState.failedPreview !== state.previewCanvas) {
-        scheduleAISubjectSegmentation(180, false);
+    var aiKind = aiKindForType(mask.type);
+    if (aiKind) {
+      if (aiRawValid()) {
+        var aiBase = ensureAIKindBase(aiKind);
+        if (aiBase) return aiBase;
+      }
+      if (aiSceneState.failedPreview !== state.previewCanvas) {
+        scheduleAISceneSegmentation(180, false);
       }
     }
     var key = mask.id + ':' + Math.round(targetWidth) + ':' + source.width + 'x' + source.height;
@@ -4624,10 +4844,11 @@
 
   function identifySmartMask(mask, show, forceAI) {
     if (!mask || !isSmartMaskType(mask.type) || !state.renderSource) return;
-    var smartSubject = mask.type === 'subject';
-    if (!smartSubject) clearAIBaseForMask(mask.id);
+    var aiKind = aiKindForType(mask.type);
+    var label = aiKind === 'sky' ? 'AI 天空' : 'AI 主体';
+    if (!aiKind) clearAIBaseForMask(mask.id);
     var base = getSmartBase(mask, MASK_PREVIEW_WIDTH, state.renderW, state.renderH,
-      state.renderSource, !smartSubject);
+      state.renderSource, false);
     if (show) mask.show = true;
     if (mask.show) {
       for (var i = 0; i < state.masks.length; i++) {
@@ -4637,30 +4858,44 @@
     refreshMaskTexture(mask);
     updateMaskUI();
     scheduleRender();
-    var coverage = base ? Math.round(base.coverage * 1000) / 10 : 0;
-    if (smartSubject) {
+    if (aiKind) {
       if (forceAI) {
-        aiSubjectState.failedPreview = null;
-        aiSubjectState.noPerson = false;
-        aiSubjectState.status = 'idle';
+        aiRaw = null;
+        aiSceneState.failedPreview = null;
+        aiSceneState.error = '';
+        aiSceneState.status = 'idle';
       }
-      var aiBase = ensureAISubjectBaseForGeometry();
+      var aiBase = aiRawValid() ? ensureAIKindBase(aiKind) : null;
       if (aiBase && !forceAI) {
-        setStatus('已应用 AI 人像分割，覆盖约 ' + (aiBase.coverage * 100).toFixed(1) +
-          '%。可用画笔修整。', 'ok');
-      } else if (!forceAI && aiSubjectState.failedPreview === state.previewCanvas) {
-        setStatus(aiSubjectState.noPerson
-          ? 'AI 模型未检测到人像，已回退到构图识别。可用画笔修整或换一张人像照片。'
-          : 'AI 分割模型不可用，已回退到构图识别。可点“重新分割”重试。', 'warn');
+        if (aiBase.coverage >= 0.002) {
+          setStatus('已应用 ' + label + '，覆盖约 ' + (aiBase.coverage * 100).toFixed(1) +
+            '%。可用画笔修整。', 'ok');
+        } else {
+          setStatus(label + ' 未检测到明显的' + (aiKind === 'sky' ? '天空' : '人物或动物') +
+            '，可用画笔手动建立范围。', 'warn');
+        }
+      } else if (!forceAI && aiSceneState.failedPreview === state.previewCanvas) {
+        setStatus('AI 模型不可用，已回退到本地' +
+          (aiKind === 'sky' ? '颜色识别' : '构图识别') + '。可点“重新分割”重试。', 'warn');
       } else if (state.cropEditing) {
-        setStatus('已创建 AI 主体蒙版；应用或取消裁剪后会自动运行人像分割。', '');
+        setStatus('已创建 ' + label + ' 蒙版；应用或取消裁剪后会自动运行 AI 分割。', '');
       } else if (state.busy) {
-        setStatus('导出进行中；完成后会自动运行 AI 人像分割。', '');
+        setStatus('导出进行中；完成后会自动运行 AI 分割。', '');
       } else {
-        setStatus('正在加载并运行本地 AI 人像分割模型（首次约 10 MB，图片不上传）…', '', true);
-        scheduleAISubjectSegmentation(0, !!forceAI);
+        setStatus('正在加载并运行本地 AI 分割模型（首次约 35 MB，图片不上传）…', '', true);
+        scheduleAISceneSegmentation(0, !!forceAI);
       }
-    } else if (coverage >= 0.2) {
+      updateAIModelUI();
+      dispatch('raw:mask-ai', {
+        id: mask.id,
+        type: mask.type,
+        coverage: aiBase ? aiBase.coverage : (base ? base.coverage : 0),
+        engine: aiBase ? 'pp_mobileseg' : 'local'
+      });
+      return;
+    }
+    var coverage = base ? Math.round(base.coverage * 1000) / 10 : 0;
+    if (coverage >= 0.2) {
       setStatus('已生成' + maskTypeLabel(mask.type) + '蒙版，覆盖约 ' + coverage +
         '%。可用画笔补充或擦除，并调节羽化与局部参数。', 'ok');
     } else {
@@ -4671,8 +4906,8 @@
     dispatch('raw:mask-ai', {
       id: mask.id,
       type: mask.type,
-      coverage: smartSubject && aiSubjectBase ? aiSubjectBase.coverage : coverage / 100,
-      engine: smartSubject && aiSubjectBase ? 'mediapipe' : 'local'
+      coverage: base ? base.coverage : 0,
+      engine: 'local'
     });
   }
 
@@ -4696,14 +4931,18 @@
     }
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    var map = geometryMap();
+    var radiusFactor = Math.max(1e-6, map.radiusFactor);
     for (var i = 0; i < mask.strokes.length; i++) {
       var stroke = mask.strokes[i];
-      var pts = stroke.points || [];
+      var pts = (stroke.points || []).map(function (point) {
+        return mapPointToOutput(map, point);
+      });
       if (!pts.length) continue;
       var color = stroke.mode === 'subtract' ? '#000000' : '#FFFFFF';
       ctx.fillStyle = color;
       ctx.strokeStyle = color;
-      var radius = Math.max(0.0015, stroke.radius || 0.04);
+      var radius = Math.max(0.0015, (stroke.radius || 0.04) * radiusFactor);
       var lineWidth = Math.max(1, radius * 2 * w);
       ctx.lineWidth = lineWidth;
       if (pts.length === 1) {
@@ -4731,9 +4970,9 @@
 
   function refreshMaskTexture(mask, skipSmart) {
     if (!renderer || !state.preview || !mask) return;
-    if (skipSmart && isSmartMaskType(mask.type) &&
-        !(mask.type === 'subject' && aiSubjectBase && aiSubjectBase.geometryKey === geometrySignature())) {
-      return;
+    if (skipSmart && isSmartMaskType(mask.type)) {
+      var skipKind = aiKindForType(mask.type);
+      if (!(skipKind && ensureAIKindBase(skipKind))) return;
     }
     if (isTexturedMaskType(mask.type)) {
       var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.renderW || state.preview.w,
@@ -4786,27 +5025,31 @@
     if (!state.loaded || state.cropEditing || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
     e.preventDefault();
     var uv = canvasUV(e);
+    var map = geometryMap();
     try { els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     if (isTexturedMaskType(mask.type)) {
       mask.current = {
-        points: [uv],
-        radius: Math.max(0.005, mask.brushPct / 200),
+        points: [mapPointToCanonical(map, uv)],
+        radius: Math.max(0.0001, (mask.brushPct / 200) / Math.max(1e-6, map.radiusFactor)),
         mode: mask.brushMode || 'add'
       };
+      mask._lastOut = { x: uv.x, y: uv.y };
       mask.strokes.push(mask.current);
       mask.dragMode = 'brush';
       markHistory(mask.type === 'brush' ? '画笔涂抹' : '修整' + maskTypeLabel(mask.type) + '蒙版');
       scheduleMaskBuild(mask);
     } else if (mask.type === 'linear') {
       mask.dragMode = 'linear';
-      mask._start = uv;
+      mask._start = mapPointToCanonical(map, uv);
+      mask._startOut = { x: uv.x, y: uv.y };
       mask._moved = false;
       markHistory('调整线性蒙版');
     } else if (mask.type === 'radial') {
       mask.dragMode = 'radial';
-      mask._start = uv;
+      mask._start = mapPointToCanonical(map, uv);
+      mask._startOut = { x: uv.x, y: uv.y };
       mask._moved = false;
-      mask.p1 = uv;
+      mask.p1 = mask._start;
       markHistory('调整径向蒙版');
     }
   }
@@ -4815,30 +5058,32 @@
     var mask = activeMask();
     if (!mask || !mask.dragMode) return;
     var uv = canvasUV(e);
+    var map = geometryMap();
     if (mask.dragMode === 'brush' && mask.current) {
-      var pts = mask.current.points;
-      var last = pts[pts.length - 1];
-      var dx = (uv.x - last.x) * state.preview.w;
-      var dy = (uv.y - last.y) * state.preview.h;
+      var lastOut = mask._lastOut || uv;
+      var dx = (uv.x - lastOut.x) * (state.renderW || state.preview.w);
+      var dy = (uv.y - lastOut.y) * (state.renderH || state.preview.h);
       if (Math.hypot(dx, dy) >= 1.5) {
-        pts.push(uv);
+        mask.current.points.push(mapPointToCanonical(map, uv));
+        mask._lastOut = { x: uv.x, y: uv.y };
         scheduleMaskBuild(mask);
       }
     } else if (mask.dragMode === 'linear') {
-      var s = mask._start;
-      if (Math.hypot(uv.x - s.x, uv.y - s.y) > 0.004) {
-        mask.p1 = s;
-        mask.p2 = uv;
+      var startOut = mask._startOut || { x: 0, y: 0 };
+      if (Math.hypot(uv.x - startOut.x, uv.y - startOut.y) > 0.004) {
+        mask.p1 = mask._start;
+        mask.p2 = mapPointToCanonical(map, uv);
         mask._moved = true;
         scheduleRender();
       }
     } else if (mask.dragMode === 'radial') {
-      var c = mask._start;
+      var c = mask._startOut || { x: 0.5, y: 0.5 };
       var rx = Math.abs(uv.x - c.x);
       var ry = Math.abs(uv.y - c.y);
       if (Math.hypot(rx, ry) > 0.004) {
-        mask.p1 = c;
+        mask.p1 = mask._start;
         mask.p2 = { x: Math.max(0.01, rx), y: Math.max(0.01, ry) };
+        mask.radialMat = canonicalRadialMatrix(map, mask.p2.x, mask.p2.y);
         mask._moved = true;
         scheduleRender();
       }
@@ -4850,14 +5095,18 @@
     if (!mask || !mask.dragMode) return;
     if (mask.dragMode === 'brush') {
       mask.current = null;
+      mask._lastOut = null;
       scheduleMaskBuild(mask);
       historyTouch(mask.type === 'brush' ? '画笔涂抹' : '修整' + maskTypeLabel(mask.type) + '蒙版');
     } else if (mask.dragMode === 'radial' && !mask._moved) {
+      var map = geometryMap();
       mask.p2 = { x: 0.28, y: 0.28 };
+      mask.radialMat = canonicalRadialMatrix(map, 0.28, 0.28);
       scheduleRender();
     }
     mask.dragMode = '';
     mask._start = null;
+    mask._startOut = null;
     updateMaskUI();
     if (mask.type === 'linear' || mask.type === 'radial') historyTouch('调整蒙版范围');
     try { els.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
@@ -5082,10 +5331,10 @@
       return null;
     }
     if (state.busy) return null;
-    if (aiSubjectPendingForExport()) {
-      scheduleAISubjectSegmentation(0, false);
-      setStatus('AI 主体蒙版仍在识别，完成后即可导出。', 'warn');
-      showExportResult('AI 主体蒙版仍在识别，请稍候再导出，以保证导出与预览一致。', true);
+    if (aiPendingForExport()) {
+      scheduleAISceneSegmentation(0, false);
+      setStatus('AI 蒙版仍在识别，完成后即可导出。', 'warn');
+      showExportResult('AI 蒙版仍在识别，请稍候再导出，以保证导出与预览一致。', true);
       return null;
     }
 
@@ -5163,8 +5412,8 @@
       setBusy(false);
       els.exportBtn.disabled = !state.loaded;
       updateFootRight();
-      if (hasSubjectMask() && (!aiSubjectBase || aiSubjectBase.geometryKey !== geometrySignature())) {
-        scheduleAISubjectSegmentation(240, false);
+      if (aiPendingForExport()) {
+        scheduleAISceneSegmentation(240, false);
       }
     }
   }
@@ -5323,7 +5572,7 @@
         } else if (act === 'mask-ai-refresh') {
           identifySmartMask(activeMask(), false, true);
         } else if (act === 'ai-subject-retry') {
-          retryAISubject();
+          retryAISceneSegmentation();
         } else if (act === 'rotate-left') {
           rotateGeometry(-1);
         } else if (act === 'rotate-right') {
@@ -5621,6 +5870,7 @@
       feather: mask.feather,
       p1: { x: mask.p1.x, y: mask.p1.y },
       p2: { x: mask.p2.x, y: mask.p2.y },
+      radialMat: mask.radialMat ? mask.radialMat.slice() : null,
       strokeCount: mask.strokes.length,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
@@ -5676,15 +5926,22 @@
         entries: historyEntries.map(function (entry) { return entry.label; })
       },
       ai: (function () {
-        var aiBase = ensureAISubjectBaseForGeometry();
+        var kind = activeAIKind();
+        var aiBase = kind ? ensureAIKindBase(kind) : null;
+        var raw = aiRawValid() ? aiRaw : null;
         return {
-          modelStatus: aiSegmenter.status,
-          subjectStatus: aiSubjectState.status,
-          engine: aiBase ? 'mediapipe' : (hasSubjectMask() ? 'local' : 'none'),
+          modelStatus: aiSession.status,
+          sceneStatus: aiSceneState.status,
+          subjectStatus: aiSceneState.status,
+          activeKind: kind || null,
+          engine: raw ? 'pp_mobileseg' : (hasAIMask() ? 'local' : 'none'),
           coverage: aiBase ? aiBase.coverage :
-            (aiSubjectState.failedPreview === state.previewCanvas ? aiSubjectState.coverage : 0),
+            (kind && raw ? raw.stats[kind] : (aiSceneState.failedPreview === state.previewCanvas ? aiSceneState.coverage || 0 : 0)),
+          skyCoverage: raw ? raw.stats.sky : 0,
+          subjectCoverage: raw ? raw.stats.subject : 0,
           signature: geometrySignature(),
-          error: aiSubjectState.error || (aiSegmenter.error ? String(aiSegmenter.error.message || aiSegmenter.error) : '')
+          inferMs: aiSceneState.lastInferMs || 0,
+          error: aiSceneState.error || (aiSession.error ? String(aiSession.error.message || aiSession.error) : '')
         };
       })(),
       lastExport: state.lastExport ? {
@@ -5802,7 +6059,8 @@
     setMaskEnabled: setMaskEnabled,
     getMasks: function () { return state.masks.map(serializeMask); },
     getState: snapshot,
-    retryAISubject: retryAISubject,
+    retryAISubject: retryAISceneSegmentation,
+    retryAISegmentation: retryAISceneSegmentation,
     renderNow: renderNow,
     getCanvas: function () { return els.canvas; },
     getRenderSource: function () { return state.renderSource; },

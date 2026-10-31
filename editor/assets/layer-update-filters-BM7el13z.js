@@ -1,1 +1,0 @@
-import{t as e}from"./history-state-factory-4_zpZqCe.js";import{xt as t}from"./index-CU_Bdv5Z.js";var n=(n,r,i,a,o=!0,s=``)=>{let c=()=>{n.commit(`updateLayer`,{index:r,opts:{filters:t(a)}})},l=`filters_${r}_${s}`;e(l,{undo(){n.commit(`updateLayer`,{index:r,opts:{filters:i}})},redo:c}),o&&c()};export{n as t};

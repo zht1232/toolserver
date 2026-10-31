@@ -8,14 +8,14 @@ The "专业修图" workspace is a self-hosted build of [BitMappery](https://gith
 
 The "Camera Raw" page uses [FlashRaw](https://github.com/ybouane/flashraw) 0.1.0, licensed under MIT OR Apache-2.0, as a WebAssembly RAW decoder. The browser-served WASM assets are unmodified; both license texts are included in `assets/vendor/flashraw/`. Raw files are decoded and developed locally in the browser and are never uploaded.
 
-## MediaPipe Tasks Vision and Selfie Segmenter (AI person mask)
+## PP-MobileSeg Base and ONNX Runtime Web (AI subject / sky masks)
 
-The Camera Raw page's "AI 主体" mask uses the following unmodified Google MediaPipe assets, vendored under `assets/vendor/mediapipe-selfie/` and loaded on demand:
+The Camera Raw page's "AI 主体" and "AI 天空" masks use the following unmodified assets, vendored under `assets/vendor/ai-segmentation/` and `assets/vendor/onnxruntime-web/` and loaded on demand:
 
-- [`@mediapipe/tasks-vision` 0.10.21](https://github.com/google-ai-edge/mediapipe) — Apache License 2.0. The browser module is served as `vision_bundle.js` (only the file extension was changed from `.mjs`); the SIMD WebAssembly runtime is in `wasm/`.
-- [MediaPipe Selfie Segmenter float16 v1 model](https://github.com/google-ai-edge/mediapipe/tree/master/mediapipe/modules/selfie_segmentation) — Apache License 2.0, downloaded from the official MediaPipe model storage as `selfie_segmenter.tflite`.
+- [PP-MobileSeg Base (ADE20K)](https://github.com/PaddlePaddle/PaddleSeg/tree/release/2.8/configs/pp_mobileseg) from PaddleSeg — Apache License 2.0. The official Paddle inference model (`MV3_4stage_AAMSx8_valid_0321`) was exported to ONNX with paddle2onnx 2.1.0; input 1×3×512×512, output int32 512×512 class map. ADE20K classes 2 (sky), 12 (person) and 126 (animal) are used.
+- [ONNX Runtime Web 1.22.0](https://github.com/microsoft/onnxruntime) — MIT License. The browser module `ort.wasm.min.mjs`, loader `ort-wasm-simd-threaded.mjs` and SIMD WASM runtime are served from this site.
 
-The upstream Apache License 2.0 text is included at `assets/vendor/mediapipe-selfie/LICENSE`; file origins are recorded in `assets/vendor/mediapipe-selfie/SOURCE.md`. The model and runtime are served by this site, not a third-party CDN. Inference runs in the visitor's browser; images and generated masks are not uploaded. The site does not modify the upstream binaries or weights.
+The Apache License 2.0 text and model provenance are included at `assets/vendor/ai-segmentation/LICENSE`, `NOTICE` and `SOURCE.md`; the MIT text and runtime provenance are at `assets/vendor/onnxruntime-web/LICENSE` and `SOURCE.md`. Nothing is fetched from a third-party CDN. Inference runs in the visitor's browser (single-threaded WASM when cross-origin isolation is unavailable); images and generated masks are not uploaded. The site does not fine-tune or otherwise modify the upstream model or runtime.
 
 ## go-music-dl (internal metadata/URL resolver)
 
