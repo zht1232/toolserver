@@ -682,14 +682,14 @@
             '<summary>' + icon('curve') + '<span>色调曲线</span><span class="raw-sum-meta" id="raw-curve-sum">线性</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
-              '<div class="raw-curve-wrap"><canvas id="raw-curve" aria-label="色调曲线编辑器"></canvas></div>' +
+              '<div class="raw-curve-wrap"><canvas id="raw-curve" aria-label="色调曲线编辑器"></canvas><span class="raw-curve-axis-l">暗部</span><span class="raw-curve-axis-r">高光</span></div>' +
               '<div class="raw-curve-foot">' +
                 '<div class="raw-curve-actions">' +
                   '<button type="button" class="raw-btn" data-curve="linear">线性</button>' +
                   '<button type="button" class="raw-btn" data-curve="soft">柔和</button>' +
                   '<button type="button" class="raw-btn" data-curve="contrast">强对比</button>' +
                 '</div>' +
-                '<span class="raw-curve-hint">点击加点 · 拖动调整 · 双击删点</span>' +
+                '<span class="raw-curve-hint">RGB 复合曲线 · 直方图 · 点击加点 / 拖动 / 双击删点</span>' +
               '</div>' +
             '</div>' +
           '</details>' +
@@ -775,6 +775,7 @@
       fullSize: { w: 0, h: 0 },
       preview: null,
       previewCanvas: null,
+      histogram: null,
       decodeMs: 0,
       previewDecodeMs: 0,
       backendLabel: 'WebGL2',
@@ -1283,6 +1284,7 @@
     }
     state.preview = result.preview;
     state.previewCanvas = result.preview.canvas;
+    state.histogram = computeHistogram(result.preview.canvas);
     state.previewDecodeMs = result.previewDecodeMs || result.decodeMs;
     state.decodeMs = result.decodeMs;
     state.fullSize = result.fullSize;
@@ -1295,8 +1297,67 @@
     els.canvas.height = result.preview.h;
     renderer.setSource(result.preview.canvas);
     ensureCurveLut();
+    if (curveCtx) drawCurve();
     if (state.mask.type === 'brush') scheduleMaskBuild();
     scheduleRender();
+  }
+
+  function computeHistogram(canvas) {
+    try {
+      var tw = 256;
+      var th = Math.max(32, Math.round(canvas.height / Math.max(1, canvas.width) * 256));
+      var tmp = document.createElement('canvas');
+      tmp.width = tw;
+      tmp.height = th;
+      var ctx = tmp.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(canvas, 0, 0, tw, th);
+      var data = ctx.getImageData(0, 0, tw, th).data;
+      var out = {
+        r: new Uint32Array(256),
+        g: new Uint32Array(256),
+        b: new Uint32Array(256),
+        l: new Uint32Array(256)
+      };
+      for (var i = 0; i < data.length; i += 4) {
+        var r = data[i], g = data[i + 1], b = data[i + 2];
+        out.r[r]++;
+        out.g[g]++;
+        out.b[b]++;
+        out.l[Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b)]++;
+      }
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function drawHistogram(b) {
+    var hist = state.histogram;
+    if (!hist) return;
+    var channels = [
+      { bins: hist.r, color: 'rgba(190, 62, 52, 0.16)' },
+      { bins: hist.g, color: 'rgba(40, 145, 82, 0.14)' },
+      { bins: hist.b, color: 'rgba(48, 92, 190, 0.15)' }
+    ];
+    curveCtx.save();
+    curveCtx.beginPath();
+    curveCtx.rect(b.x, b.y, b.w, b.h);
+    curveCtx.clip();
+    for (var c = 0; c < channels.length; c++) {
+      var bins = channels[c].bins;
+      var max = 1;
+      for (var n = 0; n < 256; n++) if (bins[n] > max) max = bins[n];
+      var bar = b.w / 256;
+      curveCtx.fillStyle = channels[c].color;
+      curveCtx.beginPath();
+      for (var i = 0; i < 256; i++) {
+        var height = Math.pow(bins[i] / max, 0.45) * b.h;
+        if (height < 0.5) continue;
+        curveCtx.rect(b.x + i * bar, b.y + b.h - height, Math.max(1, bar + 0.5), height);
+      }
+      curveCtx.fill();
+    }
+    curveCtx.restore();
   }
 
   /* ------------------------------------------------------------------ *
@@ -1540,6 +1601,8 @@
     // 背景
     curveCtx.fillStyle = '#FBFDF9';
     curveCtx.fillRect(0, 0, w, h);
+    // 图像直方图（RGB 三通道叠加），让曲线和实际亮度分布对应
+    drawHistogram(b);
     // 网格
     curveCtx.strokeStyle = '#E1E7E0';
     curveCtx.lineWidth = Math.max(1, dpr * 0.7);

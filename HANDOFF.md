@@ -91,8 +91,8 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 
 ## 专业修图与 Camera Raw（浏览器本地）
 
-- **专业修图**（`#retouch`）：`assets/js/retouch.js` 只负责按需加载 `editor/` 里的 BitMappery 构建（MIT），避免首屏拉取 4.8 MB 编辑器；iframe 由站点浅色页面框住，可全屏打开。BitMappery 提供图层、图层蒙版、画笔、选区、文字、非破坏滤镜、历史、PSD 导入和图片导出；已移除云端存储入口、禁用 Google Fonts 外部请求并做中文化。编辑器本身不向服务器上传文件。
-- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡/曲线/蒙版等实时显影，支持线性、径向、画笔蒙版与局部调整，导出 JPEG/PNG。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
+- **专业修图**（`#retouch`）：`assets/js/retouch.js` 只负责按需加载 `editor/` 里的 BitMappery 构建（MIT），避免首屏拉取 4.8 MB 编辑器；iframe 由站点浅色页面框住，可全屏打开。BitMappery 提供图层、图层蒙版、画笔、选区、文字、非破坏滤镜、历史、PSD 导入和图片导出；已移除云端存储入口、禁用 Google Fonts 外部请求并做中文化。`editor/overrides.css` 修复了禁用工具按钮 hover 时图标反白不可见的问题。编辑器本身不向服务器上传文件。
+- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡/带 RGB 直方图的可编辑曲线/蒙版等实时显影，支持线性、径向、画笔蒙版与局部调整，导出 JPEG/PNG。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
 - **许可证**：BitMappery 的 LICENSE 与修改说明在 `editor/`；FlashRaw 的 MIT/APACHE 许可证在 `assets/vendor/flashraw/`；整体来源见 `THIRD_PARTY_NOTICES.md`。
 - **集成**：两个页面都通过 `main.js` 的 `route-editor` 类隐藏右栏并使用更宽的工作区；`retouch.js`/`raw.js` 不改动服务器 API，也没有上传接口。
 

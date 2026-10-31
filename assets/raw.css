@@ -634,6 +634,13 @@
 #raw-root .raw-curve-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 #raw-root .raw-curve-actions .raw-btn { min-height: 24px; padding: 2px 8px; font-size: 11px; }
 #raw-root .raw-curve-hint { font-size: 10.5px; color: var(--raw-ink-3); }
+#raw-root .raw-curve-axis-l,
+#raw-root .raw-curve-axis-r {
+  position: absolute; bottom: 7px; pointer-events: none;
+  color: var(--raw-ink-3); font-size: 9.5px; letter-spacing: 0;
+}
+#raw-root .raw-curve-axis-l { left: 15px; }
+#raw-root .raw-curve-axis-r { right: 15px; }
 
 /* ---------- 蒙版 ---------- */
 #raw-root .raw-seg {
