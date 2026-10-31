@@ -817,6 +817,8 @@
         '</div>' +
         '<div class="raw-head-actions">' +
           '<button type="button" class="raw-btn primary" data-act="open">' + icon('open') + '打开文件</button>' +
+          '<button type="button" class="raw-btn" data-act="undo" id="raw-undo" disabled title="撤销 (Ctrl+Z)">撤销</button>' +
+          '<button type="button" class="raw-btn" data-act="redo" id="raw-redo" disabled title="重做 (Ctrl+Shift+Z)">重做</button>' +
           '<button type="button" class="raw-btn" data-act="export">' + icon('download') + '导出</button>' +
         '</div>' +
       '</div>' +
@@ -923,17 +925,24 @@
             '<div class="raw-group-body">' +
               '<div class="raw-mask-list-head"><span>蒙版列表</span><span id="raw-mask-count">1 / 8</span></div>' +
               '<div class="raw-mask-list" id="raw-mask-list" aria-label="蒙版列表"></div>' +
-              '<div class="raw-mask-list-actions">' +
-                '<button type="button" class="raw-btn tiny" data-act="mask-add">＋ 添加蒙版</button>' +
-                '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制当前</button>' +
-                '<button type="button" class="raw-btn tiny" data-act="mask-remove">删除当前</button>' +
+              '<div class="raw-mask-create-row" id="raw-mask-create-row">' +
+                '<label for="raw-mask-new-type">新建</label>' +
+                '<select id="raw-mask-new-type" class="raw-select raw-mask-new-type">' +
+                  '<option value="linear">线性渐变</option>' +
+                  '<option value="radial">径向渐变</option>' +
+                  '<option value="brush">画笔</option>' +
+                '</select>' +
+                '<button type="button" class="raw-btn tiny primary" data-act="mask-add">＋ 添加蒙版</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-remove">删除</button>' +
               '</div>' +
-              '<div class="raw-seg" id="raw-mask-seg" role="group" aria-label="蒙版类型">' +
+              '<div class="raw-seg" id="raw-mask-seg" role="group" aria-label="当前蒙版类型">' +
                 '<button type="button" data-mask="none">无</button>' +
                 '<button type="button" data-mask="linear" class="is-active">线性渐变</button>' +
                 '<button type="button" data-mask="radial">径向渐变</button>' +
                 '<button type="button" data-mask="brush">画笔</button>' +
               '</div>' +
+              '<p class="raw-group-hint" style="margin:5px 0 9px;font-size:10.5px;color:var(--raw-ink-3)">切换当前蒙版类型会重置范围；想保留已有范围请用上方“新建”添加。</p>' +
               '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
               '<div class="raw-mask-actions">' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-invert">反转</label>' +
@@ -949,6 +958,13 @@
                 '<label for="raw-brush-size">画笔大小</label>' +
                 '<input id="raw-brush-size" type="range" min="1" max="24" step="1" value="8">' +
                 '<output for="raw-brush-size" id="raw-brush-size-v">8%</output>' +
+              '</div>' +
+              '<div class="raw-brush-row" id="raw-brush-extra" hidden>' +
+                '<div class="raw-seg raw-brush-mode" id="raw-brush-mode" role="group" aria-label="画笔模式">' +
+                  '<button type="button" data-brush-mode="add" class="is-active">添加</button>' +
+                  '<button type="button" data-brush-mode="subtract">擦除</button>' +
+                '</div>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-undo-stroke">撤销笔画</button>' +
               '</div>' +
               '<div class="raw-subhead"><span>当前蒙版局部调整</span><span id="raw-local-scope">线性渐变</span></div>' +
               '<div class="raw-sliders raw-local" id="raw-local-sliders">' + localSliders + '</div>' +
@@ -1029,6 +1045,7 @@
     if (opts.invert != null) mask.invert = !!opts.invert;
     if (opts.feather != null) mask.feather = clamp(Number(opts.feather), 0, 1);
     if (opts.brushPct != null) mask.brushPct = clamp(Number(opts.brushPct), 1, 24);
+    if (opts.brushMode === 'subtract' || opts.brushMode === 'add') mask.brushMode = opts.brushMode;
     if (opts.p1) mask.p1 = { x: clamp(Number(opts.p1.x), 0, 1), y: clamp(Number(opts.p1.y), 0, 1) };
     if (opts.p2) mask.p2 = { x: clamp(Number(opts.p2.x), 0, 1), y: clamp(Number(opts.p2.y), 0, 1) };
     if (opts.strokes) {
@@ -1064,6 +1081,7 @@
       p2: geo.p2,
       strokes: [],
       brushPct: 8,
+      brushMode: 'add',
       local: defaultLocal(),
       current: null,
       dragMode: '',
@@ -1131,6 +1149,12 @@
   var resizeObserver = null;
   var curveResizeObserver = null;
   var glLost = false;
+  var historyUndo = [];
+  var historyRedo = [];
+  var historyLast = '';
+  var historyTimer = 0;
+  var historySuspend = false;
+  var histogramTimer = 0;
 
   function resolveVendorBase() {
     var scripts = Array.prototype.slice.call(document.scripts || []);
@@ -1209,6 +1233,7 @@
       maskSeg: $('#raw-mask-seg', root),
       maskList: $('#raw-mask-list', root),
       maskCount: $('#raw-mask-count', root),
+      maskNewType: $('#raw-mask-new-type', root),
       maskNote: $('#raw-mask-note', root),
       maskInvert: $('#raw-mask-invert', root),
       maskShow: $('#raw-mask-show', root),
@@ -1217,6 +1242,8 @@
       brushRow: $('#raw-brush-size-row', root),
       brushSize: $('#raw-brush-size', root),
       brushSizeV: $('#raw-brush-size-v', root),
+      brushExtra: $('#raw-brush-extra', root),
+      brushMode: $('#raw-brush-mode', root),
       localSliders: $('#raw-local-sliders', root),
       localScope: $('#raw-local-scope', root),
       exportFormat: $('#raw-export-format', root),
@@ -1403,6 +1430,7 @@
       state.zoomMode = 'fit';
       requestAnimationFrame(applyZoom);
       updateFootRight();
+      resetHistory();
       dispatch('raw:file', { name: name, meta: state.meta, preview: { w: result.preview.w, h: result.preview.h } });
     } catch (err) {
       if (newRaw) { try { newRaw.close(); } catch (e) { /* ignore */ } }
@@ -1798,6 +1826,7 @@
   }
 
   function scheduleRender() {
+    historyTouch();
     if (rafPending) return;
     rafPending = true;
     requestAnimationFrame(function () {
@@ -1806,14 +1835,212 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * 撤销 / 重做（调整、曲线、蒙版；不重复解码原图）
+   * ------------------------------------------------------------------ */
+
+  function cloneHistoryMask(mask) {
+    return {
+      id: mask.id,
+      name: mask.name,
+      type: mask.type,
+      enabled: !!mask.enabled,
+      show: !!mask.show,
+      invert: !!mask.invert,
+      feather: mask.feather,
+      p1: { x: mask.p1.x, y: mask.p1.y },
+      p2: { x: mask.p2.x, y: mask.p2.y },
+      brushPct: mask.brushPct,
+      brushMode: mask.brushMode || 'add',
+      strokes: (mask.strokes || []).map(function (stroke) {
+        return {
+          radius: stroke.radius,
+          mode: stroke.mode || 'add',
+          points: (stroke.points || []).map(function (p) { return { x: p.x, y: p.y }; })
+        };
+      }),
+      local: Object.assign({}, mask.local)
+    };
+  }
+
+  function historySnapshot() {
+    var curves = {};
+    CURVE_CHANNELS.forEach(function (ch) {
+      curves[ch.key] = state.curves[ch.key].map(function (p) { return { x: p.x, y: p.y }; });
+    });
+    return JSON.stringify({
+      adjust: Object.assign({}, state.adjust),
+      curves: curves,
+      curveChannel: state.curveChannel,
+      masks: state.masks.map(cloneHistoryMask),
+      activeMaskId: state.activeMaskId
+    });
+  }
+
+  function updateHistoryUI() {
+    if (!root) return;
+    var undoBtn = root.querySelector('#raw-undo');
+    var redoBtn = root.querySelector('#raw-redo');
+    if (undoBtn) undoBtn.disabled = !state.loaded || (!historyUndo.length && !historyTimer);
+    if (redoBtn) redoBtn.disabled = !state.loaded || !historyRedo.length;
+  }
+
+  function resetHistory() {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = 0;
+    historyUndo = [];
+    historyRedo = [];
+    historyLast = state.loaded ? historySnapshot() : '';
+    updateHistoryUI();
+  }
+
+  function historyCommit() {
+    historyTimer = 0;
+    if (historySuspend || !state.loaded) return;
+    var snap = historySnapshot();
+    if (!historyLast) {
+      historyLast = snap;
+      updateHistoryUI();
+      return;
+    }
+    if (snap === historyLast) return;
+    historyUndo.push(historyLast);
+    if (historyUndo.length > 24) historyUndo.shift();
+    historyLast = snap;
+    historyRedo = [];
+    updateHistoryUI();
+  }
+
+  function historyTouch() {
+    if (historySuspend || !state.loaded) return;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(historyCommit, 450);
+    updateHistoryUI();
+  }
+
+  function historyFlush() {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = 0;
+    historyCommit();
+  }
+
+  function restoreHistory(serialized) {
+    var snap;
+    try { snap = JSON.parse(serialized); } catch (e) { return; }
+    if (!snap) return;
+    historySuspend = true;
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = 0;
+    state.adjust = Object.assign(defaultAdjust(), snap.adjust || {});
+    state.curves = createCurves();
+    CURVE_CHANNELS.forEach(function (ch) {
+      if (snap.curves && Array.isArray(snap.curves[ch.key])) {
+        state.curves[ch.key] = snap.curves[ch.key].map(function (p) {
+          return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) };
+        });
+      }
+    });
+    state.curveChannel = state.curves[snap.curveChannel] ? snap.curveChannel : 'rgb';
+    state.curveDragging = -1;
+    state.before = false;
+    state.curveLut = null;
+    for (var i = 0; i < state.masks.length; i++) {
+      if (renderer) renderer.clearMask(state.masks[i].id);
+    }
+    previewMaskCanvases = Object.create(null);
+    state.masks = (snap.masks || []).map(function (m) {
+      var id = String(m.id || ('mask-' + (++maskSeq)));
+      var numeric = parseInt(id.replace(/^mask-/, ''), 10);
+      if (isFinite(numeric)) maskSeq = Math.max(maskSeq, numeric);
+      return {
+        id: id,
+        name: m.name || id,
+        type: m.type === 'radial' || m.type === 'brush' || m.type === 'none' ? m.type : 'linear',
+        enabled: m.enabled !== false,
+        show: !!m.show,
+        invert: !!m.invert,
+        feather: clamp(Number(m.feather), 0, 1),
+        p1: { x: clamp(Number(m.p1 && m.p1.x), 0, 1), y: clamp(Number(m.p1 && m.p1.y), 0, 1) },
+        p2: { x: clamp(Number(m.p2 && m.p2.x), 0, 1), y: clamp(Number(m.p2 && m.p2.y), 0, 1) },
+        strokes: (m.strokes || []).map(function (stroke) {
+          return {
+            radius: Number(stroke.radius) || 0.04,
+            mode: stroke.mode === 'subtract' ? 'subtract' : 'add',
+            points: (stroke.points || []).map(function (p) {
+              return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) };
+            })
+          };
+        }),
+        brushPct: clamp(Number(m.brushPct) || 8, 1, 24),
+        brushMode: m.brushMode === 'subtract' ? 'subtract' : 'add',
+        local: Object.assign(defaultLocal(), m.local || {}),
+        current: null,
+        dragMode: '',
+        _start: null,
+        _moved: false
+      };
+    });
+    var active = state.masks.filter(function (m) { return m.id === snap.activeMaskId; })[0];
+    state.activeMaskId = active ? active.id : (state.masks[0] ? state.masks[0].id : null);
+    ADJUSTMENTS.forEach(function (d) {
+      var input = root.querySelector('[data-adj="' + d.key + '"]');
+      if (input) input.value = String(state.adjust[d.key]);
+    });
+    updateAdjustOutputs();
+    updateBeforeLabel();
+    updateCurveLut(false);
+    updateMaskUI();
+    refreshAllMaskTextures();
+    scheduleRender();
+    historyLast = serialized;
+    historySuspend = false;
+    updateHistoryUI();
+  }
+
+  function undoHistory() {
+    if (!state.loaded) return;
+    historyFlush();
+    if (!historyUndo.length) return;
+    var current = historySnapshot();
+    var previous = historyUndo.pop();
+    historyRedo.push(current);
+    restoreHistory(previous);
+    setStatus('已撤销上一步调整。', 'ok');
+  }
+
+  function redoHistory() {
+    if (!state.loaded) return;
+    historyFlush();
+    if (!historyRedo.length) return;
+    var current = historySnapshot();
+    var next = historyRedo.pop();
+    historyUndo.push(current);
+    restoreHistory(next);
+    setStatus('已重做上一步调整。', 'ok');
+  }
+
   function renderNow() {
     if (!renderer || !state.preview) return;
     try {
       renderer.render(renderParams(false));
+      scheduleLiveHistogram();
     } catch (e) {
       console.error('[raw] render failed', e);
       setStatus(describeError(e), 'err');
     }
+  }
+
+  // 直方图跟随当前显影结果，而不是一直停留在原始预览上。
+  function scheduleLiveHistogram() {
+    if (histogramTimer) return;
+    histogramTimer = setTimeout(function () {
+      histogramTimer = 0;
+      if (!state.loaded || !els.canvas) return;
+      var hist = computeHistogram(els.canvas);
+      if (!hist) return;
+      state.histogram = hist;
+      if (curveCtx) drawCurve();
+    }, 90);
   }
 
   function ensureCurveLut() {
@@ -1833,6 +2060,8 @@
         out.textContent = fmtAdjust(d, state.adjust[d.key]);
         out.classList.toggle('is-set', Math.abs(state.adjust[d.key] - d.def) > 1e-9);
       }
+      var input = root.querySelector('[data-adj="' + d.key + '"]');
+      if (input && Number(input.value) !== state.adjust[d.key]) input.value = String(state.adjust[d.key]);
     });
     var am = activeMask();
     var l = am ? am.local : defaultLocal();
@@ -2373,9 +2602,19 @@
       els.maskFeatherV.textContent = '0';
     }
     els.brushRow.hidden = !mask || mask.type !== 'brush';
+    if (els.brushExtra) els.brushExtra.hidden = !mask || mask.type !== 'brush';
+    if (els.brushMode) {
+      els.brushMode.querySelectorAll('button').forEach(function (b) {
+        var on = !!mask && b.getAttribute('data-brush-mode') === (mask.brushMode || 'add');
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
     if (mask) {
       els.brushSize.value = String(mask.brushPct);
       els.brushSizeV.textContent = mask.brushPct + '%';
+      var undoStroke = root.querySelector('[data-act="mask-undo-stroke"]');
+      if (undoStroke) undoStroke.disabled = mask.type !== 'brush' || !mask.strokes.length;
     }
     els.canvas.classList.toggle('is-masking', hasMask && mask.enabled);
     els.maskNote.classList.toggle('is-empty', !hasMask);
@@ -2431,6 +2670,25 @@
     dispatch('raw:mask', { type: type, id: mask.id });
   }
 
+  function setBrushMode(mode) {
+    var mask = activeMask();
+    if (!mask) return;
+    mask.brushMode = mode === 'subtract' ? 'subtract' : 'add';
+    updateMaskUI();
+    scheduleRender();
+  }
+
+  function undoMaskStroke() {
+    var mask = activeMask();
+    if (!mask || mask.type !== 'brush' || !mask.strokes.length) return;
+    mask.strokes.pop();
+    mask.current = null;
+    updateMaskUI();
+    scheduleMaskBuild(mask);
+    scheduleRender();
+    setStatus('已撤销一笔画笔。', 'ok');
+  }
+
   function clearMaskRange() {
     var mask = activeMask();
     if (!mask) return;
@@ -2484,6 +2742,7 @@
     copy.p1 = { x: src.p1.x, y: src.p1.y };
     copy.p2 = { x: src.p2.x, y: src.p2.y };
     copy.brushPct = src.brushPct;
+    copy.brushMode = src.brushMode || 'add';
     copy.local = Object.assign({}, src.local);
     copy.strokes = src.strokes.map(function (stroke) {
       return {
@@ -2563,14 +2822,15 @@
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
     if (mask.type !== 'brush') return canvas;
-    ctx.fillStyle = '#FFFFFF';
-    ctx.strokeStyle = '#FFFFFF';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (var i = 0; i < mask.strokes.length; i++) {
       var stroke = mask.strokes[i];
       var pts = stroke.points || [];
       if (!pts.length) continue;
+      var color = stroke.mode === 'subtract' ? '#000000' : '#FFFFFF';
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
       var radius = Math.max(0.0015, stroke.radius || 0.04);
       var lineWidth = Math.max(1, radius * 2 * w);
       ctx.lineWidth = lineWidth;
@@ -2649,7 +2909,8 @@
     if (mask.type === 'brush') {
       mask.current = {
         points: [uv],
-        radius: Math.max(0.005, mask.brushPct / 200)
+        radius: Math.max(0.005, mask.brushPct / 200),
+        mode: mask.brushMode || 'add'
       };
       mask.strokes.push(mask.current);
       mask.dragMode = 'brush';
@@ -3110,6 +3371,8 @@
       if (actBtn) {
         var act = actBtn.getAttribute('data-act');
         if (act === 'open') openPicker();
+        else if (act === 'undo') undoHistory();
+        else if (act === 'redo') redoHistory();
         else if (act === 'export') {
           var details = actBtn.closest('details');
           if (details) details.open = true;
@@ -3128,13 +3391,20 @@
           resetAll();
         } else if (act === 'mask-clear') {
           clearMaskRange();
+        } else if (act === 'mask-undo-stroke') {
+          undoMaskStroke();
         } else if (act === 'mask-add') {
-          addMask('linear');
+          addMask(els.maskNewType ? els.maskNewType.value : 'linear');
         } else if (act === 'mask-duplicate') {
           duplicateActiveMask();
         } else if (act === 'mask-remove') {
           removeActiveMask();
         }
+        return;
+      }
+      var brushModeBtn = e.target.closest('[data-brush-mode]');
+      if (brushModeBtn) {
+        setBrushMode(brushModeBtn.getAttribute('data-brush-mode'));
         return;
       }
       var maskPick = e.target.closest('[data-mask-pick]');
@@ -3163,6 +3433,23 @@
       var toggle = e.target.closest('[data-mask-enabled]');
       if (toggle) {
         setMaskEnabled(toggle.getAttribute('data-mask-enabled'), toggle.checked);
+      }
+    });
+
+    // 撤销 / 重做快捷键（仅 Camera Raw 页面可见时生效）
+    document.addEventListener('keydown', function (e) {
+      if (!state.loaded || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      var page = document.getElementById('page-raw');
+      if (!page || page.classList.contains('hidden')) return;
+      var tag = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag === 'textarea' || tag === 'select' || (tag === 'input' && e.target.type !== 'range')) return;
+      var key = String(e.key || '').toLowerCase();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redoHistory(); else undoHistory();
+      } else if (key === 'y') {
+        e.preventDefault();
+        redoHistory();
       }
     });
 
@@ -3302,6 +3589,7 @@
       p2: { x: mask.p2.x, y: mask.p2.y },
       strokeCount: mask.strokes.length,
       brushPct: mask.brushPct,
+      brushMode: mask.brushMode || 'add',
       adjusted: maskHasAdjustments(mask),
       local: Object.assign({}, mask.local)
     };
@@ -3367,6 +3655,8 @@
     openPicker: openPicker,
     exportImage: exportImage,
     reset: resetAll,
+    undo: undoHistory,
+    redo: redoHistory,
     setAdjustment: function (key, value) { setAdjustment(key, value, false); },
     setLocalAdjustment: function (key, value) { setAdjustment(key, value, true); },
     setCurve: function (points, channel) { setCurvePoints(points, channel); },

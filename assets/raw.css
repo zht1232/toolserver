@@ -1068,3 +1068,35 @@
     min-height: 0;
   }
 }
+
+/* ---------- Mask creation and brush modes (Photoshop-style workflow) ---------- */
+#raw-root .raw-mask-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+#raw-root .raw-mask-create-row > label {
+  color: var(--raw-ink-3);
+  font-family: var(--raw-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+#raw-root .raw-mask-new-type {
+  width: 112px;
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+#raw-root .raw-mask-create-row .raw-btn { min-height: 28px; padding: 3px 8px; font-size: 11px; }
+#raw-root .raw-brush-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+#raw-root .raw-brush-mode { margin: 0; flex: 1 1 170px; }
+#raw-root .raw-brush-mode button { flex: 1; }
+#raw-root .raw-brush-row .raw-btn { min-height: 28px; padding: 3px 8px; font-size: 11px; }

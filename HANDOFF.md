@@ -92,7 +92,7 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 ## 专业修图与 Camera Raw（浏览器本地）
 
 - **专业修图**（`#retouch`）：`assets/js/retouch.js` 只负责按需加载 `editor/` 里的 BitMappery 构建（MIT），避免首屏拉取 4.4 MB 编辑器；iframe 由站点浅色页面框住，可全屏打开。BitMappery 提供图层、图层蒙版、画笔、选区、文字、非破坏滤镜、历史、PSD 导入和图片导出；已移除云端存储入口、禁用 Google Fonts 外部请求并做中文化。禁用工具按钮 hover 修复已内联在 `editor/index.html`，编辑器本身不向服务器上传文件。
-- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡/带 RGB 直方图的 RGB/红/绿/蓝分通道曲线，以及最多 8 个可独立叠加的线性/径向/画笔蒙版与局部调整，导出 JPEG/PNG。桌面端预览区使用 sticky 布局，长控制栏滚动时预览仍保持可见。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
+- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡/带动态 RGB 直方图的 RGB/红/绿/蓝分通道曲线，以及最多 8 个可独立叠加的线性/径向/画笔蒙版与局部调整；蒙版支持新建类型选择、添加/擦除画笔、撤销笔画、启用/停用、复制和删除；调整/曲线/蒙版支持撤销重做（Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y）。导出 JPEG/PNG。桌面端预览区使用 sticky 布局，长控制栏滚动时预览仍保持可见。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
 - **许可证**：BitMappery 的 LICENSE 与修改说明在 `editor/`；FlashRaw 的 MIT/APACHE 许可证在 `assets/vendor/flashraw/`；整体来源见 `THIRD_PARTY_NOTICES.md`。
 - **集成**：两个页面都通过 `main.js` 的 `route-editor` 类隐藏右栏并使用更宽的工作区；`retouch.js`/`raw.js` 不改动服务器 API，也没有上传接口。
 
@@ -115,7 +115,7 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - **原生控件**：`:root` 用 `color-scheme: light`；checkbox/radio/range 用 `accent-color: var(--accent)`；select 用 `appearance: none` + 深色内嵌 SVG 箭头，不要用浏览器默认样式。
 
 ## 已知缺口 / 未完成事项
-**修图页的限制**：专业修图是 BitMappery 的独立 iframe 构建（约 4.4 MB，首次启动加载），移动端空间较紧，建议桌面横屏；图层蒙版、PSD 导入和大部分上游功能保留，但上游本身没有 Camera Raw 级显影参数，RAW 显影请用 `#raw`。Camera Raw 页需要 WebGL2；大尺寸 RAW 首次解码需要数百毫秒到数秒，预览会按 1600px 限制，导出全分辨率可能较慢；不支持 WebGL2 的浏览器无法使用实时显影。当前曲线是 RGB 复合 + R/G/B 单通道点曲线，尚无参数曲线/分通道直方图独立缩放；多蒙版单次最多 8 个，尚无 AI 主体/天空蒙版、蒙版画笔撤销、裁剪/旋转、镜头校正和降噪；导出为 8-bit sRGB，不含 EXIF/ICC。
+**修图页的限制**：专业修图是 BitMappery 的独立 iframe 构建（约 4.4 MB，首次启动加载），移动端空间较紧，建议桌面横屏；图层蒙版、PSD 导入和大部分上游功能保留，但上游本身没有 Camera Raw 级显影参数，RAW 显影请用 `#raw`。Camera Raw 页需要 WebGL2；大尺寸 RAW 首次解码需要数百毫秒到数秒，预览会按 1600px 限制，导出全分辨率可能较慢；不支持 WebGL2 的浏览器无法使用实时显影。当前曲线是 RGB 复合 + R/G/B 单通道点曲线，尚无参数曲线/分通道直方图独立缩放；多蒙版单次最多 8 个，尚无 AI 主体/天空蒙版、裁剪/旋转、镜头校正和降噪；画笔蒙版支持撤销单笔但尚无完整历史画笔橡皮擦；导出为 8-bit sRGB，不含 EXIF/ICC。
 
 **HIF 浏览器本地路径的限制**：浏览器 canvas 编码不保留 EXIF/ICC，且常见为 4:2:0 子采样；需要这些信息时走服务器兜底。32 MP 图像的 WASM 解码 + 色调映射在桌面浏览器约 5–10 秒，移动端可能更慢或因内存不足失败；失败时按页面复选框回退服务器。EXIF 方向（Orientation ≠ 1）目前未在浏览器路径处理，依赖 libheif 对 HEIF `irot/imir` 的处理；Python 兜底路径已避免 irot 与 EXIF 重复旋转，上线后应用竖拍 HIF 补测。
 
