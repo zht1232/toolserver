@@ -505,7 +505,8 @@ class Handler(SimpleHTTPRequestHandler):
     # 边缘（Cloudflare）与浏览器都会遵循这里的 Cache-Control：
     #   /api/*    → 不缓存（密钥分片、歌词检索都要实时）
     #   /assets/* → 长缓存（文件名带 ?v= 版本号，更新时改版本即可）
-    #   HTML      → 短缓存 2 分钟：静态站点，重复访问直接命中边缘，更新也能很快生效
+    #   HTML      → no-cache：部署后浏览器必须回源校验，避免继续使用旧页面
+    #   /editor/assets/* → 长缓存（Vite 文件名带内容哈希）；/editor/ 目录页走 no-cache
     def cache_policy(self):
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/api/"):

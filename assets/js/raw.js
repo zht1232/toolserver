@@ -23,7 +23,14 @@
   var MAX_FILE_BYTES = 350 * 1024 * 1024;
   var MASK_PREVIEW_WIDTH = 768;
   var MASK_EXPORT_WIDTH = 2048;
+  var MAX_MASKS = 8;
   var IDENTITY_CURVE = [{ x: 0, y: 0 }, { x: 1, y: 1 }];
+  var CURVE_CHANNELS = [
+    { key: 'rgb', label: 'RGB', short: 'RGB', color: '#0C7A69', curve: '#0C7A69' },
+    { key: 'r', label: '红', short: '红', color: '#C0392B', curve: '#C0392B' },
+    { key: 'g', label: '绿', short: '绿', color: '#1F7A4D', curve: '#1F7A4D' },
+    { key: 'b', label: '蓝', short: '蓝', color: '#2F5EB8', curve: '#2F5EB8' }
+  ];
 
   var RAW_RE = /\.(cr2|cr3|crw|nef|nrw|arw|srf|sr2|arq|dng|raf|orf|ori|orw|rw2|rwl|pef|srw|mrw|iiq|mos|3fr|fff|kdc|dcr|dcs|erf|mef|x3f|ari|raw)$/i;
   var IMAGE_RE = /\.(jpe?g|png|webp|avif|gif|bmp)$/i;
@@ -52,6 +59,11 @@
   }
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+  function escapeHTML(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+    });
+  }
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function nextFrame() {
     return new Promise(function (resolve) {
@@ -191,11 +203,13 @@
     'in vec2 v_uv;',
     'out vec4 outColor;',
     'uniform sampler2D u_image;',
+    'uniform sampler2D u_stage;',
     'uniform sampler2D u_curve;',
     'uniform sampler2D u_mask;',
     'uniform vec2 u_texSize;',
     'uniform float u_aspect;',
     'uniform float u_before;',
+    'uniform float u_pass;',
     'uniform float u_exposure;',
     'uniform float u_contrast;',
     'uniform float u_highlights;',
@@ -266,13 +280,7 @@
     '  return mix(m, 1.0 - m, step(0.5, u_maskInvert));',
     '}',
     '',
-    'void main() {',
-    '  vec3 src = texture(u_image, v_uv).rgb;',
-    '  if (u_before > 0.5) {',
-    '    outColor = vec4(src, 1.0);',
-    '    return;',
-    '  }',
-    '',
+    'vec3 globalAdjust(vec3 src) {',
     '  vec3 lin = srgbToLinear(src);',
     '',
     '  // 白平衡（相对相机已应用的白平衡）',
@@ -323,31 +331,58 @@
     '  g = mix(vec3(lum2), g, 1.0 + u_vibrance * 0.9 * (1.0 - satAmt));',
     '  lum2 = lumaOf(g);',
     '  g = mix(vec3(lum2), g, 1.0 + u_saturation * 0.9);',
+    '  return g;',
+    '}',
     '',
-    '  // 局部蒙版调整',
-    '  float m = maskValue(v_uv);',
-    '  if (u_maskType > 0.5) {',
-    '    vec3 lg = g;',
-    '    lg *= vec3(exp2(u_local.z * 0.5), 1.0, exp2(-u_local.z * 0.5));',
-    '    lg *= exp2(u_local.x);',
-    '    lg = (lg - 0.5) * (1.0 + u_local.y * 0.8) + 0.5;',
-    '    float ll = lumaOf(lg);',
-    '    lg = mix(vec3(ll), lg, 1.0 + u_local.w * 0.9);',
-    '    g = mix(g, lg, m);',
+    'vec3 localAdjust(vec3 g, float m) {',
+    '  vec3 lg = g;',
+    '  lg *= vec3(exp2(u_local.z * 0.5), 1.0, exp2(-u_local.z * 0.5));',
+    '  lg *= exp2(u_local.x);',
+    '  lg = (lg - 0.5) * (1.0 + u_local.y * 0.8) + 0.5;',
+    '  float ll = lumaOf(lg);',
+    '  lg = mix(vec3(ll), lg, 1.0 + u_local.w * 0.9);',
+    '  return mix(g, lg, m);',
+    '}',
+    '',
+    'void main() {',
+    '  // Pass 0：全局显影；原图对比时直接输出源像素。',
+    '  if (u_pass < 0.5) {',
+    '    vec3 src = texture(u_image, v_uv).rgb;',
+    '    if (u_before > 0.5) {',
+    '      outColor = vec4(src, 1.0);',
+    '      return;',
+    '    }',
+    '    outColor = vec4(clamp(globalAdjust(src), 0.0, 1.0), 1.0);',
+    '    return;',
     '  }',
     '',
-    '  // 色调曲线 LUT',
+    '  // Pass 1：单个蒙版的局部调整。中间纹理的 t 轴与屏幕方向相反，采样时翻转。',
+    '  if (u_pass < 1.5) {',
+    '    vec3 g = texture(u_stage, vec2(v_uv.x, 1.0 - v_uv.y)).rgb;',
+    '    if (u_maskType > 0.5) {',
+    '      float m = maskValue(v_uv);',
+    '      g = localAdjust(g, m);',
+    '    }',
+    '    outColor = vec4(clamp(g, 0.0, 1.0), 1.0);',
+    '    return;',
+    '  }',
+    '',
+    '  // Pass 2：分通道曲线（先 RGB 复合、后单通道）+ 锐化 / 暗角 / 颗粒 / 蒙版显示。',
+    '  vec3 g = texture(u_stage, vec2(v_uv.x, 1.0 - v_uv.y)).rgb;',
+    '',
     '  if (u_curveOn > 0.5) {',
     '    vec3 cg = clamp(g, 0.0, 1.0);',
     '    g = vec3(',
-    '      texture(u_curve, vec2(cg.r, 0.5)).r,',
-    '      texture(u_curve, vec2(cg.g, 0.5)).r,',
-    '      texture(u_curve, vec2(cg.b, 0.5)).r',
+    '      texture(u_curve, vec2(cg.r, 1.0 / 6.0)).r,',
+    '      texture(u_curve, vec2(cg.g, 3.0 / 6.0)).g,',
+    '      texture(u_curve, vec2(cg.b, 5.0 / 6.0)).b',
     '    );',
     '  }',
     '',
     '  // 锐化',
     '  if (u_sharpen > 0.0001) {',
+    '    vec2 px = 1.0 / u_texSize;',
+    '    float sc = max(1.0, u_scale);',
     '    vec2 spx = px * sc;',
     '    vec3 n4 = texture(u_image, v_uv + vec2(spx.x, 0.0)).rgb',
     '            + texture(u_image, v_uv - vec2(spx.x, 0.0)).rgb',
@@ -373,19 +408,20 @@
     '    g += (n - 0.5) * u_grain * 0.16 * (0.35 + 0.65 * clamp(mid, 0.0, 1.0));',
     '  }',
     '',
-    '  // 蒙版显示（红色叠加）',
+    '  // 只显示当前活动蒙版的覆盖（红色叠加）',
     '  if (u_maskShow > 0.5 && u_maskType > 0.5) {',
-    '    g = mix(g, vec3(0.86, 0.16, 0.12), m * 0.55);',
+    '    float mm = maskValue(v_uv);',
+    '    g = mix(g, vec3(0.86, 0.16, 0.12), mm * 0.55);',
     '  }',
     '',
-    '  lin = pow(max(g, 0.0), vec3(2.2));',
+    '  vec3 lin = pow(max(g, 0.0), vec3(2.2));',
     '  vec3 outc = linearToSrgb(lin);',
     '  outColor = vec4(clamp(outc, 0.0, 1.0), 1.0);',
     '}'
   ].join('\n');
 
   var UNIFORM_NAMES = [
-    'u_image', 'u_curve', 'u_mask', 'u_texSize', 'u_aspect', 'u_before',
+    'u_image', 'u_stage', 'u_curve', 'u_mask', 'u_texSize', 'u_aspect', 'u_before', 'u_pass',
     'u_exposure', 'u_contrast', 'u_highlights', 'u_shadows', 'u_whites', 'u_blacks',
     'u_temp', 'u_tint', 'u_vibrance', 'u_saturation', 'u_clarity', 'u_dehaze',
     'u_vignette', 'u_grain', 'u_sharpen', 'u_maskType', 'u_maskInvert', 'u_maskShow',
@@ -451,21 +487,27 @@
 
     this.imageTex = this.makeTexture();
     this.curveTex = this.makeTexture();
-    this.maskTex = this.makeTexture();
+    this.emptyMaskTex = this.makeTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.emptyMaskTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+
+    this.maskTextures = Object.create(null);
+    this.targets = null;
     this.curveLut = null;
-    this.maskCanvas = null;
     this.sourceW = 0;
     this.sourceH = 0;
     this.disposed = false;
 
-    // 默认 1:1 曲线
-    var lut = new Uint8Array(256 * 4);
-    for (var k = 0; k < 256; k++) {
-      lut[k * 4] = k;
-      lut[k * 4 + 1] = k;
-      lut[k * 4 + 2] = k;
-      lut[k * 4 + 3] = 255;
+    // 默认 1:1 曲线：256×3（R/G/B 各一行）
+    var lut = new Uint8Array(256 * 3 * 4);
+    for (var row = 0; row < 3; row++) {
+      for (var k = 0; k < 256; k++) {
+        var o = (row * 256 + k) * 4;
+        lut[o] = k;
+        lut[o + 1] = k;
+        lut[o + 2] = k;
+        lut[o + 3] = 255;
+      }
     }
     this.setCurve(lut, false);
   }
@@ -492,41 +534,109 @@
 
   RawRenderer.prototype.setCurve = function (lut, on) {
     var gl = this.gl;
+    if (!lut || lut.length !== 256 * 3 * 4) {
+      lut = new Uint8Array(256 * 3 * 4);
+      for (var row = 0; row < 3; row++) {
+        for (var i = 0; i < 256; i++) {
+          var o = (row * 256 + i) * 4;
+          lut[o] = i;
+          lut[o + 1] = i;
+          lut[o + 2] = i;
+          lut[o + 3] = 255;
+        }
+      }
+    }
     this.curveLut = lut;
     this.curveOn = on !== false;
     gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 3, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut);
   };
 
-  RawRenderer.prototype.setMask = function (canvas) {
-    if (!canvas) return;
+  // 每个画笔蒙版独立纹理，按 id 缓存；id 为 null 时使用 1×1 黑色占位纹理。
+  RawRenderer.prototype.setMask = function (id, canvas) {
+    if (!canvas || id == null) return;
     var gl = this.gl;
-    this.maskCanvas = canvas;
-    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    var key = String(id);
+    var tex = this.maskTextures[key];
+    if (!tex) {
+      tex = this.makeTexture();
+      this.maskTextures[key] = tex;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
   };
 
-  RawRenderer.prototype.render = function (params) {
+  RawRenderer.prototype.clearMask = function (id) {
+    if (id == null) return;
+    var key = String(id);
+    var tex = this.maskTextures[key];
+    if (!tex) return;
+    try { this.gl.deleteTexture(tex); } catch (e) { /* ignore */ }
+    delete this.maskTextures[key];
+  };
+
+  RawRenderer.prototype.disposeTargets = function () {
+    if (!this.targets) return;
     var gl = this.gl;
-    var w = this.canvas.width;
-    var h = this.canvas.height;
-    gl.viewport(0, 0, w, h);
-    gl.useProgram(this.program);
-    gl.bindVertexArray(this.vao);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.imageTex);
+    try {
+      gl.deleteFramebuffer(this.targets.fboA);
+      gl.deleteFramebuffer(this.targets.fboB);
+      gl.deleteTexture(this.targets.texA);
+      gl.deleteTexture(this.targets.texB);
+    } catch (e) { /* ignore */ }
+    this.targets = null;
+  };
+
+  RawRenderer.prototype.ensureTargets = function (w, h) {
+    if (this.targets && this.targets.w === w && this.targets.h === h) return;
+    this.disposeTargets();
+    var gl = this.gl;
+    // 使用固定单元 5 创建 FBO 纹理，避免覆盖正在使用的源图/曲线/蒙版采样器。
+    var prevActive = gl.getParameter(gl.ACTIVE_TEXTURE);
+    gl.activeTexture(gl.TEXTURE5);
+    function makeTarget() {
+      var tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      var fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      var status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error('WebGL framebuffer incomplete: 0x' + status.toString(16));
+      }
+      return { tex: tex, fbo: fbo };
+    }
+    var a = makeTarget();
+    var b = makeTarget();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(prevActive);
+    this.targets = { w: w, h: h, texA: a.tex, fboA: a.fbo, texB: b.tex, fboB: b.fbo };
+  };
+
+  RawRenderer.prototype.bindStage = function (tex) {
+    var gl = this.gl;
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.maskTex);
+    gl.bindTexture(gl.TEXTURE_2D, tex || this.emptyMaskTex);
+  };
+
+  RawRenderer.prototype.bindMask = function (id) {
+    var gl = this.gl;
+    var tex = id == null ? null : this.maskTextures[String(id)];
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, tex || this.emptyMaskTex);
+  };
+
+  RawRenderer.prototype.setGlobalUniforms = function (params, w, h) {
+    var gl = this.gl;
     var u = this.u;
-    gl.uniform1i(u.u_image, 0);
-    gl.uniform1i(u.u_curve, 1);
-    gl.uniform1i(u.u_mask, 2);
     gl.uniform2f(u.u_texSize, Math.max(1, w), Math.max(1, h));
     gl.uniform1f(u.u_aspect, w / Math.max(1, h));
-    gl.uniform1f(u.u_before, params.before ? 1 : 0);
     gl.uniform1f(u.u_exposure, params.exposure);
     gl.uniform1f(u.u_contrast, params.contrast);
     gl.uniform1f(u.u_highlights, params.highlights);
@@ -542,19 +652,121 @@
     gl.uniform1f(u.u_vignette, params.vignette);
     gl.uniform1f(u.u_grain, params.grain);
     gl.uniform1f(u.u_sharpen, params.sharpen);
-    gl.uniform1f(u.u_maskType, params.maskType);
-    gl.uniform1f(u.u_maskInvert, params.maskInvert ? 1 : 0);
-    gl.uniform1f(u.u_maskShow, params.maskShow ? 1 : 0);
-    gl.uniform1f(u.u_maskFeather, params.maskFeather);
-    gl.uniform2f(u.u_maskP1, params.maskP1[0], params.maskP1[1]);
-    gl.uniform2f(u.u_maskP2, params.maskP2[0], params.maskP2[1]);
-    gl.uniform4f(u.u_local, params.local[0], params.local[1], params.local[2], params.local[3]);
-    gl.uniform1f(u.u_curveOn, this.curveOn ? 1 : 0);
     gl.uniform1f(u.u_scale, Math.max(1, w / 1600));
     gl.uniform1f(u.u_seed, 17.0);
+  };
+
+  RawRenderer.prototype.setMaskUniforms = function (mask) {
+    var gl = this.gl;
+    var u = this.u;
+    if (!mask) {
+      gl.uniform1f(u.u_maskType, 0);
+      gl.uniform1f(u.u_maskInvert, 0);
+      gl.uniform1f(u.u_maskShow, 0);
+      gl.uniform1f(u.u_maskFeather, 0.5);
+      gl.uniform2f(u.u_maskP1, 0.5, 0.5);
+      gl.uniform2f(u.u_maskP2, 0.5, 0.5);
+      gl.uniform4f(u.u_local, 0, 0, 0, 0);
+      return;
+    }
+    var local = mask.local || [0, 0, 0, 0];
+    gl.uniform1f(u.u_maskType, mask.type || 0);
+    gl.uniform1f(u.u_maskInvert, mask.invert ? 1 : 0);
+    gl.uniform1f(u.u_maskShow, 0);
+    gl.uniform1f(u.u_maskFeather, mask.feather);
+    gl.uniform2f(u.u_maskP1, mask.p1[0], mask.p1[1]);
+    gl.uniform2f(u.u_maskP2, mask.p2[0], mask.p2[1]);
+    gl.uniform4f(u.u_local, local[0], local[1], local[2], local[3]);
+  };
+
+  RawRenderer.prototype.draw = function () {
+    this.gl.drawArrays(this.gl.TRIANGLES, 0, 3);
+  };
+
+  RawRenderer.prototype.render = function (params) {
+    var gl = this.gl;
+    var w = this.canvas.width;
+    var h = this.canvas.height;
+    if (!w || !h) return;
+    gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // 固定纹理单元：0 源图，1 中间结果，2 曲线 LUT，3 蒙版
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.imageTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
+    gl.uniform1i(this.u.u_image, 0);
+    gl.uniform1i(this.u.u_stage, 1);
+    gl.uniform1i(this.u.u_curve, 2);
+    gl.uniform1i(this.u.u_mask, 3);
+
+    this.setGlobalUniforms(params, w, h);
+    this.setMaskUniforms(null);
+    gl.uniform1f(this.u.u_curveOn, this.curveOn ? 1 : 0);
+
+    // Before：直接输出原始像素。
+    if (params.before) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+      gl.uniform1f(this.u.u_pass, 0);
+      gl.uniform1f(this.u.u_before, 1);
+      this.bindStage(this.imageTex);
+      this.bindMask(null);
+      this.draw();
+      gl.activeTexture(gl.TEXTURE0);
+      return;
+    }
+
+    this.ensureTargets(w, h);
+    var targets = this.targets;
+
+    // Pass 0：全局显影 → FBO A
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.fboA);
+    gl.viewport(0, 0, w, h);
+    gl.uniform1f(this.u.u_pass, 0);
+    gl.uniform1f(this.u.u_before, 0);
+    this.bindStage(this.imageTex);
+    this.bindMask(null);
+    this.draw();
+
+    // Pass 1..N：按列表顺序逐蒙版叠加，FBO A/B ping-pong
+    var masks = params.masks || [];
+    var stageTex = targets.texA;
+    var destFbo = targets.fboB;
+    for (var i = 0; i < masks.length; i++) {
+      var mask = masks[i];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, destFbo);
+      gl.viewport(0, 0, w, h);
+      gl.uniform1f(this.u.u_pass, 1);
+      gl.uniform1f(this.u.u_before, 0);
+      this.setMaskUniforms(mask);
+      this.bindStage(stageTex);
+      this.bindMask(mask.type === 3 ? mask.id : null);
+      this.draw();
+      if (destFbo === targets.fboB) {
+        stageTex = targets.texB;
+        destFbo = targets.fboA;
+      } else {
+        stageTex = targets.texA;
+        destFbo = targets.fboB;
+      }
+    }
+
+    // Pass Final：曲线、锐化、暗角、颗粒与当前蒙版覆盖显示 → 画布
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.uniform1f(this.u.u_pass, 2);
+    gl.uniform1f(this.u.u_before, 0);
+    var show = params.showMask || null;
+    this.setMaskUniforms(show);
+    gl.uniform1f(this.u.u_maskShow, show ? 1 : 0);
+    this.bindStage(stageTex);
+    this.bindMask(show && show.type === 3 ? show.id : null);
+    this.draw();
+
     gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
   };
 
   RawRenderer.prototype.dispose = function () {
@@ -564,7 +776,11 @@
     try {
       gl.deleteTexture(this.imageTex);
       gl.deleteTexture(this.curveTex);
-      gl.deleteTexture(this.maskTex);
+      gl.deleteTexture(this.emptyMaskTex);
+      var keys = Object.keys(this.maskTextures);
+      for (var i = 0; i < keys.length; i++) gl.deleteTexture(this.maskTextures[keys[i]]);
+      this.maskTextures = Object.create(null);
+      this.disposeTargets();
       gl.deleteProgram(this.program);
       gl.deleteVertexArray(this.vao);
       var ext = gl.getExtension('WEBGL_lose_context');
@@ -679,37 +895,50 @@
           '</details>' +
 
           '<details class="raw-group" open>' +
-            '<summary>' + icon('curve') + '<span>色调曲线</span><span class="raw-sum-meta" id="raw-curve-sum">线性</span>' +
+            '<summary>' + icon('curve') + '<span>色调曲线</span><span class="raw-sum-meta" id="raw-curve-sum">RGB · 线性</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
+              '<div class="raw-curve-channels" id="raw-curve-channels" role="group" aria-label="曲线通道">' +
+                '<button type="button" data-curve-channel="rgb" class="is-active" aria-pressed="true"><span class="raw-ch-dot is-rgb"></span>RGB</button>' +
+                '<button type="button" data-curve-channel="r" aria-pressed="false"><span class="raw-ch-dot is-r"></span>红</button>' +
+                '<button type="button" data-curve-channel="g" aria-pressed="false"><span class="raw-ch-dot is-g"></span>绿</button>' +
+                '<button type="button" data-curve-channel="b" aria-pressed="false"><span class="raw-ch-dot is-b"></span>蓝</button>' +
+              '</div>' +
               '<div class="raw-curve-wrap"><canvas id="raw-curve" aria-label="色调曲线编辑器"></canvas><span class="raw-curve-axis-l">暗部</span><span class="raw-curve-axis-r">高光</span></div>' +
               '<div class="raw-curve-foot">' +
                 '<div class="raw-curve-actions">' +
                   '<button type="button" class="raw-btn" data-curve="linear">线性</button>' +
                   '<button type="button" class="raw-btn" data-curve="soft">柔和</button>' +
                   '<button type="button" class="raw-btn" data-curve="contrast">强对比</button>' +
+                  '<button type="button" class="raw-btn" data-curve="reset">重置通道</button>' +
                 '</div>' +
-                '<span class="raw-curve-hint">RGB 复合曲线 · 直方图 · 点击加点 / 拖动 / 双击删点</span>' +
+                '<span class="raw-curve-hint" id="raw-curve-hint">先 RGB 复合，再单通道 · 点击加点 / 拖动 / 双击删点</span>' +
               '</div>' +
             '</div>' +
           '</details>' +
 
           '<details class="raw-group" open>' +
-            '<summary>' + icon('mask') + '<span>蒙版</span><span class="raw-sum-meta" id="raw-mask-sum">未启用</span>' +
+            '<summary>' + icon('mask') + '<span>蒙版</span><span class="raw-sum-meta" id="raw-mask-sum">1 个 · 蒙版 1</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
+              '<div class="raw-mask-list-head"><span>蒙版列表</span><span id="raw-mask-count">1 / 8</span></div>' +
+              '<div class="raw-mask-list" id="raw-mask-list" aria-label="蒙版列表"></div>' +
+              '<div class="raw-mask-list-actions">' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-add">＋ 添加蒙版</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-duplicate">复制当前</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="mask-remove">删除当前</button>' +
+              '</div>' +
               '<div class="raw-seg" id="raw-mask-seg" role="group" aria-label="蒙版类型">' +
-                '<button type="button" data-mask="none" class="is-active">无</button>' +
-                '<button type="button" data-mask="linear">线性渐变</button>' +
+                '<button type="button" data-mask="none">无</button>' +
+                '<button type="button" data-mask="linear" class="is-active">线性渐变</button>' +
                 '<button type="button" data-mask="radial">径向渐变</button>' +
                 '<button type="button" data-mask="brush">画笔</button>' +
               '</div>' +
-              '<p class="raw-mask-note is-empty" id="raw-mask-note">选择一种蒙版后，可在预览画面上拖动定义范围。局部调整只作用于蒙版内。</p>' +
+              '<p class="raw-mask-note" id="raw-mask-note"><b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。</p>' +
               '<div class="raw-mask-actions">' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-invert">反转</label>' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-show">显示蒙版</label>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-clear">清除范围</button>' +
-                '<button type="button" class="raw-btn tiny" data-act="mask-remove">移除蒙版</button>' +
               '</div>' +
               '<div class="raw-slider" style="margin-bottom:9px">' +
                 '<label for="raw-mask-feather">羽化</label>' +
@@ -721,8 +950,8 @@
                 '<input id="raw-brush-size" type="range" min="1" max="24" step="1" value="8">' +
                 '<output for="raw-brush-size" id="raw-brush-size-v">8%</output>' +
               '</div>' +
-              '<div class="raw-subhead"><span>局部调整</span><span id="raw-local-scope">未启用</span></div>' +
-              '<div class="raw-sliders raw-local is-disabled" id="raw-local-sliders">' + localSliders + '</div>' +
+              '<div class="raw-subhead"><span>当前蒙版局部调整</span><span id="raw-local-scope">线性渐变</span></div>' +
+              '<div class="raw-sliders raw-local" id="raw-local-sliders">' + localSliders + '</div>' +
             '</div>' +
           '</details>' +
 
@@ -760,7 +989,92 @@
    * 状态
    * ------------------------------------------------------------------ */
 
+  var maskSeq = 0;
+
+  function cloneCurvePoints(pts) {
+    return pts.map(function (p) { return { x: p.x, y: p.y }; });
+  }
+
+  function createCurves() {
+    return {
+      rgb: cloneCurvePoints(IDENTITY_CURVE),
+      r: cloneCurvePoints(IDENTITY_CURVE),
+      g: cloneCurvePoints(IDENTITY_CURVE),
+      b: cloneCurvePoints(IDENTITY_CURVE)
+    };
+  }
+
+  function channelInfo(key) {
+    for (var i = 0; i < CURVE_CHANNELS.length; i++) {
+      if (CURVE_CHANNELS[i].key === key) return CURVE_CHANNELS[i];
+    }
+    return CURVE_CHANNELS[0];
+  }
+
+  function maskTypeLabel(type) {
+    return type === 'linear' ? '线性' : type === 'radial' ? '径向' : type === 'brush' ? '画笔' : '未启用';
+  }
+
+  function defaultGeometry(type) {
+    if (type === 'radial') return { p1: { x: 0.5, y: 0.5 }, p2: { x: 0.28, y: 0.28 } };
+    if (type === 'brush') return { p1: { x: 0.2, y: 0.5 }, p2: { x: 0.8, y: 0.5 } };
+    return { p1: { x: 0.2, y: 0.5 }, p2: { x: 0.8, y: 0.5 } };
+  }
+
+  function applyMaskOptions(mask, opts) {
+    if (!opts) return mask;
+    if (opts.name) mask.name = String(opts.name);
+    if (opts.enabled != null) mask.enabled = !!opts.enabled;
+    if (opts.show != null) mask.show = !!opts.show;
+    if (opts.invert != null) mask.invert = !!opts.invert;
+    if (opts.feather != null) mask.feather = clamp(Number(opts.feather), 0, 1);
+    if (opts.brushPct != null) mask.brushPct = clamp(Number(opts.brushPct), 1, 24);
+    if (opts.p1) mask.p1 = { x: clamp(Number(opts.p1.x), 0, 1), y: clamp(Number(opts.p1.y), 0, 1) };
+    if (opts.p2) mask.p2 = { x: clamp(Number(opts.p2.x), 0, 1), y: clamp(Number(opts.p2.y), 0, 1) };
+    if (opts.strokes) {
+      mask.strokes = opts.strokes.map(function (stroke) {
+        var pts = stroke.points || stroke || [];
+        return {
+          radius: stroke.radius != null ? Number(stroke.radius) : Math.max(0.005, mask.brushPct / 200),
+          points: pts.map(function (p) { return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) }; })
+        };
+      });
+    }
+    if (opts.local) {
+      LOCALS.forEach(function (d) {
+        if (opts.local[d.key] != null) mask.local[d.key] = clamp(Number(opts.local[d.key]), d.min, d.max);
+      });
+    }
+    return mask;
+  }
+
+  function createMask(type, opts) {
+    maskSeq += 1;
+    type = type === 'radial' || type === 'brush' || type === 'none' ? type : 'linear';
+    var geo = defaultGeometry(type);
+    var mask = {
+      id: 'mask-' + maskSeq,
+      name: '蒙版 ' + maskSeq,
+      type: type,
+      enabled: true,
+      show: false,
+      invert: false,
+      feather: type === 'brush' ? 0.35 : 0.45,
+      p1: geo.p1,
+      p2: geo.p2,
+      strokes: [],
+      brushPct: 8,
+      local: defaultLocal(),
+      current: null,
+      dragMode: '',
+      _start: null,
+      _moved: false
+    };
+    return applyMaskOptions(mask, opts);
+  }
+
   function createState() {
+    var initialMask = createMask('linear');
     return {
       loaded: false,
       busy: false,
@@ -782,24 +1096,14 @@
       sourceNote: '',
       sourceWarn: false,
       adjust: defaultAdjust(),
-      local: defaultLocal(),
       before: false,
-      curvePoints: IDENTITY_CURVE.map(function (p) { return { x: p.x, y: p.y }; }),
+      curves: createCurves(),
+      curveChannel: 'rgb',
       curveLut: null,
       curveOn: false,
       curveDragging: -1,
-      mask: {
-        type: 'none',
-        invert: false,
-        show: false,
-        feather: 0.45,
-        p1: { x: 0.2, y: 0.5 },
-        p2: { x: 0.8, y: 0.5 },
-        strokes: [],
-        brushPct: 8,
-        current: null,
-        dragMode: ''
-      },
+      masks: [initialMask],
+      activeMaskId: initialMask.id,
       zoomMode: 'fit',
       zoomPct: 100,
       lastExport: null,
@@ -818,11 +1122,12 @@
   var renderer = null;
   var curveCanvas = null;
   var curveCtx = null;
-  var maskCanvas = null;
   var vendorBase = '';
   var flashrawPromise = null;
   var rafPending = false;
-  var maskRafPending = false;
+  var maskBuildQueue = Object.create(null);
+  var maskBuildRaf = false;
+  var previewMaskCanvases = Object.create(null);
   var resizeObserver = null;
   var curveResizeObserver = null;
   var glLost = false;
@@ -898,8 +1203,12 @@
       adjSum: $('#raw-adj-sum', root),
       curveSum: $('#raw-curve-sum', root),
       curveCanvas: $('#raw-curve', root),
+      curveChannels: $('#raw-curve-channels', root),
+      curveHint: $('#raw-curve-hint', root),
       maskSum: $('#raw-mask-sum', root),
       maskSeg: $('#raw-mask-seg', root),
+      maskList: $('#raw-mask-list', root),
+      maskCount: $('#raw-mask-count', root),
       maskNote: $('#raw-mask-note', root),
       maskInvert: $('#raw-mask-invert', root),
       maskShow: $('#raw-mask-show', root),
@@ -928,7 +1237,6 @@
     }
     curveCanvas = els.curveCanvas;
     curveCtx = curveCanvas.getContext('2d');
-    maskCanvas = document.createElement('canvas');
 
     // WebGL 可用性探测
     try {
@@ -943,8 +1251,9 @@
 
     bindEvents();
     initCurveEditor();
-    applyMaskUI();
+    updateMaskUI();
     updateAdjustOutputs();
+    updateCurveUI();
     updateBeforeLabel();
     scheduleRender();
     mountedRoots.push(el);
@@ -1298,7 +1607,7 @@
     renderer.setSource(result.preview.canvas);
     ensureCurveLut();
     if (curveCtx) drawCurve();
-    if (state.mask.type === 'brush') scheduleMaskBuild();
+    refreshAllMaskTextures();
     scheduleRender();
   }
 
@@ -1334,10 +1643,11 @@
   function drawHistogram(b) {
     var hist = state.histogram;
     if (!hist) return;
+    var active = state.curveChannel;
     var channels = [
-      { bins: hist.r, color: 'rgba(190, 62, 52, 0.16)' },
-      { bins: hist.g, color: 'rgba(40, 145, 82, 0.14)' },
-      { bins: hist.b, color: 'rgba(48, 92, 190, 0.15)' }
+      { key: 'r', bins: hist.r, color: active === 'rgb' || active === 'r' ? 'rgba(190, 62, 52, ' + (active === 'r' ? '0.30' : '0.16') + ')' : 'rgba(190, 62, 52, 0.055)' },
+      { key: 'g', bins: hist.g, color: active === 'rgb' || active === 'g' ? 'rgba(40, 145, 82, ' + (active === 'g' ? '0.28' : '0.14') + ')' : 'rgba(40, 145, 82, 0.05)' },
+      { key: 'b', bins: hist.b, color: active === 'rgb' || active === 'b' ? 'rgba(48, 92, 190, ' + (active === 'b' ? '0.30' : '0.15') + ')' : 'rgba(48, 92, 190, 0.05)' }
     ];
     curveCtx.save();
     curveCtx.beginPath();
@@ -1427,11 +1737,44 @@
    * 渲染
    * ------------------------------------------------------------------ */
 
+  function maskTypeCode(type) {
+    return type === 'linear' ? 1 : type === 'radial' ? 2 : type === 'brush' ? 3 : 0;
+  }
+
+  function localVector(l) {
+    return [l.exposure, l.contrast / 100, l.temperature / 100, l.saturation / 100];
+  }
+
   function renderParams(isExport) {
     var a = state.adjust;
-    var l = state.local;
-    var mask = state.mask;
-    var maskType = mask.type === 'linear' ? 1 : mask.type === 'radial' ? 2 : mask.type === 'brush' ? 3 : 0;
+    var masks = [];
+    for (var i = 0; i < state.masks.length; i++) {
+      var m = state.masks[i];
+      if (!m.enabled || m.type === 'none') continue;
+      if (m.type === 'brush' && !m.strokes.length) continue;
+      masks.push({
+        id: m.id,
+        type: maskTypeCode(m.type),
+        invert: !!m.invert,
+        feather: m.feather,
+        p1: [m.p1.x, m.p1.y],
+        p2: [m.p2.x, m.p2.y],
+        local: localVector(m.local)
+      });
+    }
+    var showMask = null;
+    var am = activeMask();
+    if (!isExport && am && am.enabled && am.type !== 'none' && am.show) {
+      showMask = {
+        id: am.id,
+        type: maskTypeCode(am.type),
+        invert: !!am.invert,
+        feather: am.feather,
+        p1: [am.p1.x, am.p1.y],
+        p2: [am.p2.x, am.p2.y],
+        local: localVector(am.local)
+      };
+    }
     return {
       before: isExport ? false : state.before,
       exposure: a.exposure,
@@ -1449,13 +1792,8 @@
       vignette: a.vignette / 100,
       grain: a.grain / 100,
       sharpen: a.sharpen / 100,
-      maskType: maskType,
-      maskInvert: mask.invert,
-      maskShow: isExport ? false : mask.show,
-      maskFeather: mask.feather,
-      maskP1: [mask.p1.x, mask.p1.y],
-      maskP2: [mask.p2.x, mask.p2.y],
-      local: [l.exposure, l.contrast / 100, l.temperature / 100, l.saturation / 100]
+      masks: masks,
+      showMask: showMask
     };
   }
 
@@ -1496,12 +1834,17 @@
         out.classList.toggle('is-set', Math.abs(state.adjust[d.key] - d.def) > 1e-9);
       }
     });
+    var am = activeMask();
+    var l = am ? am.local : defaultLocal();
     LOCALS.forEach(function (d) {
       var out = root.querySelector('[data-out-local="' + d.key + '"]');
+      var v = l[d.key];
       if (out) {
-        out.textContent = fmtAdjust(d, state.local[d.key]);
-        out.classList.toggle('is-set', Math.abs(state.local[d.key] - d.def) > 1e-9);
+        out.textContent = fmtAdjust(d, v);
+        out.classList.toggle('is-set', Math.abs(v - d.def) > 1e-9);
       }
+      var input = root.querySelector('[data-local="' + d.key + '"]');
+      if (input && Number(input.value) !== v) input.value = String(v);
     });
     var count = ADJUSTMENTS.filter(function (d) {
       return Math.abs(state.adjust[d.key] - d.def) > 1e-9;
@@ -1518,10 +1861,19 @@
     var def = findDef(key, local ? LOCALS : ADJUSTMENTS);
     if (!def) return;
     var v = clamp(Number(value), def.min, def.max);
-    if (local) state.local[key] = v; else state.adjust[key] = v;
+    var localMask = null;
+    if (local) {
+      localMask = activeMask();
+      if (!localMask) localMask = addMask('linear');
+      if (!localMask) return;
+      localMask.local[key] = v;
+    } else {
+      state.adjust[key] = v;
+    }
     var input = root.querySelector('[data-' + (local ? 'local' : 'adj') + '="' + key + '"]');
     if (input && Number(input.value) !== v) input.value = v;
     updateAdjustOutputs();
+    if (localMask) updateMaskBadge(localMask);
     restoreBaselineIfNeeded();
     if (!silent) scheduleRender();
   }
@@ -1627,10 +1979,37 @@
     curveCtx.stroke();
     curveCtx.setLineDash([]);
 
-    // 曲线（采样 LUT）
-    var pts = state.curvePoints.slice().sort(function (a, c) { return a.x - c.x; });
+    var activeKey = state.curveChannel;
+    var activeInfo = channelInfo(activeKey);
+
+    // 其它已调整通道用细虚线提示，不抢当前通道焦点。
+    for (var ci = 0; ci < CURVE_CHANNELS.length; ci++) {
+      var other = CURVE_CHANNELS[ci];
+      if (other.key === activeKey) continue;
+      var opts = state.curves[other.key];
+      if (!opts || isPointsIdentity(opts)) continue;
+      var optPts = opts.slice().sort(function (a, c) { return a.x - c.x; });
+      var optEval = makeCurveEvaluator(optPts);
+      curveCtx.save();
+      curveCtx.globalAlpha = 0.34;
+      curveCtx.strokeStyle = other.curve;
+      curveCtx.lineWidth = Math.max(1, dpr * 1.1);
+      curveCtx.setLineDash([4 * dpr, 3 * dpr]);
+      curveCtx.beginPath();
+      for (var oi = 0; oi <= 64; oi++) {
+        var ox = oi / 64;
+        var op = curveToPx({ x: ox, y: optEval(ox) });
+        if (oi === 0) curveCtx.moveTo(op.x, op.y);
+        else curveCtx.lineTo(op.x, op.y);
+      }
+      curveCtx.stroke();
+      curveCtx.restore();
+    }
+
+    // 当前通道曲线
+    var pts = activeCurvePoints().slice().sort(function (a, c) { return a.x - c.x; });
     var evaluate = makeCurveEvaluator(pts);
-    curveCtx.strokeStyle = '#0C7A69';
+    curveCtx.strokeStyle = activeInfo.curve;
     curveCtx.lineWidth = Math.max(1.6, dpr * 1.8);
     curveCtx.lineJoin = 'round';
     curveCtx.beginPath();
@@ -1645,14 +2024,15 @@
     curveCtx.stroke();
 
     // 控制点
-    for (var k = 0; k < state.curvePoints.length; k++) {
-      var cp = curveToPx(state.curvePoints[k]);
+    var activePts = activeCurvePoints();
+    for (var k = 0; k < activePts.length; k++) {
+      var cp = curveToPx(activePts[k]);
       curveCtx.beginPath();
       curveCtx.arc(cp.x, cp.y, Math.max(4, 4.6 * dpr), 0, Math.PI * 2);
       curveCtx.fillStyle = '#FFFFFF';
       curveCtx.fill();
       curveCtx.lineWidth = Math.max(1.4, dpr * 1.6);
-      curveCtx.strokeStyle = '#0C7A69';
+      curveCtx.strokeStyle = activeInfo.curve;
       curveCtx.stroke();
     }
   }
@@ -1704,50 +2084,93 @@
     };
   }
 
-  function curveLutFromPoints(pts) {
-    var lut = new Uint8Array(256 * 4);
-    var evaluate = makeCurveEvaluator(pts);
-    for (var i = 0; i < 256; i++) {
-      var y = evaluate(i / 255);
-      var v = Math.round(clamp(y, 0, 1) * 255);
-      lut[i * 4] = v;
-      lut[i * 4 + 1] = v;
-      lut[i * 4 + 2] = v;
-      lut[i * 4 + 3] = 255;
-    }
-    return lut;
-  }
-
-  function isCurveIdentity(pts, lut) {
-    if (pts.length !== 2) return false;
+  function isPointsIdentity(pts) {
+    if (!pts || pts.length !== 2) return false;
     if (Math.abs(pts[0].x) > 1e-6 || Math.abs(pts[0].y) > 1e-6) return false;
     if (Math.abs(pts[1].x - 1) > 1e-6 || Math.abs(pts[1].y - 1) > 1e-6) return false;
-    for (var i = 0; i < 256; i++) {
-      if (Math.abs(lut[i * 4] - i) > 1) return false;
-    }
     return true;
   }
 
+  function activeCurvePoints() {
+    return state.curves[state.curveChannel] || state.curves.rgb;
+  }
+
+  // 先应用 RGB 复合曲线，再应用对应单通道曲线，生成 256×3 LUT（R/G/B 各一行）。
+  function buildCurveLut() {
+    var evaluators = {};
+    var identity = true;
+    for (var c = 0; c < CURVE_CHANNELS.length; c++) {
+      var key = CURVE_CHANNELS[c].key;
+      var pts = state.curves[key].slice().sort(function (a, b) { return a.x - b.x; });
+      evaluators[key] = makeCurveEvaluator(pts);
+      if (identity && !isPointsIdentity(state.curves[key])) identity = false;
+    }
+    var lut = new Uint8Array(256 * 3 * 4);
+    for (var i = 0; i < 256; i++) {
+      var x = i / 255;
+      var comp = clamp(evaluators.rgb(x), 0, 1);
+      var rv = Math.round(clamp(evaluators.r(comp), 0, 1) * 255);
+      var gv = Math.round(clamp(evaluators.g(comp), 0, 1) * 255);
+      var bv = Math.round(clamp(evaluators.b(comp), 0, 1) * 255);
+      var o = i * 4;
+      lut[o] = rv; lut[o + 1] = 0; lut[o + 2] = 0; lut[o + 3] = 255;
+      o = (256 + i) * 4;
+      lut[o] = 0; lut[o + 1] = gv; lut[o + 2] = 0; lut[o + 3] = 255;
+      o = (512 + i) * 4;
+      lut[o] = 0; lut[o + 1] = 0; lut[o + 2] = bv; lut[o + 3] = 255;
+    }
+    return { lut: lut, identity: identity };
+  }
+
+  function curvePointsIdentity(points) {
+    return Array.isArray(points) && isPointsIdentity(points);
+  }
+
+  function updateCurveUI() {
+    var info = channelInfo(state.curveChannel);
+    var identity = curvePointsIdentity(activeCurvePoints());
+    if (els.curveSum) els.curveSum.textContent = info.label + ' · ' + (identity ? '线性' : '已调整');
+    if (els.curveHint) {
+      els.curveHint.textContent = info.label + ' 通道 · 先 RGB 复合再单通道 · 点击加点 / 拖动 / 双击删点';
+    }
+    if (els.curveChannels) {
+      els.curveChannels.querySelectorAll('button').forEach(function (b) {
+        var on = b.getAttribute('data-curve-channel') === state.curveChannel;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+  }
+
   function updateCurveLut(doRender) {
-    var pts = state.curvePoints.slice().sort(function (a, b) { return a.x - b.x; });
-    var lut = curveLutFromPoints(pts);
-    var identity = isCurveIdentity(pts, lut);
-    state.curveLut = lut;
-    state.curveOn = !identity;
-    if (renderer) renderer.setCurve(lut, !identity);
-    if (els.curveSum) els.curveSum.textContent = identity ? '线性' : pts.length + ' 点';
+    var built = buildCurveLut();
+    state.curveLut = built.lut;
+    state.curveOn = !built.identity;
+    if (renderer) renderer.setCurve(built.lut, !built.identity);
+    updateCurveUI();
     restoreBaselineIfNeeded();
     drawCurve();
     if (doRender !== false) scheduleRender();
   }
 
-  function setCurvePoints(points) {
-    var pts = points.map(function (p) {
+  function setCurvePoints(points, channel) {
+    channel = state.curves[channel] ? channel : state.curveChannel;
+    var pts = (points || []).map(function (p) {
       return { x: clamp(Number(p.x), 0, 1), y: clamp(Number(p.y), 0, 1) };
     });
+    if (!pts.length) pts = cloneCurvePoints(IDENTITY_CURVE);
     pts.sort(function (a, b) { return a.x - b.x; });
-    state.curvePoints = pts;
+    state.curves[channel] = pts;
     updateCurveLut(true);
+  }
+
+  function setCurveChannel(channel) {
+    if (!state.curves[channel] || channel === state.curveChannel) return;
+    state.curveChannel = channel;
+    state.curveDragging = -1;
+    updateCurveUI();
+    drawCurve();
+    dispatch('raw:curve-channel', { channel: channel });
   }
 
   function curveEventPoint(e) {
@@ -1759,10 +2182,11 @@
   function onCurveDown(e) {
     e.preventDefault();
     var p = curveEventPoint(e);
+    var pts = activeCurvePoints();
     var best = -1;
     var bestD = 14 * (window.devicePixelRatio || 1);
-    for (var i = 0; i < state.curvePoints.length; i++) {
-      var cp = curveToPx(state.curvePoints[i]);
+    for (var i = 0; i < pts.length; i++) {
+      var cp = curveToPx(pts[i]);
       var rect = curveCanvas.getBoundingClientRect();
       var dpr = window.devicePixelRatio || 1;
       var dx = (e.clientX - rect.left) * dpr - cp.x;
@@ -1771,10 +2195,10 @@
       if (d < bestD) { bestD = d; best = i; }
     }
     if (best < 0) {
-      state.curvePoints.push({ x: p.x, y: p.y });
-      state.curvePoints.sort(function (a, b) { return a.x - b.x; });
-      for (var k = 0; k < state.curvePoints.length; k++) {
-        if (Math.abs(state.curvePoints[k].x - p.x) < 1e-9 && Math.abs(state.curvePoints[k].y - p.y) < 1e-9) { best = k; break; }
+      pts.push({ x: p.x, y: p.y });
+      pts.sort(function (a, b) { return a.x - b.x; });
+      for (var k = 0; k < pts.length; k++) {
+        if (Math.abs(pts[k].x - p.x) < 1e-9 && Math.abs(pts[k].y - p.y) < 1e-9) { best = k; break; }
       }
     }
     state.curveDragging = best;
@@ -1787,7 +2211,8 @@
     e.preventDefault();
     var p = curveEventPoint(e);
     var idx = state.curveDragging;
-    var pts = state.curvePoints;
+    var pts = activeCurvePoints();
+    if (idx < 0 || idx >= pts.length) return;
     var isFirst = idx === 0;
     var isLast = idx === pts.length - 1;
     if (isFirst) {
@@ -1812,29 +2237,32 @@
   }
 
   function onCurveDblClick(e) {
-    var p = curveEventPoint(e);
+    var pts = activeCurvePoints();
     var best = -1;
     var bestD = Infinity;
     var rect = curveCanvas.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
-    for (var i = 0; i < state.curvePoints.length; i++) {
-      var cp = curveToPx(state.curvePoints[i]);
+    for (var i = 0; i < pts.length; i++) {
+      var cp = curveToPx(pts[i]);
       var d = Math.hypot((e.clientX - rect.left) * dpr - cp.x, (e.clientY - rect.top) * dpr - cp.y);
       if (d < bestD) { bestD = d; best = i; }
     }
-    if (best <= 0 || best >= state.curvePoints.length - 1) return;
-    state.curvePoints.splice(best, 1);
+    if (best <= 0 || best >= pts.length - 1) return;
+    pts.splice(best, 1);
     updateCurveLut(true);
   }
 
-  function applyCurvePreset(name) {
-    if (name === 'linear') {
-      setCurvePoints([{ x: 0, y: 0 }, { x: 1, y: 1 }]);
-    } else if (name === 'soft') {
-      setCurvePoints([{ x: 0, y: 0 }, { x: 0.25, y: 0.28 }, { x: 0.75, y: 0.72 }, { x: 1, y: 1 }]);
+  function applyCurvePreset(name, channel) {
+    channel = state.curves[channel] ? channel : state.curveChannel;
+    var points;
+    if (name === 'soft') {
+      points = [{ x: 0, y: 0 }, { x: 0.25, y: 0.28 }, { x: 0.75, y: 0.72 }, { x: 1, y: 1 }];
     } else if (name === 'contrast') {
-      setCurvePoints([{ x: 0, y: 0 }, { x: 0.22, y: 0.14 }, { x: 0.5, y: 0.5 }, { x: 0.78, y: 0.87 }, { x: 1, y: 1 }]);
+      points = [{ x: 0, y: 0 }, { x: 0.22, y: 0.14 }, { x: 0.5, y: 0.5 }, { x: 0.78, y: 0.87 }, { x: 1, y: 1 }];
+    } else {
+      points = cloneCurvePoints(IDENTITY_CURVE);
     }
+    setCurvePoints(points, channel);
   }
 
   /* ------------------------------------------------------------------ *
@@ -1843,32 +2271,124 @@
 
   var MASK_LABELS = { none: '未启用', linear: '线性渐变', radial: '径向渐变', brush: '画笔' };
 
-  function applyMaskUI() {
-    var mask = state.mask;
-    var hasMask = mask.type !== 'none';
-    els.maskSeg.querySelectorAll('button').forEach(function (b) {
-      b.classList.toggle('is-active', b.getAttribute('data-mask') === mask.type);
-    });
-    if (els.maskSum) els.maskSum.textContent = hasMask ? MASK_LABELS[mask.type] : '未启用';
-    if (els.localSliders) els.localSliders.classList.toggle('is-disabled', !hasMask);
-    if (els.localScope) els.localScope.textContent = hasMask ? MASK_LABELS[mask.type] : '未启用';
-    els.maskInvert.checked = !!mask.invert;
-    els.maskShow.checked = !!mask.show;
-    els.maskFeather.value = String(Math.round(mask.feather * 100));
-    els.maskFeatherV.textContent = String(Math.round(mask.feather * 100));
-    els.brushRow.hidden = mask.type !== 'brush';
-    els.brushSize.value = String(mask.brushPct);
-    els.brushSizeV.textContent = mask.brushPct + '%';
-    els.canvas.classList.toggle('is-masking', hasMask);
-    els.maskNote.classList.toggle('is-empty', !hasMask);
-    if (!hasMask) {
-      els.maskNote.innerHTML = '选择一种蒙版后，可在预览画面上拖动定义范围。局部调整只作用于蒙版内。';
-    } else if (mask.type === 'linear') {
-      els.maskNote.innerHTML = '<b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；可调羽化与局部参数。';
-    } else if (mask.type === 'radial') {
-      els.maskNote.innerHTML = '<b>径向渐变</b>：从中心向外拖动改变椭圆范围；勾选“显示蒙版”可检查覆盖区域。';
+  function activeMask() {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].id === state.activeMaskId) return state.masks[i];
+    }
+    return null;
+  }
+
+  function findMaskById(id) {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].id === id) return state.masks[i];
+    }
+    return null;
+  }
+
+  function maskHasAdjustments(mask) {
+    if (mask.strokes && mask.strokes.length) return true;
+    var l = mask.local || {};
+    for (var i = 0; i < LOCALS.length; i++) {
+      if (Math.abs(l[LOCALS[i].key] - LOCALS[i].def) > 1e-9) return true;
+    }
+    return false;
+  }
+
+  function renderMaskList() {
+    if (!els.maskList) return;
+    var keepTop = els.maskList.scrollTop;
+    var keepLeft = els.maskList.scrollLeft;
+    if (!state.masks.length) {
+      els.maskList.innerHTML = '<p class="raw-mask-empty">尚未添加蒙版。点击下方“添加蒙版”开始，可叠加多个独立局部调整。</p>';
     } else {
-      els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，调整画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
+      var html = '';
+      for (var i = 0; i < state.masks.length; i++) {
+        var m = state.masks[i];
+        var isActive = m.id === state.activeMaskId;
+        html += '<div class="raw-mask-item' + (isActive ? ' is-active' : '') + (m.enabled ? '' : ' is-off') + '" data-mask-row="' + m.id + '">' +
+          '<button type="button" class="raw-mask-pick" data-mask-pick="' + m.id + '" aria-pressed="' + (isActive ? 'true' : 'false') + '">' +
+            '<span class="raw-mask-dot is-' + m.type + '"></span>' +
+            '<span class="raw-mask-name">' + escapeHTML(m.name) + '</span>' +
+            '<span class="raw-mask-kind">' + maskTypeLabel(m.type) + '</span>' +
+            (maskHasAdjustments(m) ? '<span class="raw-mask-badge">已调整</span>' : '') +
+          '</button>' +
+          '<label class="raw-mask-toggle" title="启用或停用此蒙版"><input type="checkbox" data-mask-enabled="' + m.id + '"' +
+            (m.enabled ? ' checked' : '') + '><span>' + (m.enabled ? '启用' : '停用') + '</span></label>' +
+        '</div>';
+      }
+      els.maskList.innerHTML = html;
+    }
+    els.maskList.scrollTop = keepTop;
+    els.maskList.scrollLeft = keepLeft;
+    if (els.maskCount) els.maskCount.textContent = state.masks.length + ' / ' + MAX_MASKS;
+  }
+
+  function updateMaskBadge(mask) {
+    if (!els.maskList || !mask) return;
+    var row = els.maskList.querySelector('[data-mask-row="' + mask.id + '"]');
+    if (!row) return;
+    var pick = row.querySelector('.raw-mask-pick');
+    if (!pick) return;
+    var badge = pick.querySelector('.raw-mask-badge');
+    if (maskHasAdjustments(mask)) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'raw-mask-badge';
+        badge.textContent = '已调整';
+        pick.appendChild(badge);
+      }
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+
+  function updateMaskUI() {
+    var mask = activeMask();
+    var hasMask = !!mask && mask.type !== 'none';
+    renderMaskList();
+    els.maskSeg.querySelectorAll('button').forEach(function (b) {
+      var on = !!mask && b.getAttribute('data-mask') === mask.type;
+      b.classList.toggle('is-active', on);
+    });
+    if (els.maskSum) {
+      if (!state.masks.length) {
+        els.maskSum.textContent = '未添加';
+      } else {
+        var enabled = state.masks.filter(function (m) { return m.enabled; }).length;
+        els.maskSum.textContent = state.masks.length + ' 个 · ' + enabled + ' 启用';
+      }
+    }
+    if (els.localSliders) els.localSliders.classList.toggle('is-disabled', !hasMask);
+    if (els.localScope) els.localScope.textContent = mask ? (mask.name + ' · ' + maskTypeLabel(mask.type)) : '未启用';
+    els.maskInvert.checked = mask ? !!mask.invert : false;
+    els.maskShow.checked = mask ? !!mask.show : false;
+    els.maskInvert.disabled = !mask;
+    els.maskShow.disabled = !mask;
+    els.maskFeather.disabled = !mask;
+    if (mask) {
+      els.maskFeather.value = String(Math.round(mask.feather * 100));
+      els.maskFeatherV.textContent = String(Math.round(mask.feather * 100));
+    } else {
+      els.maskFeather.value = '0';
+      els.maskFeatherV.textContent = '0';
+    }
+    els.brushRow.hidden = !mask || mask.type !== 'brush';
+    if (mask) {
+      els.brushSize.value = String(mask.brushPct);
+      els.brushSizeV.textContent = mask.brushPct + '%';
+    }
+    els.canvas.classList.toggle('is-masking', hasMask && mask.enabled);
+    els.maskNote.classList.toggle('is-empty', !hasMask);
+    if (!mask) {
+      els.maskNote.innerHTML = '尚未添加蒙版。点击“添加蒙版”后可在预览画面上拖动定义范围，局部调整只作用于蒙版内。';
+    } else if (!hasMask) {
+      els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向或画笔后即可在画面上绘制范围。';
+    } else if (mask.type === 'linear') {
+      els.maskNote.innerHTML = '<b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；多个蒙版按列表顺序叠加。';
+    } else if (mask.type === 'radial') {
+      els.maskNote.innerHTML = '<b>径向渐变</b>：从中心向外拖动改变椭圆范围；勾选“显示蒙版”可检查当前活动蒙版的覆盖区域。';
+    } else {
+      els.maskNote.innerHTML = '<b>画笔</b>：在画面上拖动涂抹蒙版，可调画笔大小与羽化；勾选“显示蒙版”可查看覆盖范围。';
     }
     if (els.exportSum) {
       els.exportSum.textContent = els.exportFormat.value === 'image/png' ? 'PNG' : 'JPEG';
@@ -1876,78 +2396,173 @@
   }
 
   function setMaskType(type) {
-    var mask = state.mask;
+    var mask = activeMask();
+    if (!mask) {
+      if (type === 'none') return;
+      addMask(type);
+      return;
+    }
     if (type === mask.type) return;
+    if (mask.type === 'brush' && type !== 'brush') {
+      if (renderer) renderer.clearMask(mask.id);
+      delete previewMaskCanvases[mask.id];
+    }
     mask.type = type;
     mask.show = false;
     mask.current = null;
     mask.dragMode = '';
     if (type === 'linear') {
-      mask.p1 = { x: 0.2, y: 0.5 };
-      mask.p2 = { x: 0.8, y: 0.5 };
+      var lg = defaultGeometry('linear');
+      mask.p1 = lg.p1;
+      mask.p2 = lg.p2;
       mask.feather = 0.45;
     } else if (type === 'radial') {
-      mask.p1 = { x: 0.5, y: 0.5 };
-      mask.p2 = { x: 0.28, y: 0.28 };
+      var rg = defaultGeometry('radial');
+      mask.p1 = rg.p1;
+      mask.p2 = rg.p2;
       mask.feather = 0.45;
     } else if (type === 'brush') {
       mask.feather = 0.35;
-      if (mask.strokes.length) scheduleMaskBuild();
     }
-    applyMaskUI();
+    updateMaskUI();
     restoreBaselineIfNeeded();
-    if (type === 'brush') scheduleMaskBuild();
-    scheduleRender();
-    dispatch('raw:mask', { type: type });
+    if (type === 'brush') scheduleMaskBuild(mask);
+    else scheduleRender();
+    dispatch('raw:mask', { type: type, id: mask.id });
   }
 
   function clearMaskRange() {
-    var mask = state.mask;
-    if (mask.type === 'linear') {
-      mask.p1 = { x: 0.2, y: 0.5 };
-      mask.p2 = { x: 0.8, y: 0.5 };
-    } else if (mask.type === 'radial') {
-      mask.p1 = { x: 0.5, y: 0.5 };
-      mask.p2 = { x: 0.28, y: 0.28 };
+    var mask = activeMask();
+    if (!mask) return;
+    if (mask.type === 'linear' || mask.type === 'radial') {
+      var geo = defaultGeometry(mask.type);
+      mask.p1 = geo.p1;
+      mask.p2 = geo.p2;
     } else if (mask.type === 'brush') {
       mask.strokes = [];
-      scheduleMaskBuild();
+      mask.current = null;
+      scheduleMaskBuild(mask);
     }
+    updateMaskUI();
     scheduleRender();
   }
 
-  function removeMask() {
-    state.mask.type = 'none';
-    state.mask.show = false;
-    state.mask.strokes = [];
-    state.mask.current = null;
-    state.mask.dragMode = '';
-    state.mask.p1 = { x: 0.2, y: 0.5 };
-    state.mask.p2 = { x: 0.8, y: 0.5 };
-    LOCALS.forEach(function (d) {
-      state.local[d.key] = d.def;
-      var input = root.querySelector('[data-local="' + d.key + '"]');
-      if (input) input.value = d.def;
+  function addMask(type, opts, silent) {
+    if (state.masks.length >= MAX_MASKS) {
+      setStatus('最多支持 ' + MAX_MASKS + ' 个蒙版，请先删除一个。', 'warn');
+      return null;
+    }
+    var mask = createMask(type || 'linear', opts);
+    state.masks.push(mask);
+    state.activeMaskId = mask.id;
+    if (!silent) {
+      updateMaskUI();
+      updateAdjustOutputs();
+      restoreBaselineIfNeeded();
+      if (mask.type === 'brush') scheduleMaskBuild(mask);
+      else scheduleRender();
+      dispatch('raw:masks', { action: 'add', id: mask.id, count: state.masks.length });
+    }
+    return mask;
+  }
+
+  function duplicateActiveMask() {
+    var src = activeMask();
+    if (!src) {
+      addMask('linear');
+      return null;
+    }
+    if (state.masks.length >= MAX_MASKS) {
+      setStatus('最多支持 ' + MAX_MASKS + ' 个蒙版，请先删除一个。', 'warn');
+      return null;
+    }
+    var copy = createMask(src.type);
+    copy.enabled = src.enabled;
+    copy.show = src.show;
+    copy.invert = src.invert;
+    copy.feather = src.feather;
+    copy.p1 = { x: src.p1.x, y: src.p1.y };
+    copy.p2 = { x: src.p2.x, y: src.p2.y };
+    copy.brushPct = src.brushPct;
+    copy.local = Object.assign({}, src.local);
+    copy.strokes = src.strokes.map(function (stroke) {
+      return {
+        radius: stroke.radius,
+        points: (stroke.points || []).map(function (p) { return { x: p.x, y: p.y }; })
+      };
     });
+    var idx = state.masks.indexOf(src);
+    state.masks.splice(idx + 1, 0, copy);
+    state.activeMaskId = copy.id;
+    updateMaskUI();
     updateAdjustOutputs();
-    applyMaskUI();
-    scheduleMaskBuild();
-    scheduleRender();
+    restoreBaselineIfNeeded();
+    if (copy.type === 'brush') scheduleMaskBuild(copy);
+    else scheduleRender();
+    dispatch('raw:masks', { action: 'duplicate', id: copy.id, count: state.masks.length });
+    return copy;
   }
 
-  function buildMaskCanvas(targetWidth, srcW, srcH) {
-    var mask = state.mask;
+  function removeMaskById(id) {
+    for (var i = 0; i < state.masks.length; i++) {
+      if (state.masks[i].id !== id) continue;
+      var removed = state.masks.splice(i, 1)[0];
+      if (renderer) renderer.clearMask(removed.id);
+      delete previewMaskCanvases[removed.id];
+      if (state.activeMaskId === removed.id) {
+        var next = state.masks[Math.min(i, state.masks.length - 1)];
+        state.activeMaskId = next ? next.id : null;
+      }
+      updateMaskUI();
+      updateAdjustOutputs();
+      restoreBaselineIfNeeded();
+      scheduleRender();
+      dispatch('raw:masks', { action: 'remove', id: removed.id, count: state.masks.length });
+      return removed;
+    }
+    return null;
+  }
+
+  function removeActiveMask() {
+    var mask = activeMask();
+    if (!mask) return null;
+    return removeMaskById(mask.id);
+  }
+
+  function setActiveMask(id) {
+    var mask = findMaskById(id);
+    if (!mask) return;
+    state.activeMaskId = mask.id;
+    updateMaskUI();
+    updateAdjustOutputs();
+    scheduleRender();
+    dispatch('raw:masks', { action: 'activate', id: mask.id, count: state.masks.length });
+  }
+
+  function setMaskEnabled(id, enabled) {
+    var mask = findMaskById(id);
+    if (!mask) return;
+    mask.enabled = !!enabled;
+    updateMaskUI();
+    updateAdjustOutputs();
+    scheduleRender();
+    dispatch('raw:masks', { action: 'enabled', id: mask.id, enabled: mask.enabled, count: state.masks.length });
+  }
+
+  function buildMaskCanvas(mask, targetWidth, srcW, srcH, reuse) {
+    if (!mask) return null;
     var w = Math.max(64, Math.min(2048, Math.round(targetWidth)));
     var h = Math.max(1, Math.round(w * (srcH / Math.max(1, srcW))));
-    if (maskCanvas.width !== w || maskCanvas.height !== h) {
-      maskCanvas.width = w;
-      maskCanvas.height = h;
+    var canvas = reuse || document.createElement('canvas');
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
     }
-    var ctx = maskCanvas.getContext('2d');
+    var ctx = canvas.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
-    if (mask.type !== 'brush') return maskCanvas;
+    if (mask.type !== 'brush') return canvas;
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = '#FFFFFF';
     ctx.lineCap = 'round';
@@ -1979,24 +2594,41 @@
         ctx.stroke();
       }
     }
-    return maskCanvas;
+    return canvas;
   }
 
-  function refreshMaskTexture() {
-    if (!renderer || !state.preview) return;
-    if (state.mask.type === 'brush') {
-      var c = buildMaskCanvas(MASK_PREVIEW_WIDTH, state.preview.w, state.preview.h);
-      renderer.setMask(c);
+  function refreshMaskTexture(mask) {
+    if (!renderer || !state.preview || !mask) return;
+    if (mask.type === 'brush') {
+      var c = buildMaskCanvas(mask, MASK_PREVIEW_WIDTH, state.preview.w, state.preview.h, previewMaskCanvases[mask.id]);
+      previewMaskCanvases[mask.id] = c;
+      renderer.setMask(mask.id, c);
+    } else {
+      renderer.clearMask(mask.id);
+      delete previewMaskCanvases[mask.id];
     }
-    scheduleRender();
   }
 
-  function scheduleMaskBuild() {
-    if (maskRafPending) return;
-    maskRafPending = true;
+  function refreshAllMaskTextures() {
+    if (!renderer || !state.preview) return;
+    for (var i = 0; i < state.masks.length; i++) refreshMaskTexture(state.masks[i]);
+  }
+
+  function scheduleMaskBuild(mask) {
+    mask = mask || activeMask();
+    if (!mask || mask.type !== 'brush') return;
+    maskBuildQueue[mask.id] = true;
+    if (maskBuildRaf) return;
+    maskBuildRaf = true;
     requestAnimationFrame(function () {
-      maskRafPending = false;
-      refreshMaskTexture();
+      maskBuildRaf = false;
+      var ids = Object.keys(maskBuildQueue);
+      maskBuildQueue = Object.create(null);
+      for (var i = 0; i < ids.length; i++) {
+        var m = findMaskById(ids[i]);
+        if (m) refreshMaskTexture(m);
+      }
+      scheduleRender();
     });
   }
 
@@ -2009,10 +2641,10 @@
   }
 
   function onCanvasPointerDown(e) {
-    if (!state.loaded || state.mask.type === 'none' || state.before) return;
+    var mask = activeMask();
+    if (!state.loaded || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
     e.preventDefault();
     var uv = canvasUV(e);
-    var mask = state.mask;
     try { els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     if (mask.type === 'brush') {
       mask.current = {
@@ -2021,7 +2653,7 @@
       };
       mask.strokes.push(mask.current);
       mask.dragMode = 'brush';
-      scheduleMaskBuild();
+      scheduleMaskBuild(mask);
     } else if (mask.type === 'linear') {
       mask.dragMode = 'linear';
       mask._start = uv;
@@ -2035,8 +2667,8 @@
   }
 
   function onCanvasPointerMove(e) {
-    var mask = state.mask;
-    if (!mask.dragMode) return;
+    var mask = activeMask();
+    if (!mask || !mask.dragMode) return;
     var uv = canvasUV(e);
     if (mask.dragMode === 'brush' && mask.current) {
       var pts = mask.current.points;
@@ -2045,7 +2677,7 @@
       var dy = (uv.y - last.y) * state.preview.h;
       if (Math.hypot(dx, dy) >= 1.5) {
         pts.push(uv);
-        scheduleMaskBuild();
+        scheduleMaskBuild(mask);
       }
     } else if (mask.dragMode === 'linear') {
       var s = mask._start;
@@ -2069,17 +2701,18 @@
   }
 
   function onCanvasPointerUp(e) {
-    var mask = state.mask;
-    if (!mask.dragMode) return;
+    var mask = activeMask();
+    if (!mask || !mask.dragMode) return;
     if (mask.dragMode === 'brush') {
       mask.current = null;
-      scheduleMaskBuild();
+      scheduleMaskBuild(mask);
     } else if (mask.dragMode === 'radial' && !mask._moved) {
       mask.p2 = { x: 0.28, y: 0.28 };
       scheduleRender();
     }
     mask.dragMode = '';
     mask._start = null;
+    updateMaskUI();
     try { els.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   }
 
@@ -2205,12 +2838,18 @@
     try {
       r = new RawRenderer(canvas);
       r.setSource(sourceCanvas);
-      var pts = state.curvePoints.slice().sort(function (a, b) { return a.x - b.x; });
-      var lut = curveLutFromPoints(pts);
-      r.setCurve(lut, !isCurveIdentity(pts, lut));
-      if (state.mask.type === 'brush') {
-        var mc = buildMaskCanvas(Math.min(MASK_EXPORT_WIDTH, Math.max(MASK_PREVIEW_WIDTH, width)), width, height);
-        r.setMask(mc);
+      var built = buildCurveLut();
+      r.setCurve(built.lut, !built.identity);
+      // 按列表顺序为每个画笔蒙版生成独立纹理；几何蒙版由着色器直接计算。
+      var maskWidth = Math.min(MASK_EXPORT_WIDTH, Math.max(MASK_PREVIEW_WIDTH, width));
+      for (var i = 0; i < state.masks.length; i++) {
+        var m = state.masks[i];
+        if (m.type !== 'brush' || !m.strokes.length) continue;
+        var mc = buildMaskCanvas(m, maskWidth, width, height, null);
+        r.setMask(m.id, mc);
+        // texImage2D 已完成上传，及时释放大画布，避免多画笔蒙版导出占用过多内存。
+        mc.width = 0;
+        mc.height = 0;
       }
       r.render(renderParams(true));
       var blob = await canvasToBlob(canvas, format, quality);
@@ -2392,32 +3031,26 @@
 
   function resetAll() {
     state.adjust = defaultAdjust();
-    state.local = defaultLocal();
     state.before = false;
-    state.curvePoints = IDENTITY_CURVE.map(function (p) { return { x: p.x, y: p.y }; });
-    state.mask.type = 'none';
-    state.mask.invert = false;
-    state.mask.show = false;
-    state.mask.feather = 0.45;
-    state.mask.p1 = { x: 0.2, y: 0.5 };
-    state.mask.p2 = { x: 0.8, y: 0.5 };
-    state.mask.strokes = [];
-    state.mask.brushPct = 8;
-    state.mask.current = null;
-    state.mask.dragMode = '';
+    state.curves = createCurves();
+    state.curveChannel = 'rgb';
+    state.curveDragging = -1;
+    for (var i = 0; i < state.masks.length; i++) {
+      if (renderer) renderer.clearMask(state.masks[i].id);
+    }
+    previewMaskCanvases = Object.create(null);
+    var freshMask = createMask('linear');
+    state.masks = [freshMask];
+    state.activeMaskId = freshMask.id;
     root.querySelectorAll('[data-adj]').forEach(function (input) {
       var def = findDef(input.getAttribute('data-adj'), ADJUSTMENTS);
-      if (def) input.value = def.def;
-    });
-    root.querySelectorAll('[data-local]').forEach(function (input) {
-      var def = findDef(input.getAttribute('data-local'), LOCALS);
       if (def) input.value = def.def;
     });
     updateAdjustOutputs();
     updateBeforeLabel();
     updateCurveLut(true);
-    applyMaskUI();
-    scheduleMaskBuild();
+    updateMaskUI();
+    refreshAllMaskTextures();
     scheduleRender();
     state.zoomMode = 'fit';
     requestAnimationFrame(applyZoom);
@@ -2495,9 +3128,18 @@
           resetAll();
         } else if (act === 'mask-clear') {
           clearMaskRange();
+        } else if (act === 'mask-add') {
+          addMask('linear');
+        } else if (act === 'mask-duplicate') {
+          duplicateActiveMask();
         } else if (act === 'mask-remove') {
-          removeMask();
+          removeActiveMask();
         }
+        return;
+      }
+      var maskPick = e.target.closest('[data-mask-pick]');
+      if (maskPick) {
+        setActiveMask(maskPick.getAttribute('data-mask-pick'));
         return;
       }
       var maskBtn = e.target.closest('[data-mask]');
@@ -2505,9 +3147,22 @@
         setMaskType(maskBtn.getAttribute('data-mask'));
         return;
       }
+      var channelBtn = e.target.closest('[data-curve-channel]');
+      if (channelBtn) {
+        setCurveChannel(channelBtn.getAttribute('data-curve-channel'));
+        return;
+      }
       var curveBtn = e.target.closest('[data-curve]');
       if (curveBtn) {
         applyCurvePreset(curveBtn.getAttribute('data-curve'));
+      }
+    });
+
+    // 蒙版列表：启用/停用
+    root.addEventListener('change', function (e) {
+      var toggle = e.target.closest('[data-mask-enabled]');
+      if (toggle) {
+        setMaskEnabled(toggle.getAttribute('data-mask-enabled'), toggle.checked);
       }
     });
 
@@ -2528,22 +3183,36 @@
       setZoomPct(cur + (e.deltaY < 0 ? 10 : -10));
     }, { passive: false });
 
-    // 蒙版控件
+    // 蒙版控件（作用于当前活动蒙版）
     els.maskInvert.addEventListener('change', function () {
-      state.mask.invert = els.maskInvert.checked;
+      var mask = activeMask();
+      if (!mask) return;
+      mask.invert = els.maskInvert.checked;
       scheduleRender();
     });
     els.maskShow.addEventListener('change', function () {
-      state.mask.show = els.maskShow.checked;
+      var mask = activeMask();
+      if (!mask) return;
+      mask.show = els.maskShow.checked;
+      if (mask.show) {
+        for (var i = 0; i < state.masks.length; i++) {
+          if (state.masks[i] !== mask) state.masks[i].show = false;
+        }
+      }
+      updateMaskUI();
       scheduleRender();
     });
     els.maskFeather.addEventListener('input', function () {
-      state.mask.feather = Number(els.maskFeather.value) / 100;
+      var mask = activeMask();
+      if (!mask) return;
+      mask.feather = Number(els.maskFeather.value) / 100;
       els.maskFeatherV.textContent = els.maskFeather.value;
       scheduleRender();
     });
     els.brushSize.addEventListener('input', function () {
-      state.mask.brushPct = Number(els.brushSize.value);
+      var mask = activeMask();
+      if (!mask) return;
+      mask.brushPct = Number(els.brushSize.value);
       els.brushSizeV.textContent = els.brushSize.value + '%';
     });
 
@@ -2579,7 +3248,7 @@
           els.canvas.height = state.preview.h;
           renderer.setSource(state.previewCanvas);
           ensureCurveLut();
-          if (state.mask.type === 'brush') refreshMaskTexture();
+          refreshAllMaskTextures();
           renderNow();
           setStatus('图形上下文已恢复。', 'ok');
         }
@@ -2619,8 +3288,32 @@
     } catch (e) { /* ignore */ }
   }
 
+  function serializeMask(mask) {
+    if (!mask) return null;
+    return {
+      id: mask.id,
+      name: mask.name,
+      type: mask.type,
+      enabled: !!mask.enabled,
+      show: !!mask.show,
+      invert: !!mask.invert,
+      feather: mask.feather,
+      p1: { x: mask.p1.x, y: mask.p1.y },
+      p2: { x: mask.p2.x, y: mask.p2.y },
+      strokeCount: mask.strokes.length,
+      brushPct: mask.brushPct,
+      adjusted: maskHasAdjustments(mask),
+      local: Object.assign({}, mask.local)
+    };
+  }
+
   function snapshot() {
-    var mask = state.mask;
+    var mask = activeMask();
+    var masks = state.masks.map(serializeMask);
+    var curves = {};
+    CURVE_CHANNELS.forEach(function (ch) {
+      curves[ch.key] = state.curves[ch.key].map(function (p) { return { x: p.x, y: p.y }; });
+    });
     return {
       loaded: state.loaded,
       busy: state.busy,
@@ -2642,19 +3335,15 @@
       backend: state.backendLabel,
       before: state.before,
       adjust: Object.assign({}, state.adjust),
-      local: Object.assign({}, state.local),
-      curve: state.curvePoints.map(function (p) { return { x: p.x, y: p.y }; }),
+      local: mask ? Object.assign({}, mask.local) : defaultLocal(),
+      curves: curves,
+      curve: activeCurvePoints().map(function (p) { return { x: p.x, y: p.y }; }),
+      curveChannel: state.curveChannel,
       curveOn: state.curveOn,
-      mask: {
-        type: mask.type,
-        invert: mask.invert,
-        show: mask.show,
-        feather: mask.feather,
-        p1: { x: mask.p1.x, y: mask.p1.y },
-        p2: { x: mask.p2.x, y: mask.p2.y },
-        strokeCount: mask.strokes.length,
-        brushPct: mask.brushPct
-      },
+      masks: masks,
+      maskCount: state.masks.length,
+      activeMaskId: state.activeMaskId,
+      mask: serializeMask(mask),
       zoom: { mode: state.zoomMode, pct: state.zoomPct },
       lastExport: state.lastExport ? {
         size: state.lastExport.size,
@@ -2680,20 +3369,52 @@
     reset: resetAll,
     setAdjustment: function (key, value) { setAdjustment(key, value, false); },
     setLocalAdjustment: function (key, value) { setAdjustment(key, value, true); },
-    setCurve: setCurvePoints,
+    setCurve: function (points, channel) { setCurvePoints(points, channel); },
+    setCurveChannel: setCurveChannel,
+    getCurves: function () {
+      var out = {};
+      CURVE_CHANNELS.forEach(function (ch) {
+        out[ch.key] = state.curves[ch.key].map(function (p) { return { x: p.x, y: p.y }; });
+      });
+      return out;
+    },
     setMask: function (type, opts) {
+      var mask = activeMask();
+      if (!mask) {
+        if (!type || type === 'none') return null;
+        mask = addMask(type, opts);
+        return serializeMask(mask);
+      }
       setMaskType(type || 'none');
+      mask = activeMask();
+      if (!mask) return null;
       if (opts) {
-        if (opts.invert != null) { state.mask.invert = !!opts.invert; els.maskInvert.checked = !!opts.invert; }
-        if (opts.show != null) { state.mask.show = !!opts.show; els.maskShow.checked = !!opts.show; }
-        if (opts.feather != null) { state.mask.feather = clamp(opts.feather, 0, 1); }
-        if (opts.brushPct != null) { state.mask.brushPct = clamp(Number(opts.brushPct), 1, 24); }
-        if (opts.p1) state.mask.p1 = { x: opts.p1.x, y: opts.p1.y };
-        if (opts.p2) state.mask.p2 = { x: opts.p2.x, y: opts.p2.y };
-        applyMaskUI();
+        applyMaskOptions(mask, opts);
+        if (mask.show) {
+          for (var i = 0; i < state.masks.length; i++) {
+            if (state.masks[i] !== mask) state.masks[i].show = false;
+          }
+        }
+        if (mask.type === 'brush') scheduleMaskBuild(mask);
+        updateMaskUI();
+        updateAdjustOutputs();
+        restoreBaselineIfNeeded();
         scheduleRender();
       }
+      return serializeMask(mask);
     },
+    addMask: function (type, opts) {
+      var m = addMask(type || 'linear', opts);
+      return serializeMask(m);
+    },
+    duplicateMask: function () { return serializeMask(duplicateActiveMask()); },
+    removeMask: function (id) {
+      var removed = id ? removeMaskById(id) : removeActiveMask();
+      return removed ? serializeMask(removed) : null;
+    },
+    setActiveMask: setActiveMask,
+    setMaskEnabled: setMaskEnabled,
+    getMasks: function () { return state.masks.map(serializeMask); },
     getState: snapshot,
     renderNow: renderNow,
     getCanvas: function () { return els.canvas; },

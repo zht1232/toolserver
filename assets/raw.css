@@ -607,6 +607,55 @@
 #raw-root .raw-subhead:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 
 /* ---------- 曲线 ---------- */
+#raw-root .raw-curve-channels {
+  display: flex;
+  gap: 3px;
+  background: var(--raw-panel-3);
+  border: 1px solid var(--raw-line);
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 8px;
+}
+#raw-root .raw-curve-channels button {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--raw-ink-2);
+  font-size: 11.5px;
+  padding: 4px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+#raw-root .raw-curve-channels button:hover { color: var(--raw-ink); }
+#raw-root .raw-curve-channels button.is-active {
+  background: var(--raw-panel);
+  color: var(--raw-ink);
+  font-weight: 600;
+  box-shadow: var(--raw-shadow);
+}
+#raw-root .raw-ch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(22, 34, 30, 0.08);
+}
+#raw-root .raw-ch-dot.is-rgb {
+  background: conic-gradient(#C0392B 0 33%, #1F7A4D 33% 66%, #2F5EB8 66% 100%);
+}
+#raw-root .raw-ch-dot.is-r { background: #C0392B; }
+#raw-root .raw-ch-dot.is-g { background: #1F7A4D; }
+#raw-root .raw-ch-dot.is-b { background: #2F5EB8; }
+#raw-root .raw-curve-channels button[data-curve-channel='r'].is-active { color: #A93226; }
+#raw-root .raw-curve-channels button[data-curve-channel='g'].is-active { color: #186A42; }
+#raw-root .raw-curve-channels button[data-curve-channel='b'].is-active { color: #2A54A4; }
 #raw-root .raw-curve-wrap {
   position: relative;
   border: 1px solid var(--raw-line);
@@ -704,6 +753,130 @@
 #raw-root .raw-mask-note b { color: var(--raw-accent-hi); font-weight: 600; }
 #raw-root .raw-mask-note.is-empty { color: var(--raw-ink-3); }
 #raw-root .raw-local.is-disabled { opacity: 0.5; pointer-events: none; }
+
+#raw-root .raw-mask-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-family: var(--raw-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--raw-ink-3);
+}
+#raw-root .raw-mask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 170px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px;
+  margin-bottom: 8px;
+  background: var(--raw-panel-2);
+  border: 1px solid var(--raw-line);
+  border-radius: 8px;
+  scrollbar-width: thin;
+}
+#raw-root .raw-mask-empty {
+  margin: 5px 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--raw-ink-3);
+  text-align: center;
+}
+#raw-root .raw-mask-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+#raw-root .raw-mask-item.is-active {
+  background: var(--raw-panel);
+  border-color: var(--raw-accent-line);
+  box-shadow: var(--raw-shadow);
+}
+#raw-root .raw-mask-item.is-off { opacity: 0.6; }
+#raw-root .raw-mask-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#raw-root .raw-mask-pick:hover { background: var(--raw-panel-3); }
+#raw-root .raw-mask-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--raw-line-2);
+}
+#raw-root .raw-mask-dot.is-linear { background: linear-gradient(90deg, #0C7A69, #BFE3D8); }
+#raw-root .raw-mask-dot.is-radial {
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #0C7A69 0 34%, #CFE9E0 40% 100%);
+}
+#raw-root .raw-mask-dot.is-brush { background: linear-gradient(135deg, #0C7A69 0 46%, #E2F3ED 46% 100%); }
+#raw-root .raw-mask-dot.is-none { background: transparent; border: 1px dashed var(--raw-line-2); }
+#raw-root .raw-mask-name {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--raw-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+#raw-root .raw-mask-kind {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  color: var(--raw-ink-3);
+}
+#raw-root .raw-mask-badge {
+  flex: none;
+  font-family: var(--raw-mono);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--raw-accent-hi);
+  background: var(--raw-accent-bg);
+  border: 1px solid var(--raw-accent-line);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+#raw-root .raw-mask-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 2px 3px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  color: var(--raw-ink-3);
+  cursor: pointer;
+  user-select: none;
+}
+#raw-root .raw-mask-toggle:hover { background: var(--raw-panel-3); color: var(--raw-ink-2); }
+#raw-root .raw-mask-toggle input { width: 12px; height: 12px; }
+#raw-root .raw-mask-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+#raw-root .raw-mask-list-actions .raw-btn { min-height: 26px; padding: 3px 8px; font-size: 11px; }
 
 /* ---------- 导出 ---------- */
 #raw-root .raw-export-row {
@@ -833,6 +1006,21 @@
   #raw-root .raw-head-actions { width: 100%; justify-content: flex-start; }
   #raw-root .raw-file-name { max-width: 30ch; }
   #raw-root .raw-zoom { display: none; }
+  #raw-root .raw-mask-list {
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 4px 7px;
+    scroll-snap-type: x proximity;
+  }
+  #raw-root .raw-mask-item {
+    flex: 0 0 auto;
+    min-width: 190px;
+    max-width: 250px;
+    scroll-snap-align: start;
+  }
+  #raw-root .raw-mask-name { flex: 1; }
 }
 
 @media (max-width: 560px) {
@@ -853,11 +1041,30 @@
   #raw-root .raw-export-actions .raw-btn { flex: 1; }
   #raw-root .raw-empty { padding: 20px 16px; }
   #raw-root .raw-empty-privacy { display: none; }
+  #raw-root .raw-mask-item { min-width: 172px; }
+  #raw-root .raw-curve-channels button { font-size: 11px; padding-inline: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   #raw-root *, #raw-root *::before, #raw-root *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- Desktop: keep the preview in view while the long control rail scrolls ---------- */
+@media (min-width: 901px) {
+  #raw-root .raw-stage {
+    position: sticky;
+    top: 72px;
+    align-self: start;
+    height: calc(100vh - 88px);
+    min-height: 480px;
+    z-index: 2;
+  }
+  #raw-root .raw-canvas-wrap {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
   }
 }
