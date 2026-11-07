@@ -1732,3 +1732,51 @@
   #raw-root .raw-stage-foot .raw-foot-right { display: none; }
   #raw-root .raw-status-text { max-height: 2.6em; overflow: hidden; }
 }
+
+/* ---------- Mask transform controls (Photoshop-style) ---------- */
+#raw-root .raw-mask-overlay {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+}
+#raw-root .raw-mask-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+#raw-root .raw-mask-handles { position: absolute; inset: 0; pointer-events: none; }
+#raw-root .raw-mask-handle {
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #0C7A69;
+  box-shadow: 0 1px 4px rgba(0,0,0,.38);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+#raw-root .raw-mask-handle:active { cursor: grabbing; }
+#raw-root .raw-mask-handle.is-move { width: 13px; height: 13px; background: #fff; border-color: #0C7A69; }
+#raw-root .raw-mask-handle.is-p1,
+#raw-root .raw-mask-handle.is-p2 { background: #fff; border-color: #0C7A69; cursor: crosshair; }
+#raw-root .raw-mask-handle.is-rx,
+#raw-root .raw-mask-handle.is-ry { cursor: ew-resize; }
+#raw-root .raw-mask-handle.is-ry { cursor: ns-resize; }
+#raw-root .raw-mask-handle.is-rotate {
+  width: 17px; height: 17px;
+  background: #fff; color: #0C7A69;
+  border-color: #0C7A69;
+  cursor: alias;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; line-height: 1;
+}
+@media (max-width: 560px) {
+  #raw-root .raw-mask-handle { width: 18px; height: 18px; }
+  #raw-root .raw-mask-handle.is-move { width: 16px; height: 16px; }
+  #raw-root .raw-mask-handle.is-rotate { width: 20px; height: 20px; font-size: 12px; }
+}

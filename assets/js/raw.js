@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.4.1';
+  var VERSION = '1.4.2';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -1253,6 +1253,10 @@
               '<span class="raw-empty-privacy">' + icon('lock') + '图片不上传，无服务器请求</span>' +
             '</div>' +
             '<canvas id="raw-canvas" class="is-hidden" aria-label="RAW 预览画布"></canvas>' +
+            '<div class="raw-mask-overlay" id="raw-mask-overlay" hidden aria-hidden="true">' +
+              '<svg class="raw-mask-svg" id="raw-mask-svg" aria-hidden="true"></svg>' +
+              '<div class="raw-mask-handles" id="raw-mask-handles"></div>' +
+            '</div>' +
             '<div class="raw-busy-overlay" id="raw-busy" hidden>' +
               '<span class="raw-spinner"></span><b id="raw-busy-title">正在载入</b>' +
               '<span id="raw-busy-sub">大文件解码可能需要数秒，请保持此页打开。</span>' +
@@ -1541,6 +1545,7 @@
               '<div class="raw-mask-actions">' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-invert">反转</label>' +
                 '<label class="raw-check"><input type="checkbox" id="raw-mask-show">显示蒙版</label>' +
+                '<label class="raw-check" title="线性/径向蒙版在画面上显示可拖动的手柄"><input type="checkbox" id="raw-mask-controls" checked>控件</label>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-clear">清除笔画 / 范围</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="mask-ai-refresh" id="raw-mask-ai-refresh" hidden>' + icon('wand') + '重新识别</button>' +
               '</div>' +
@@ -1661,6 +1666,7 @@
     if (opts.rangeHi != null) mask.rangeHi = clamp(Number(opts.rangeHi), 0, 100);
     if (opts.rangeFeather != null) mask.rangeFeather = clamp(Number(opts.rangeFeather), 0, 100);
     if (opts.rangeTolerance != null) mask.rangeTolerance = clamp(Number(opts.rangeTolerance), 0, 100);
+    if (opts.radialAngle != null) mask.radialAngle = clamp(Number(opts.radialAngle), -180, 180);
     if (Array.isArray(opts.rangeColor)) {
       mask.rangeColor = opts.rangeColor.slice(0, 3).map(function (v) { return clamp(Number(v), 0, 1); });
     }
@@ -1672,7 +1678,7 @@
         var rx = Math.max(0.002, Math.abs(Number(opts.p2.x) || 0.28));
         var ry = Math.max(0.002, Math.abs(Number(opts.p2.y) || 0.28));
         mask.p2 = { x: rx, y: ry };
-        mask.radialMat = canonicalRadialMatrix(map, rx, ry);
+        mask.radialMat = canonicalRadialMatrix(map, rx, ry, mask.radialAngle || 0);
       } else {
         mask.p2 = mapPointToCanonical(map, opts.p2);
       }
@@ -1702,7 +1708,8 @@
     mask.p1 = mapPointToCanonical(map, geo.p1);
     if (mask.type === 'radial') {
       mask.p2 = { x: geo.p2.x, y: geo.p2.y };
-      mask.radialMat = canonicalRadialMatrix(map, geo.p2.x, geo.p2.y);
+      mask.radialAngle = 0;
+      mask.radialMat = canonicalRadialMatrix(map, geo.p2.x, geo.p2.y, 0);
     } else {
       mask.p2 = mapPointToCanonical(map, geo.p2);
       mask.radialMat = null;
@@ -1725,6 +1732,7 @@
       p1: geo.p1,
       p2: geo.p2,
       radialMat: null,
+      radialAngle: 0,
       strokes: [],
       brushPct: 8,
       brushMode: 'add',
@@ -1986,6 +1994,10 @@
       maskNote: $('#raw-mask-note', root),
       maskInvert: $('#raw-mask-invert', root),
       maskShow: $('#raw-mask-show', root),
+      maskControls: $('#raw-mask-controls', root),
+      maskOverlay: $('#raw-mask-overlay', root),
+      maskSvg: $('#raw-mask-svg', root),
+      maskHandles: $('#raw-mask-handles', root),
       maskFeather: $('#raw-mask-feather', root),
       maskFeatherV: $('#raw-mask-feather-v', root),
       brushRow: $('#raw-brush-size-row', root),
@@ -2744,6 +2756,7 @@
       p1: { x: mask.p1.x, y: mask.p1.y },
       p2: { x: mask.p2.x, y: mask.p2.y },
       radialMat: mask.radialMat ? mask.radialMat.slice() : null,
+      radialAngle: mask.radialAngle || 0,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
       rangeMode: mask.rangeMode || 'luma',
@@ -2951,6 +2964,7 @@
         p2: { x: clamp(Number(m.p2 && m.p2.x), 0, 1), y: clamp(Number(m.p2 && m.p2.y), 0, 1) },
         radialMat: Array.isArray(m.radialMat) && m.radialMat.length === 4
           ? m.radialMat.map(Number) : null,
+        radialAngle: clamp(Number(m.radialAngle) || 0, -180, 180),
         strokes: (m.strokes || []).map(function (stroke) {
           return {
             radius: Number(stroke.radius) || 0.04,
@@ -3037,6 +3051,7 @@
     if (!renderer || !state.preview) return;
     try {
       renderer.render(renderParams(false));
+      syncMaskOverlay();
       scheduleLiveHistogram();
     } catch (e) {
       console.error('[raw] render failed', e);
@@ -4166,9 +4181,15 @@
   }
 
   // D_c 为原始坐标下的椭圆基；渲染时先用 L2 变换到输出坐标再求逆。
-  function canonicalRadialMatrix(map, radiusX, radiusY) {
-    return mat2Mul(mat2Inv(map.L2),
-      [Math.max(0.002, radiusX), 0, 0, Math.max(0.002, radiusY)]);
+  function canonicalRadialMatrix(map, radiusX, radiusY, angle) {
+    var rx = Math.max(0.002, radiusX);
+    var ry = Math.max(0.002, radiusY);
+    var rad = (Number(angle) || 0) * Math.PI / 180;
+    var c = Math.cos(rad), sn = Math.sin(rad);
+    // 输出空间先旋转再缩放；逆变换得到椭圆边界，着色器使用其逆矩阵。
+    var rot = [c, sn, -sn, c];
+    var scaled = mat2Mul(rot, [rx, 0, 0, ry]);
+    return mat2Mul(mat2Inv(map.L2), scaled);
   }
 
   function outputRadialMatrix(map, radialMat) {
@@ -4754,6 +4775,9 @@
       els.maskFeather.value = '0';
       els.maskFeatherV.textContent = '0';
     }
+    var hasShapeControls = !!mask && (mask.type === 'linear' || mask.type === 'radial');
+    var controlsLabel = els.maskControls ? els.maskControls.closest('.raw-check') : null;
+    if (controlsLabel) controlsLabel.hidden = !hasShapeControls;
     var textured = !!mask && isTexturedMaskType(mask.type);
     els.brushRow.hidden = !textured;
     if (els.brushExtra) els.brushExtra.hidden = !textured;
@@ -4784,9 +4808,9 @@
     } else if (!hasMask) {
       els.maskNote.innerHTML = '当前蒙版类型为“无”。选择线性、径向、画笔或 AI 主体 / AI 天空后即可建立范围。';
     } else if (mask.type === 'linear') {
-      els.maskNote.innerHTML = '<b>线性渐变</b>：在画面上从起点拖到终点，<b>终点一侧</b>为蒙版内；多个蒙版按列表顺序叠加。';
+      els.maskNote.innerHTML = '<b>线性渐变</b>：画面上的中心手柄移动整体，两个端点手柄改变方向和范围；也可以关闭“控件”后按旧方式拖动。';
     } else if (mask.type === 'radial') {
-      els.maskNote.innerHTML = '<b>径向渐变</b>：从中心向外拖动改变椭圆范围；勾选“显示蒙版”可检查当前活动蒙版的覆盖区域。';
+      els.maskNote.innerHTML = '<b>径向渐变</b>：中心手柄移动，右侧/下方手柄调整半径，顶部旋转手柄改变角度；勾选“显示蒙版”可检查覆盖。';
     } else if (mask.type === 'sky') {
       els.maskNote.innerHTML = '<b>AI 天空</b>：优先使用本地 ADE20K 语义分割模型识别天空；模型不可用时回退到颜色/连通域识别。复杂边缘可用画笔修整，勾选“显示蒙版”检查覆盖。';
     } else if (mask.type === 'subject') {
@@ -4800,6 +4824,7 @@
       els.exportSum.textContent = els.exportFormat.value === 'image/png' ? 'PNG' : 'JPEG';
     }
     updateAIModelUI();
+    syncMaskOverlay();
   }
 
   function setMaskType(type) {
@@ -4936,6 +4961,7 @@
     copy.p1 = { x: src.p1.x, y: src.p1.y };
     copy.p2 = { x: src.p2.x, y: src.p2.y };
     copy.radialMat = src.radialMat ? src.radialMat.slice() : null;
+    copy.radialAngle = src.radialAngle || 0;
     copy.brushPct = src.brushPct;
     copy.brushMode = src.brushMode || 'add';
     copy.rangeMode = src.rangeMode;
@@ -5980,6 +6006,200 @@
     };
   }
 
+  function maskControlsEnabled() {
+    return !els.maskControls || els.maskControls.checked;
+  }
+
+  function hideMaskOverlay() {
+    if (els.maskOverlay) els.maskOverlay.hidden = true;
+  }
+
+  function maskOutputPoint(map, p) {
+    var o = mapPointToOutput(map, p);
+    if (geometryHasPerspective()) o = perspectiveSourceToOutputUV(o);
+    return o;
+  }
+
+  function syncMaskOverlay() {
+    if (!els.maskOverlay || !els.maskSvg || !els.maskHandles || !els.canvas || !els.drop || !state.loaded) {
+      hideMaskOverlay();
+      return;
+    }
+    var mask = activeMask();
+    if (!mask || (mask.type !== 'linear' && mask.type !== 'radial') || !mask.enabled ||
+        state.cropEditing || state.before || !maskControlsEnabled()) {
+      hideMaskOverlay();
+      return;
+    }
+    var cr = els.canvas.getBoundingClientRect();
+    var wr = els.drop.getBoundingClientRect();
+    var cw = Math.max(1, cr.width);
+    var ch = Math.max(1, cr.height);
+    if (!cw || !ch || els.canvas.classList.contains('is-hidden')) {
+      hideMaskOverlay();
+      return;
+    }
+    var overlay = els.maskOverlay;
+    overlay.hidden = false;
+    overlay.style.left = Math.round(cr.left - wr.left + els.drop.scrollLeft) + 'px';
+    overlay.style.top = Math.round(cr.top - wr.top + els.drop.scrollTop) + 'px';
+    overlay.style.width = cw + 'px';
+    overlay.style.height = ch + 'px';
+    els.maskSvg.setAttribute('width', cw);
+    els.maskSvg.setAttribute('height', ch);
+
+    var map = geometryMap();
+    var svg = [];
+    var handles = [];
+
+    function pointHTML(x, y) {
+      return 'left:' + x.toFixed(1) + 'px;top:' + y.toFixed(1) + 'px;';
+    }
+    function handleHTML(kind, x, y, title, text) {
+      return '<div class="raw-mask-handle is-' + kind + '" data-mask-handle="' + kind + '" style="' +
+        pointHTML(x, y) + '" title="' + title + '" aria-label="' + title + '">' + (text || '') + '</div>';
+    }
+    function line(x1, y1, x2, y2) {
+      return '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) +
+        '" y2="' + y2.toFixed(1) + '" />';
+    }
+
+    if (mask.type === 'linear') {
+      var a = maskOutputPoint(map, mask.p1);
+      var b = maskOutputPoint(map, mask.p2);
+      var ax = a.x * cw, ay = a.y * ch, bx = b.x * cw, by = b.y * ch;
+      var mx = (ax + bx) * 0.5, my = (ay + by) * 0.5;
+      svg.push('<g fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+        '<g stroke="#FFFFFF" stroke-width="3.5">' +
+          line(ax, ay, bx, by) +
+        '</g>' +
+        '<g stroke="#0C7A69" stroke-width="1.6" stroke-dasharray="5 4">' +
+          line(ax, ay, bx, by) +
+        '</g>' +
+      '</g>');
+      handles.push(handleHTML('p1', ax, ay, '拖动起点：改变方向/范围'));
+      handles.push(handleHTML('p2', bx, by, '拖动终点：改变方向/范围'));
+      handles.push(handleHTML('move', mx, my, '拖动中心：移动整个线性蒙版'));
+    } else if (mask.type === 'radial') {
+      var center = maskOutputPoint(map, mask.p1);
+      var outMat = outputRadialMatrix(map, mask.radialMat);
+      function ellipsePoint(lx, ly) {
+        var off = {
+          x: outMat[0] * lx + outMat[2] * ly,
+          y: outMat[1] * lx + outMat[3] * ly
+        };
+        var base = { x: center.x + off.x, y: center.y + off.y };
+        var q = geometryHasPerspective() ? perspectiveSourceToOutputUV(base) : base;
+        return { x: q.x * cw, y: q.y * ch };
+      }
+      var points = [];
+      for (var i = 0; i < 72; i++) {
+        var ang = i / 72 * Math.PI * 2;
+        var ep = ellipsePoint(Math.cos(ang), Math.sin(ang));
+        points.push(ep.x.toFixed(1) + ',' + ep.y.toFixed(1));
+      }
+      var cx = center.x * cw, cy = center.y * ch;
+      var right = ellipsePoint(1, 0);
+      var bottom = ellipsePoint(0, 1);
+      var rotate = ellipsePoint(0, -1.35);
+      svg.push('<g fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+        '<polygon points="' + points.join(' ') + '" stroke="#FFFFFF" stroke-width="3.5" />' +
+        '<polygon points="' + points.join(' ') + '" stroke="#0C7A69" stroke-width="1.6" stroke-dasharray="5 4" />' +
+        '<line x1="' + cx.toFixed(1) + '" y1="' + cy.toFixed(1) + '" x2="' + rotate.x.toFixed(1) +
+          '" y2="' + rotate.y.toFixed(1) + '" stroke="#FFFFFF" stroke-width="3" />' +
+        '<line x1="' + cx.toFixed(1) + '" y1="' + cy.toFixed(1) + '" x2="' + rotate.x.toFixed(1) +
+          '" y2="' + rotate.y.toFixed(1) + '" stroke="#0C7A69" stroke-width="1.3" stroke-dasharray="4 4" />' +
+      '</g>');
+      handles.push(handleHTML('move', cx, cy, '拖动中心：移动整个径向蒙版'));
+      handles.push(handleHTML('rx', right.x, right.y, '拖动：调整水平半径'));
+      handles.push(handleHTML('ry', bottom.x, bottom.y, '拖动：调整垂直半径'));
+      handles.push(handleHTML('rotate', rotate.x, rotate.y, '拖动：旋转椭圆', '↻'));
+    }
+
+    els.maskSvg.innerHTML = svg.join('');
+    els.maskHandles.innerHTML = handles.join('');
+  }
+
+  function startMaskHandleDrag(e) {
+    var handle = e.target && e.target.closest ? e.target.closest('[data-mask-handle]') : null;
+    if (!handle) return;
+    var mask = activeMask();
+    if (!mask || (mask.type !== 'linear' && mask.type !== 'radial') || state.cropEditing || state.before) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var uv = canvasUV(e);
+    var map = geometryMap();
+    var c = mapPointToCanonical(map, uv);
+    mask.dragMode = 'handle';
+    mask._handle = handle.getAttribute('data-mask-handle');
+    mask._handleStart = c;
+    mask._startP1 = { x: mask.p1.x, y: mask.p1.y };
+    mask._startP2 = { x: mask.p2.x, y: mask.p2.y };
+    mask._startAngle = mask.radialAngle || 0;
+    markHistory('调整蒙版控件');
+    document.addEventListener('pointermove', onMaskHandleMove);
+    document.addEventListener('pointerup', onMaskHandleUp, { once: true });
+    document.addEventListener('pointercancel', onMaskHandleUp, { once: true });
+  }
+
+  function onMaskHandleMove(e) {
+    var mask = activeMask();
+    if (!mask || mask.dragMode !== 'handle') return;
+    e.preventDefault();
+    var uv = canvasUV(e);
+    var map = geometryMap();
+    var c = mapPointToCanonical(map, uv);
+    var handle = mask._handle || '';
+    if (mask.type === 'linear') {
+      if (handle === 'p1') {
+        mask.p1 = c;
+      } else if (handle === 'p2') {
+        mask.p2 = c;
+      } else if (handle === 'move') {
+        var dx = c.x - mask._handleStart.x;
+        var dy = c.y - mask._handleStart.y;
+        mask.p1 = { x: clamp(mask._startP1.x + dx, 0, 1), y: clamp(mask._startP1.y + dy, 0, 1) };
+        mask.p2 = { x: clamp(mask._startP2.x + dx, 0, 1), y: clamp(mask._startP2.y + dy, 0, 1) };
+      }
+      mask.radialMat = null;
+    } else if (mask.type === 'radial') {
+      if (handle === 'move') {
+        var rdx = c.x - mask._handleStart.x;
+        var rdy = c.y - mask._handleStart.y;
+        mask.p1 = { x: clamp(mask._startP1.x + rdx, 0, 1), y: clamp(mask._startP1.y + rdy, 0, 1) };
+      } else if (handle === 'rx' || handle === 'ry') {
+        var angle = (mask._startAngle || 0) * Math.PI / 180;
+        var dxr = c.x - mask.p1.x;
+        var dyr = c.y - mask.p1.y;
+        var lx = dxr * Math.cos(angle) + dyr * Math.sin(angle);
+        var ly = -dxr * Math.sin(angle) + dyr * Math.cos(angle);
+        if (handle === 'rx') mask.p2.x = clamp(Math.abs(lx), 0.01, 0.95);
+        else mask.p2.y = clamp(Math.abs(ly), 0.01, 0.95);
+      } else if (handle === 'rotate') {
+        var deg = Math.atan2(c.y - mask.p1.y, c.x - mask.p1.x) * 180 / Math.PI + 90;
+        mask.radialAngle = ((deg + 180) % 360 + 360) % 360 - 180;
+      }
+      mask.radialMat = canonicalRadialMatrix(map, mask.p2.x, mask.p2.y, mask.radialAngle || 0);
+    }
+    scheduleRender();
+    syncMaskOverlay();
+  }
+
+  function onMaskHandleUp() {
+    document.removeEventListener('pointermove', onMaskHandleMove);
+    var mask = activeMask();
+    if (mask && mask.dragMode === 'handle') {
+      mask.dragMode = '';
+      mask._handle = '';
+      mask._handleStart = null;
+      mask._startP1 = null;
+      mask._startP2 = null;
+      historyTouch('调整蒙版控件');
+      scheduleRender();
+      syncMaskOverlay();
+    }
+  }
+
   function onCanvasPointerDown(e) {
     if (state.loaded && !state.cropEditing && state.pickMode && !state.before) {
       e.preventDefault();
@@ -5988,6 +6208,7 @@
     }
     var mask = activeMask();
     if (!state.loaded || state.cropEditing || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
+    if ((mask.type === 'linear' || mask.type === 'radial') && maskControlsEnabled()) return;
     e.preventDefault();
     var uv = canvasUV(e);
     var map = geometryMap();
@@ -6048,7 +6269,7 @@
       if (Math.hypot(rx, ry) > 0.004) {
         mask.p1 = mask._start;
         mask.p2 = { x: Math.max(0.01, rx), y: Math.max(0.01, ry) };
-        mask.radialMat = canonicalRadialMatrix(map, mask.p2.x, mask.p2.y);
+        mask.radialMat = canonicalRadialMatrix(map, mask.p2.x, mask.p2.y, mask.radialAngle || 0);
         mask._moved = true;
         scheduleRender();
       }
@@ -6066,7 +6287,8 @@
     } else if (mask.dragMode === 'radial' && !mask._moved) {
       var map = geometryMap();
       mask.p2 = { x: 0.28, y: 0.28 };
-      mask.radialMat = canonicalRadialMatrix(map, 0.28, 0.28);
+      mask.radialAngle = 0;
+      mask.radialMat = canonicalRadialMatrix(map, 0.28, 0.28, 0);
       scheduleRender();
     }
     mask.dragMode = '';
@@ -6100,6 +6322,7 @@
     els.zoomVal.textContent = state.zoomMode === 'fit' ? '适应 ' + pct + '%' : pct + '%';
     if (state.zoomMode !== 'fit') els.zoom.value = String(clamp(pct, 25, 200));
     if (state.cropEditing) syncCropOverlay();
+    syncMaskOverlay();
   }
 
   function setZoomPct(pct) {
@@ -7452,6 +7675,12 @@
       markHistory('反转蒙版');
       scheduleRender();
     });
+    if (els.maskOverlay) {
+      els.maskOverlay.addEventListener('pointerdown', startMaskHandleDrag);
+    }
+    if (els.maskControls) {
+      els.maskControls.addEventListener('change', function () { syncMaskOverlay(); });
+    }
     els.maskShow.addEventListener('change', function () {
       var mask = activeMask();
       if (!mask) return;
@@ -7524,6 +7753,7 @@
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(function () {
         if (state.zoomMode === 'fit') applyZoom();
+        else syncMaskOverlay();
       });
       resizeObserver.observe(els.drop);
     } else {
@@ -7564,6 +7794,7 @@
       p1: { x: mask.p1.x, y: mask.p1.y },
       p2: { x: mask.p2.x, y: mask.p2.y },
       radialMat: mask.radialMat ? mask.radialMat.slice() : null,
+      radialAngle: mask.radialAngle || 0,
       strokeCount: mask.strokes.length,
       brushPct: mask.brushPct,
       brushMode: mask.brushMode || 'add',
