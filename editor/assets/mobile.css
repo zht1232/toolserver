@@ -1,0 +1,73 @@
+/* LOCALTOOLS · 专业修图手机竖屏增强（覆盖编译产物，仅 <=640px 生效）
+   不改动 Vue 逻辑，只调整触摸目标、滚动行为与底部面板布局。 */
+@media (width<=640px) {
+  /* 画布绘制手势交给应用，避免浏览器滚动/双指缩放抢走笔触 */
+  #app .canvas-wrapper,
+  #app .canvas-wrapper canvas,
+  #app .document-container {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* 工具条：横向滑动切换工具，隐藏滚动条，放大点击目标 */
+  #app .tool-groups {
+    touch-action: pan-x;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    align-items: center;
+  }
+  #app .tool-groups::-webkit-scrollbar { display: none; height: 0; }
+  #app .tool-button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  #app .tool-button img { width: 30px; height: 30px; }
+
+  /* 收起态底部面板：两个标签并排成一条 46px  tab 栏，
+     与画布预留的底部空间对齐，不再叠成两行遮挡画布 */
+  #app .panels.collapsed {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    height: 46px;
+    max-height: 46px;
+    overflow: hidden;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  #app .panels.collapsed .tool-options-panel,
+  #app .panels.collapsed .layer-panel {
+    position: static;
+    top: auto;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    flex: 1 1 50%;
+    width: 50%;
+    height: 46px;
+    min-height: 0;
+    margin: 0;
+  }
+  #app .panels.collapsed .component__header {
+    height: 46px;
+    display: flex;
+    align-items: center;
+  }
+  #app .panels.collapsed .component__header-button {
+    min-width: 34px;
+    min-height: 34px;
+  }
+
+  /* 展开态保持应用原有的纵向堆叠 + 滚动，仅保证触摸滚动顺滑 */
+  #app .panels:not(.collapsed) {
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* 顶部菜单与全屏按钮的点击区域 */
+  #app .menu .toggle,
+  #app .fullscreen-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.4.3';
+  var VERSION = '1.5.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -68,7 +68,9 @@
     flip: '<path d="M12 3v18"/><path d="M8 6 3 12l5 6Z"/><path d="m16 6 5 6-5 6Z"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/>',
     lens: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M4.5 7.5h3M16.5 16.5h3"/>',
-    wand: '<path d="m4 20 11-11"/><path d="m14 4 .8 2.2L17 7l-2.2.8L14 10l-.8-2.2L11 7l2.2-.8Z"/><path d="m19 12 .6 1.4L21 14l-1.4.6L19 16l-.6-1.4L17 14l1.4-.6Z"/>'
+    wand: '<path d="m4 20 11-11"/><path d="m14 4 .8 2.2L17 7l-2.2.8L14 10l-.8-2.2L11 7l2.2-.8Z"/><path d="m19 12 .6 1.4L21 14l-1.4.6L19 16l-.6-1.4L17 14l1.4-.6Z"/>',
+    heal: '<path d="M8.5 3.5h7a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2Z"/><path d="M6.5 9.5h11M6.5 14.5h11"/><circle cx="10.5" cy="12" r=".7" fill="currentColor" stroke="none"/><circle cx="13.5" cy="12" r=".7" fill="currentColor" stroke="none"/>',
+    stamp: '<path d="M9 3h6l-1 7h3a2 2 0 0 1 2 2v3H5v-3a2 2 0 0 1 2-2h3Z"/><path d="M5 18h14v3H5Z"/>'
   };
 
   function icon(name) {
@@ -1253,6 +1255,9 @@
               '<span class="raw-empty-privacy">' + icon('lock') + '图片不上传，无服务器请求</span>' +
             '</div>' +
             '<canvas id="raw-canvas" class="is-hidden" aria-label="RAW 预览画布"></canvas>' +
+            '<canvas id="raw-heal-layer" class="raw-heal-layer" hidden aria-hidden="true"></canvas>' +
+            '<div class="raw-retouch-cursor" id="raw-retouch-cursor" hidden aria-hidden="true"></div>' +
+            '<div class="raw-retouch-source" id="raw-retouch-source-marker" hidden aria-hidden="true"></div>' +
             '<div class="raw-mask-overlay" id="raw-mask-overlay" hidden aria-hidden="true">' +
               '<svg class="raw-mask-svg" id="raw-mask-svg" aria-hidden="true"></svg>' +
               '<div class="raw-mask-handles" id="raw-mask-handles"></div>' +
@@ -1571,6 +1576,30 @@
             '</div>' +
           '</details>' +
 
+          '<details class="raw-group" id="raw-retouch-group">' +
+            '<summary>' + icon('heal') + '<span>修复 / 仿制</span><span class="raw-sum-meta" id="raw-retouch-sum">关闭</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<div class="raw-seg" id="raw-retouch-mode" role="group" aria-label="修复模式">' +
+                '<button type="button" data-retouch-mode="heal" class="is-active">污点修复</button>' +
+                '<button type="button" data-retouch-mode="clone">' + icon('stamp') + '仿制图章</button>' +
+              '</div>' +
+              '<div class="raw-retouch-actions">' +
+                '<button type="button" class="raw-btn tiny primary" data-act="retouch-arm" id="raw-retouch-arm">启用画笔</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="retouch-source" id="raw-retouch-source" hidden>设采样点</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="retouch-undo">撤销笔画</button>' +
+                '<button type="button" class="raw-btn tiny" data-act="retouch-clear">清空</button>' +
+              '</div>' +
+              '<div class="raw-slider"><label for="raw-retouch-size">大小</label>' +
+                '<input id="raw-retouch-size" type="range" min="1" max="30" step="1" value="6">' +
+                '<output for="raw-retouch-size" id="raw-retouch-size-v">6%</output></div>' +
+              '<div class="raw-slider"><label for="raw-retouch-hardness">硬度</label>' +
+                '<input id="raw-retouch-hardness" type="range" min="0" max="100" step="1" value="50">' +
+                '<output for="raw-retouch-hardness" id="raw-retouch-hardness-v">50</output></div>' +
+              '<p class="raw-group-hint" id="raw-retouch-hint" style="margin:6px 0 0;font-size:10.5px;color:var(--raw-ink-3)">污点修复：启用后在瑕疵上涂抹，自动取周围纹理并融合颜色。仿制图章：先“设采样点”（或按住 Alt 点击画面），再涂抹复制该处纹理。修复作用于当前构图，改变裁剪 / 旋转会清除笔画。</p>' +
+            '</div>' +
+          '</details>' +
+
           '<details class="raw-group" open>' +
             '<summary>' + icon('download') + '<span>导出</span><span class="raw-sum-meta" id="raw-export-sum">JPEG</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
@@ -1800,6 +1829,7 @@
       zoomMode: 'fit',
       zoomPct: 100,
       pickMode: '',
+      retouch: defaultRetouch(),
       lastExport: null,
       loadSeq: 0
     };
@@ -2007,6 +2037,19 @@
       brushMode: $('#raw-brush-mode', root),
       localSliders: $('#raw-local-sliders', root),
       localScope: $('#raw-local-scope', root),
+      healLayer: $('#raw-heal-layer', root),
+      retouchCursor: $('#raw-retouch-cursor', root),
+      retouchSourceMarker: $('#raw-retouch-source-marker', root),
+      retouchGroup: $('#raw-retouch-group', root),
+      retouchMode: $('#raw-retouch-mode', root),
+      retouchArm: $('#raw-retouch-arm', root),
+      retouchSourceBtn: $('#raw-retouch-source', root),
+      retouchSize: $('#raw-retouch-size', root),
+      retouchSizeV: $('#raw-retouch-size-v', root),
+      retouchHardness: $('#raw-retouch-hardness', root),
+      retouchHardnessV: $('#raw-retouch-hardness-v', root),
+      retouchSum: $('#raw-retouch-sum', root),
+      retouchHint: $('#raw-retouch-hint', root),
       exportFormat: $('#raw-export-format', root),
       exportQuality: $('#raw-quality', root),
       qualityRow: $('#raw-quality-row', root),
@@ -2058,6 +2101,7 @@
     bindEvents();
     initCurveEditor();
     updateMaskUI();
+    updateRetouchUI();
     updateAdjustOutputs();
     updateParamCurveUI();
     updateColorUI();
@@ -2212,6 +2256,8 @@
       state.curveOn = false;
       state.curveDragging = -1;
       state.geometry = defaultGeometry();
+      state.retouch = defaultRetouch();
+      els.canvas.classList.remove('is-retouching');
       var freshMask = createMask('linear');
       state.masks = [freshMask];
       state.activeMaskId = freshMask.id;
@@ -2791,7 +2837,8 @@
       gradeRange: state.gradeRange,
       curveChannel: state.curveChannel,
       geometry: cloneGeometry(state.geometry),
-      masks: state.masks.map(cloneHistoryMask)
+      masks: state.masks.map(cloneHistoryMask),
+      retouch: cloneRetouchData(state.retouch)
     });
   }
 
@@ -2998,6 +3045,16 @@
         (activeMaskAfterRestore.type === 'linear' || activeMaskAfterRestore.type === 'radial')) {
       activeMaskAfterRestore.show = true;
     }
+    var rtSnap = snap.retouch || {};
+    state.retouch.mode = rtSnap.mode === 'clone' ? 'clone' : 'heal';
+    state.retouch.sizePct = clamp(Number(rtSnap.sizePct) || 6, 1, 30);
+    state.retouch.hardness = clamp(rtSnap.hardness == null ? 50 : Number(rtSnap.hardness), 0, 100);
+    state.retouch.source = rtSnap.source
+      ? { x: clamp(Number(rtSnap.source.x), 0, 1), y: clamp(Number(rtSnap.source.y), 0, 1) } : null;
+    state.retouch.strokes = (rtSnap.strokes || []).map(cloneRetouchStroke);
+    state.retouch.current = null;
+    state.retouch.dragging = false;
+    state.retouch.picking = false;
     ALL_ADJUSTMENTS.forEach(function (d) {
       var input = root.querySelector('[data-adj="' + d.key + '"]');
       if (input) input.value = String(state.adjust[d.key]);
@@ -3010,6 +3067,7 @@
     updateCurveLut(false);
     updateMaskUI();
     updateGeometryUI();
+    updateRetouchUI();
     refreshAllMaskTextures();
     applyZoom();
     updateFootRight();
@@ -3057,6 +3115,7 @@
     try {
       renderer.render(renderParams(false));
       syncMaskOverlay();
+      applyRetouchPreview();
       scheduleLiveHistogram();
     } catch (e) {
       console.error('[raw] render failed', e);
@@ -4231,6 +4290,7 @@
 
   function rebuildRenderSource(opts) {
     if (!state.previewCanvas) return;
+    clearRetouchForGeometry();
     applyGeometrySource();
     if (opts && opts.fit) state.zoomMode = 'fit';
     refreshAllMaskTextures(!!(opts && opts.deferSmart));
@@ -6038,7 +6098,7 @@
     }
     var mask = activeMask();
     if (!mask || (mask.type !== 'linear' && mask.type !== 'radial') || !mask.enabled ||
-        state.cropEditing || state.before || !maskControlsEnabled()) {
+        state.cropEditing || state.before || state.retouch.active || !maskControlsEnabled()) {
       hideMaskOverlay();
       return;
     }
@@ -6217,6 +6277,11 @@
       handleCanvasPick(canvasUV(e));
       return;
     }
+    if (state.retouch.active && state.loaded && !state.cropEditing && !state.before) {
+      e.preventDefault();
+      retouchPointerDown(e);
+      return;
+    }
     var mask = activeMask();
     if (!state.loaded || state.cropEditing || !mask || mask.type === 'none' || !mask.enabled || state.before) return;
     if ((mask.type === 'linear' || mask.type === 'radial') && maskControlsEnabled()) return;
@@ -6252,6 +6317,7 @@
   }
 
   function onCanvasPointerMove(e) {
+    if (state.retouch.dragging) { retouchPointerMove(e); return; }
     var mask = activeMask();
     if (!mask || !mask.dragMode) return;
     var uv = canvasUV(e);
@@ -6288,6 +6354,7 @@
   }
 
   function onCanvasPointerUp(e) {
+    if (state.retouch.dragging) { retouchPointerUp(e); return; }
     var mask = activeMask();
     if (!mask || !mask.dragMode) return;
     if (mask.dragMode === 'brush') {
@@ -6308,6 +6375,411 @@
     updateMaskUI();
     if (mask.type === 'linear' || mask.type === 'radial') historyTouch('调整蒙版范围');
     try { els.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 污点修复 / 仿制图章
+   * ------------------------------------------------------------------ */
+
+  function defaultRetouch() {
+    return {
+      active: false,
+      mode: 'heal',
+      sizePct: 6,
+      hardness: 50,
+      source: null,
+      picking: false,
+      dragging: false,
+      current: null,
+      strokes: []
+    };
+  }
+
+  function cloneRetouchStroke(s) {
+    return {
+      mode: s.mode === 'clone' ? 'clone' : 'heal',
+      radius: Number(s.radius) || 0.03,
+      hardness: clamp(Number(s.hardness), 0, 1),
+      offset: { dx: Number(s.offset && s.offset.dx) || 0, dy: Number(s.offset && s.offset.dy) || 0 },
+      points: (s.points || []).map(function (p) { return { x: Number(p.x) || 0, y: Number(p.y) || 0 }; })
+    };
+  }
+
+  function cloneRetouchData(rt) {
+    rt = rt || defaultRetouch();
+    return {
+      mode: rt.mode === 'clone' ? 'clone' : 'heal',
+      sizePct: clamp(Number(rt.sizePct) || 6, 1, 30),
+      hardness: clamp(Number(rt.hardness), 0, 100),
+      source: rt.source ? { x: Number(rt.source.x) || 0, y: Number(rt.source.y) || 0 } : null,
+      strokes: (rt.strokes || []).map(cloneRetouchStroke)
+    };
+  }
+
+  var retouchBaseCanvas = null;
+  var retouchPatch = null;
+
+  function retouchStrokeList() {
+    var list = state.retouch.strokes.slice();
+    if (state.retouch.current) list.push(state.retouch.current);
+    return list;
+  }
+
+  function retouchRadiusUV() {
+    return clamp(Number(state.retouch.sizePct) || 6, 1, 30) / 200;
+  }
+
+  function chooseHealOffset(uv) {
+    var mag = retouchRadiusUV() * 2.6;
+    var dx = (uv.x + mag > 0.97) ? -mag : mag;
+    return { dx: dx, dy: 0 };
+  }
+
+  function ringMean(base, w, h, cx, cy, rad) {
+    var sums = [0, 0, 0];
+    for (var k = 0; k < 24; k++) {
+      var a = k / 24 * Math.PI * 2;
+      var x = clamp(Math.round(cx + Math.cos(a) * rad), 0, w - 1);
+      var y = clamp(Math.round(cy + Math.sin(a) * rad), 0, h - 1);
+      var o = (y * w + x) * 4;
+      sums[0] += base[o]; sums[1] += base[o + 1]; sums[2] += base[o + 2];
+    }
+    return [sums[0] / 24, sums[1] / 24, sums[2] / 24];
+  }
+
+  function patchMean(base, w, h, cx, cy, rad) {
+    var sums = [0, 0, 0], n = 0;
+    var step = Math.max(1, Math.round(rad / 4));
+    for (var y = -rad; y <= rad; y += step) {
+      for (var x = -rad; x <= rad; x += step) {
+        if (x * x + y * y > rad * rad) continue;
+        var px = clamp(Math.round(cx + x), 0, w - 1);
+        var py = clamp(Math.round(cy + y), 0, h - 1);
+        var o = (py * w + px) * 4;
+        sums[0] += base[o]; sums[1] += base[o + 1]; sums[2] += base[o + 2]; n++;
+      }
+    }
+    return n ? [sums[0] / n, sums[1] / n, sums[2] / n] : null;
+  }
+
+  function paintRetouchDab(ctx, base, w, h, cx, cy, r, hardness, mode, offX, offY) {
+    var D = Math.ceil(2 * r) + 2;
+    var half = D / 2;
+    var sx = cx + offX, sy = cy + offY;
+    var shift = [0, 0, 0];
+    if (mode === 'heal') {
+      var dm = ringMean(base, w, h, cx, cy, r * 0.95);
+      var sm = patchMean(base, w, h, sx, sy, r * 0.7);
+      if (dm && sm) shift = [dm[0] - sm[0], dm[1] - sm[1], dm[2] - sm[2]];
+    }
+    if (!retouchPatch) retouchPatch = document.createElement('canvas');
+    if (retouchPatch.width !== D) { retouchPatch.width = D; retouchPatch.height = D; }
+    var pctx = retouchPatch.getContext('2d');
+    var img = pctx.createImageData(D, D);
+    var data = img.data;
+    var inner = r * hardness;
+    var feather = Math.max(1, r - inner);
+    for (var py = 0; py < D; py++) {
+      for (var px = 0; px < D; px++) {
+        var dx = px - half + 0.5, dy = py - half + 0.5;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > r + 0.5) continue;
+        var srcX = clamp(Math.round(sx - half + px), 0, w - 1);
+        var srcY = clamp(Math.round(sy - half + py), 0, h - 1);
+        var so = (srcY * w + srcX) * 4;
+        var alpha = dist <= inner ? 1 : clamp(1 - (dist - inner) / feather, 0, 1);
+        alpha = alpha * alpha * (3 - 2 * alpha);
+        var o = (py * D + px) * 4;
+        data[o] = clamp(base[so] + shift[0], 0, 255);
+        data[o + 1] = clamp(base[so + 1] + shift[1], 0, 255);
+        data[o + 2] = clamp(base[so + 2] + shift[2], 0, 255);
+        data[o + 3] = Math.round(alpha * 255);
+      }
+    }
+    pctx.putImageData(img, 0, 0);
+    ctx.drawImage(retouchPatch, cx - half, cy - half);
+  }
+
+  function paintRetouchStroke(ctx, base, w, h, stroke) {
+    var pts = stroke.points;
+    if (!pts || !pts.length) return;
+    var r = Math.max(1, stroke.radius * w);
+    var hardness = clamp(stroke.hardness, 0, 1);
+    var offX = (stroke.offset ? stroke.offset.dx : 0) * w;
+    var offY = (stroke.offset ? stroke.offset.dy : 0) * h;
+    var spacing = Math.max(1, r * 0.45);
+    var dabs = [{ x: pts[0].x * w, y: pts[0].y * h }];
+    for (var i = 1; i < pts.length; i++) {
+      var ax = pts[i - 1].x * w, ay = pts[i - 1].y * h;
+      var bx = pts[i].x * w, by = pts[i].y * h;
+      var dist = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+      var steps = Math.max(1, Math.ceil(dist / spacing));
+      for (var s = 1; s <= steps; s++) {
+        dabs.push({ x: ax + (bx - ax) * s / steps, y: ay + (by - ay) * s / steps });
+      }
+    }
+    for (var d = 0; d < dabs.length; d++) {
+      paintRetouchDab(ctx, base, w, h, dabs[d].x, dabs[d].y, r, hardness, stroke.mode, offX, offY);
+    }
+  }
+
+  // 把修复笔画绘制到 targetCtx；baseCanvas 提供显影后的像素（可与 target 同一画布）。
+  function renderRetouchOnto(targetCtx, baseCanvas, w, h) {
+    var strokes = retouchStrokeList();
+    if (!strokes.length) return;
+    var bctx = baseCanvas.getContext('2d', { willReadFrequently: true });
+    var base;
+    try { base = bctx.getImageData(0, 0, w, h).data; } catch (e) { return; }
+    for (var i = 0; i < strokes.length; i++) paintRetouchStroke(targetCtx, base, w, h, strokes[i]);
+  }
+
+  function ensureRetouchBase(w, h) {
+    if (!retouchBaseCanvas) retouchBaseCanvas = document.createElement('canvas');
+    if (retouchBaseCanvas.width !== w) retouchBaseCanvas.width = w;
+    if (retouchBaseCanvas.height !== h) retouchBaseCanvas.height = h;
+    return retouchBaseCanvas;
+  }
+
+  function syncHealLayer() {
+    var layer = els.healLayer;
+    if (!layer || !els.canvas || !els.drop || !state.loaded) return;
+    var cr = els.canvas.getBoundingClientRect();
+    var wr = els.drop.getBoundingClientRect();
+    layer.style.left = Math.round(cr.left - wr.left + els.drop.scrollLeft) + 'px';
+    layer.style.top = Math.round(cr.top - wr.top + els.drop.scrollTop) + 'px';
+    layer.style.width = Math.max(1, cr.width) + 'px';
+    layer.style.height = Math.max(1, cr.height) + 'px';
+  }
+
+  function applyRetouchPreview() {
+    var layer = els.healLayer;
+    if (!layer) return;
+    syncHealLayer();
+    var strokes = retouchStrokeList();
+    if (!state.loaded || state.before || !strokes.length || els.canvas.classList.contains('is-hidden')) {
+      layer.hidden = true;
+      return;
+    }
+    var w = state.renderW || state.preview.w;
+    var h = state.renderH || state.preview.h;
+    if (layer.width !== w) layer.width = w;
+    if (layer.height !== h) layer.height = h;
+    var base = ensureRetouchBase(w, h);
+    var bctx = base.getContext('2d', { willReadFrequently: true });
+    bctx.clearRect(0, 0, w, h);
+    bctx.drawImage(els.canvas, 0, 0, w, h);
+    var lctx = layer.getContext('2d');
+    lctx.clearRect(0, 0, w, h);
+    renderRetouchOnto(lctx, base, w, h);
+    layer.hidden = false;
+  }
+
+  function updateRetouchCursor(e) {
+    var cur = els.retouchCursor;
+    if (!cur) return;
+    var rt = state.retouch;
+    if (!rt.active || !state.loaded || state.before || state.cropEditing || !e) {
+      cur.hidden = true;
+      return;
+    }
+    var cr = els.canvas.getBoundingClientRect();
+    if (e.clientX < cr.left || e.clientX > cr.right || e.clientY < cr.top || e.clientY > cr.bottom) {
+      cur.hidden = true;
+      return;
+    }
+    var wr = els.drop.getBoundingClientRect();
+    var diam = Math.max(4, (clamp(Number(rt.sizePct) || 6, 1, 30) / 100) * cr.width);
+    cur.style.width = diam + 'px';
+    cur.style.height = diam + 'px';
+    cur.style.left = (e.clientX - wr.left + els.drop.scrollLeft - diam / 2) + 'px';
+    cur.style.top = (e.clientY - wr.top + els.drop.scrollTop - diam / 2) + 'px';
+    cur.classList.toggle('is-clone', rt.mode === 'clone');
+    cur.hidden = false;
+  }
+
+  function syncRetouchSourceMarker() {
+    var mk = els.retouchSourceMarker;
+    if (!mk) return;
+    var rt = state.retouch;
+    if (!rt.active || rt.mode !== 'clone' || !rt.source || !state.loaded || state.before) {
+      mk.hidden = true;
+      return;
+    }
+    var cr = els.canvas.getBoundingClientRect();
+    var wr = els.drop.getBoundingClientRect();
+    mk.style.left = (cr.left - wr.left + els.drop.scrollLeft + rt.source.x * cr.width) + 'px';
+    mk.style.top = (cr.top - wr.top + els.drop.scrollTop + rt.source.y * cr.height) + 'px';
+    mk.hidden = false;
+  }
+
+  function updateRetouchUI() {
+    if (!root) return;
+    var rt = state.retouch;
+    if (els.retouchMode) {
+      els.retouchMode.querySelectorAll('[data-retouch-mode]').forEach(function (b) {
+        var on = b.getAttribute('data-retouch-mode') === rt.mode;
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+    if (els.retouchArm) {
+      els.retouchArm.textContent = rt.active ? '停用画笔' : '启用画笔';
+      els.retouchArm.classList.toggle('is-on', rt.active);
+      els.retouchArm.disabled = !state.loaded;
+    }
+    if (els.retouchSourceBtn) {
+      els.retouchSourceBtn.hidden = rt.mode !== 'clone';
+      els.retouchSourceBtn.textContent = rt.picking ? '点击画面取点…' : '设采样点';
+      els.retouchSourceBtn.classList.toggle('is-on', rt.picking);
+      els.retouchSourceBtn.disabled = !state.loaded;
+    }
+    if (els.retouchSize && Number(els.retouchSize.value) !== rt.sizePct) els.retouchSize.value = String(rt.sizePct);
+    if (els.retouchSizeV) els.retouchSizeV.textContent = rt.sizePct + '%';
+    if (els.retouchHardness && Number(els.retouchHardness.value) !== rt.hardness) els.retouchHardness.value = String(rt.hardness);
+    if (els.retouchHardnessV) els.retouchHardnessV.textContent = String(rt.hardness);
+    if (els.retouchSum) {
+      if (!state.loaded) els.retouchSum.textContent = '关闭';
+      else {
+        var label = rt.mode === 'clone' ? '仿制' : '修复';
+        var txt = label;
+        if (rt.strokes.length) txt += ' · ' + rt.strokes.length + ' 笔';
+        if (rt.active) txt += ' · 启用';
+        els.retouchSum.textContent = txt;
+      }
+    }
+    syncRetouchSourceMarker();
+  }
+
+  function setRetouchMode(mode) {
+    state.retouch.mode = mode === 'clone' ? 'clone' : 'heal';
+    if (state.retouch.mode !== 'clone') state.retouch.picking = false;
+    updateRetouchUI();
+  }
+
+  function setRetouchActive(on) {
+    if (on && !state.loaded) {
+      setStatus('请先载入图片，再使用修复 / 仿制。', 'warn');
+      return;
+    }
+    var rt = state.retouch;
+    rt.active = !!on;
+    if (!on) { rt.picking = false; rt.dragging = false; rt.current = null; }
+    else { setPickMode(''); }
+    els.canvas.classList.toggle('is-retouching', rt.active);
+    if (!rt.active && els.retouchCursor) els.retouchCursor.hidden = true;
+    updateRetouchUI();
+    syncMaskOverlay();
+    applyRetouchPreview();
+  }
+
+  function beginRetouchSourcePick() {
+    if (!state.loaded) return;
+    setRetouchMode('clone');
+    if (!state.retouch.active) setRetouchActive(true);
+    state.retouch.picking = true;
+    updateRetouchUI();
+    setStatus('仿制图章：点击画面设置采样点（也可按住 Alt 点击画面）。', '');
+  }
+
+  function undoRetouchStroke() {
+    if (!state.retouch.strokes.length) return;
+    state.retouch.strokes.pop();
+    markHistory('撤销修复笔画');
+    historyTouch();
+    updateRetouchUI();
+    applyRetouchPreview();
+  }
+
+  function clearRetouch() {
+    if (!state.retouch.strokes.length && !state.retouch.current) return;
+    state.retouch.strokes = [];
+    state.retouch.current = null;
+    markHistory('清除修复');
+    historyTouch();
+    updateRetouchUI();
+    applyRetouchPreview();
+  }
+
+  function clearRetouchForGeometry() {
+    if (!state.retouch.strokes.length && !state.retouch.current) return;
+    state.retouch.strokes = [];
+    state.retouch.current = null;
+    state.retouch.dragging = false;
+    markHistory('构图改变 · 清除修复');
+    setStatus('构图已改变，修复 / 仿制笔画已清除。', 'warn');
+    updateRetouchUI();
+  }
+
+  function retouchPointerDown(e) {
+    var rt = state.retouch;
+    var uv = canvasUV(e);
+    if (rt.picking) {
+      rt.source = { x: uv.x, y: uv.y };
+      rt.picking = false;
+      updateRetouchUI();
+      setStatus('已设置仿制采样点，现在可以在瑕疵上涂抹。', 'ok');
+      return true;
+    }
+    if (e.altKey && rt.mode === 'clone') {
+      rt.source = { x: uv.x, y: uv.y };
+      syncRetouchSourceMarker();
+      setStatus('已设置仿制采样点。', 'ok');
+      return true;
+    }
+    if (rt.mode === 'clone' && !rt.source) {
+      rt.picking = true;
+      updateRetouchUI();
+      setStatus('仿制图章需要先设采样点：请点击画面取样（或按住 Alt 点击）。', 'warn');
+      return true;
+    }
+    var offset = rt.mode === 'clone'
+      ? { dx: rt.source.x - uv.x, dy: rt.source.y - uv.y }
+      : chooseHealOffset(uv);
+    rt.current = {
+      mode: rt.mode,
+      radius: retouchRadiusUV(),
+      hardness: clamp(Number(rt.hardness), 0, 100) / 100,
+      offset: offset,
+      points: [{ x: uv.x, y: uv.y }]
+    };
+    rt.dragging = true;
+    rt._last = { x: uv.x, y: uv.y };
+    try { els.canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    markHistory(rt.mode === 'clone' ? '仿制图章' : '污点修复');
+    applyRetouchPreview();
+    return true;
+  }
+
+  function retouchPointerMove(e) {
+    var rt = state.retouch;
+    if (!rt.dragging || !rt.current) return false;
+    var uv = canvasUV(e);
+    var w = state.renderW || state.preview.w;
+    var h = state.renderH || state.preview.h;
+    var dx = (uv.x - rt._last.x) * w;
+    var dy = (uv.y - rt._last.y) * h;
+    if (Math.sqrt(dx * dx + dy * dy) >= 1.5) {
+      rt.current.points.push({ x: uv.x, y: uv.y });
+      rt._last = { x: uv.x, y: uv.y };
+      applyRetouchPreview();
+    }
+    return true;
+  }
+
+  function retouchPointerUp(e) {
+    var rt = state.retouch;
+    if (!rt.dragging) return false;
+    if (rt.current) {
+      rt.strokes.push(rt.current);
+      rt.current = null;
+    }
+    rt.dragging = false;
+    rt._last = null;
+    historyTouch(rt.mode === 'clone' ? '仿制图章' : '污点修复');
+    updateRetouchUI();
+    applyRetouchPreview();
+    try { els.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    return true;
   }
 
   /* ------------------------------------------------------------------ *
@@ -6334,6 +6806,8 @@
     if (state.zoomMode !== 'fit') els.zoom.value = String(clamp(pct, 25, 200));
     if (state.cropEditing) syncCropOverlay();
     syncMaskOverlay();
+    syncHealLayer();
+    syncRetouchSourceMarker();
   }
 
   function setZoomPct(pct) {
@@ -6426,11 +6900,12 @@
     return canvas;
   }
 
-  async function renderExportCanvas(sourceCanvas, width, height, format, quality) {
+  async function renderExportCanvas(sourceCanvas, width, height, format, quality, skipRetouch) {
     var canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     var r = null;
+    var outCanvas = null;
     try {
       r = new RawRenderer(canvas);
       r.setSource(sourceCanvas);
@@ -6448,13 +6923,25 @@
         mc.height = 0;
       }
       r.render(renderParams(true));
-      var blob = await canvasToBlob(canvas, format, quality);
+      var blob;
+      if (!skipRetouch && retouchStrokeList().length) {
+        outCanvas = document.createElement('canvas');
+        outCanvas.width = width;
+        outCanvas.height = height;
+        var octx = outCanvas.getContext('2d', { willReadFrequently: true });
+        octx.drawImage(canvas, 0, 0);
+        renderRetouchOnto(octx, outCanvas, width, height);
+        blob = await canvasToBlob(outCanvas, format, quality);
+      } else {
+        blob = await canvasToBlob(canvas, format, quality);
+      }
       if (!blob) throw new Error('浏览器未能生成导出图片（canvas.toBlob 返回空）。');
       return blob;
     } finally {
       if (r) r.dispose();
       canvas.width = 0;
       canvas.height = 0;
+      if (outCanvas) { outCanvas.width = 0; outCanvas.height = 0; }
     }
   }
 
@@ -6656,6 +7143,7 @@
     state.adjust = defaultAdjust();
     state.before = false;
     state.pickMode = '';
+    state.retouch = defaultRetouch();
     state.curves = createCurves();
     state.paramCurve = defaultParamCurve();
     state.hsl = defaultHSL();
@@ -6686,6 +7174,9 @@
     updateGeometryUI();
     updateCurveLut(true);
     updateMaskUI();
+    updateRetouchUI();
+    els.canvas.classList.remove('is-retouching');
+    if (els.retouchCursor) els.retouchCursor.hidden = true;
     refreshAllMaskTextures();
     scheduleRender();
     state.zoomMode = 'fit';
@@ -7195,7 +7686,7 @@
       state.masks = [];
       state.geometry = defaultGeometry();
       state.curveLut = null;
-      return await renderExportCanvas(source, source.width, source.height, format, quality);
+      return await renderExportCanvas(source, source.width, source.height, format, quality, true);
     } finally {
       state.adjust = saved.adjust;
       state.curves = saved.curves;
@@ -7438,6 +7929,14 @@
           resetGeometry();
         } else if (act === 'param-reset') {
           resetParamCurve();
+        } else if (act === 'retouch-arm') {
+          setRetouchActive(!state.retouch.active);
+        } else if (act === 'retouch-source') {
+          beginRetouchSourcePick();
+        } else if (act === 'retouch-undo') {
+          undoRetouchStroke();
+        } else if (act === 'retouch-clear') {
+          clearRetouch();
         }
         return;
       }
@@ -7450,6 +7949,11 @@
       var brushModeBtn = e.target.closest('[data-brush-mode]');
       if (brushModeBtn) {
         setBrushMode(brushModeBtn.getAttribute('data-brush-mode'));
+        return;
+      }
+      var retouchModeBtn = e.target.closest('[data-retouch-mode]');
+      if (retouchModeBtn) {
+        setRetouchMode(retouchModeBtn.getAttribute('data-retouch-mode'));
         return;
       }
       var batchRemove = e.target.closest('[data-batch-remove]');
@@ -7729,12 +8233,28 @@
       mask.brushPct = Number(els.brushSize.value);
       els.brushSizeV.textContent = els.brushSize.value + '%';
     });
+    if (els.retouchSize) {
+      els.retouchSize.addEventListener('input', function () {
+        state.retouch.sizePct = clamp(Number(els.retouchSize.value), 1, 30);
+        els.retouchSizeV.textContent = els.retouchSize.value + '%';
+      });
+    }
+    if (els.retouchHardness) {
+      els.retouchHardness.addEventListener('input', function () {
+        state.retouch.hardness = clamp(Number(els.retouchHardness.value), 0, 100);
+        els.retouchHardnessV.textContent = els.retouchHardness.value;
+      });
+    }
 
     // 画布蒙版拖动
     els.canvas.addEventListener('pointerdown', onCanvasPointerDown);
     els.canvas.addEventListener('pointermove', onCanvasPointerMove);
     els.canvas.addEventListener('pointerup', onCanvasPointerUp);
     els.canvas.addEventListener('pointercancel', onCanvasPointerUp);
+    els.canvas.addEventListener('pointermove', function (e) { updateRetouchCursor(e); });
+    els.canvas.addEventListener('pointerleave', function () {
+      if (els.retouchCursor) els.retouchCursor.hidden = true;
+    });
 
     // 导出设置
     els.exportFormat.addEventListener('change', function () {
@@ -7775,7 +8295,7 @@
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(function () {
         if (state.zoomMode === 'fit') applyZoom();
-        else syncMaskOverlay();
+        else { syncMaskOverlay(); syncHealLayer(); syncRetouchSourceMarker(); }
       });
       resizeObserver.observe(els.drop);
     } else {
@@ -7876,6 +8396,14 @@
       maskCount: state.masks.length,
       activeMaskId: state.activeMaskId,
       mask: serializeMask(mask),
+      retouch: {
+        active: state.retouch.active,
+        mode: state.retouch.mode,
+        sizePct: state.retouch.sizePct,
+        hardness: state.retouch.hardness,
+        source: state.retouch.source ? { x: state.retouch.source.x, y: state.retouch.source.y } : null,
+        strokeCount: state.retouch.strokes.length
+      },
       zoom: { mode: state.zoomMode, pct: state.zoomPct },
       history: {
         index: historyIndex,
@@ -7942,6 +8470,10 @@
       return state.grading;
     },
     setPerspective: setPerspective,
+    setRetouchMode: setRetouchMode,
+    setRetouchActive: setRetouchActive,
+    clearRetouch: clearRetouch,
+    undoRetouchStroke: undoRetouchStroke,
     setParamCurve: function (key, value) { setParamCurve(key, value); },
     getParamCurve: function () { return Object.assign({}, state.paramCurve); },
     resetParamCurve: resetParamCurve,

@@ -1780,3 +1780,46 @@
   #raw-root .raw-mask-handle.is-move { width: 16px; height: 16px; }
   #raw-root .raw-mask-handle.is-rotate { width: 20px; height: 20px; font-size: 12px; }
 }
+
+/* 修复 / 仿制图章 */
+#raw-root .raw-heal-layer {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+#raw-root #raw-canvas.is-retouching { cursor: crosshair; }
+#raw-root .raw-retouch-cursor {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1.5px solid rgba(12, 122, 105, 0.95);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+#raw-root .raw-retouch-cursor.is-clone { border-color: rgba(47, 94, 184, 0.95); }
+#raw-root .raw-retouch-source {
+  position: absolute;
+  z-index: 5;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  pointer-events: none;
+}
+#raw-root .raw-retouch-source::before,
+#raw-root .raw-retouch-source::after {
+  content: '';
+  position: absolute;
+  background: #2F5EB8;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+}
+#raw-root .raw-retouch-source::before { left: 7px; top: 0; width: 2px; height: 16px; }
+#raw-root .raw-retouch-source::after { left: 0; top: 7px; width: 16px; height: 2px; }
+#raw-root .raw-retouch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 9px 0;
+}
+#raw-root #raw-retouch-mode { margin-bottom: 2px; }
+#raw-root #raw-retouch-mode button { display: inline-flex; align-items: center; gap: 4px; }
+#raw-root #raw-retouch-mode button svg { width: 13px; height: 13px; }
