@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.4.2';
+  var VERSION = '1.4.3';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -1726,7 +1726,7 @@
       name: smart ? (type === 'sky' ? 'AI 天空 ' : 'AI 主体 ') + maskSeq : '蒙版 ' + maskSeq,
       type: type,
       enabled: true,
-      show: false,
+      show: type === 'linear' || type === 'radial',
       invert: false,
       feather: type === 'brush' ? 0.35 : smart ? 0.3 : 0.45,
       p1: geo.p1,
@@ -2993,6 +2993,11 @@
     });
     var active = state.masks.filter(function (m) { return m.id === previousActiveId; })[0];
     state.activeMaskId = active ? active.id : (state.masks[0] ? state.masks[0].id : null);
+    var activeMaskAfterRestore = activeMask();
+    if (activeMaskAfterRestore && maskControlsEnabled() &&
+        (activeMaskAfterRestore.type === 'linear' || activeMaskAfterRestore.type === 'radial')) {
+      activeMaskAfterRestore.show = true;
+    }
     ALL_ADJUSTMENTS.forEach(function (d) {
       var input = root.querySelector('[data-adj="' + d.key + '"]');
       if (input) input.value = String(state.adjust[d.key]);
@@ -4842,7 +4847,7 @@
       clearAIBaseForMask(mask.id);
     }
     mask.type = type;
-    mask.show = isSmartMaskType(type) || type === 'range';
+    mask.show = isSmartMaskType(type) || type === 'range' || type === 'linear' || type === 'radial';
     if (type === 'range') {
       mask.rangeMode = RANGE_MASK_DEFAULTS.rangeMode;
       mask.rangeLo = RANGE_MASK_DEFAULTS.rangeLo;
@@ -5024,6 +5029,12 @@
     var mask = findMaskById(id);
     if (!mask) return;
     state.activeMaskId = mask.id;
+    if (maskControlsEnabled() && (mask.type === 'linear' || mask.type === 'radial') && !mask.show) {
+      mask.show = true;
+      for (var i = 0; i < state.masks.length; i++) {
+        if (state.masks[i] !== mask) state.masks[i].show = false;
+      }
+    }
     updateMaskUI();
     updateAdjustOutputs();
     scheduleRender();
@@ -7679,7 +7690,18 @@
       els.maskOverlay.addEventListener('pointerdown', startMaskHandleDrag);
     }
     if (els.maskControls) {
-      els.maskControls.addEventListener('change', function () { syncMaskOverlay(); });
+      els.maskControls.addEventListener('change', function () {
+        var mask = activeMask();
+        if (els.maskControls.checked && mask && (mask.type === 'linear' || mask.type === 'radial')) {
+          mask.show = true;
+          for (var i = 0; i < state.masks.length; i++) {
+            if (state.masks[i] !== mask) state.masks[i].show = false;
+          }
+          updateMaskUI();
+          scheduleRender();
+        }
+        syncMaskOverlay();
+      });
     }
     els.maskShow.addEventListener('change', function () {
       var mask = activeMask();
