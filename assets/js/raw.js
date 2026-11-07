@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.4.0';
+  var VERSION = '1.4.1';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -1288,7 +1288,7 @@
 
         '<aside class="raw-side" aria-label="调整面板">' +
 
-          '<details class="raw-group" open>' +
+          '<details class="raw-group" open id="raw-meta-group">' +
             '<summary>' + icon('info') + '<span>元数据</span><span class="raw-sum-meta" id="raw-meta-sum">—</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
@@ -1308,7 +1308,7 @@
             '</div>' +
           '</details>' +
 
-          '<details class="raw-group" open>' +
+          '<details class="raw-group" open id="raw-history-group">' +
             '<summary>' + icon('history') + '<span>历史记录</span><span class="raw-sum-meta" id="raw-history-sum">—</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body raw-history-body">' +

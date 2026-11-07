@@ -1681,3 +1681,54 @@
 #raw-root .raw-mask-dot.is-range {
   background: conic-gradient(from 210deg, #3A4A6B 0 25%, #536159 25% 50%, #C8AE36 50% 75%, #C94B42 75% 100%);
 }
+
+/* ---------- 竖屏 Camera Raw：预览吸附 + 控制区优先 ---------- */
+@media (max-width: 900px) {
+  #raw-root .raw-side {
+    display: flex;
+    flex-direction: column;
+  }
+  #raw-root .raw-stage {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    align-self: start;
+    border-radius: 0 0 12px 12px;
+    border-top: 0;
+    box-shadow: 0 10px 22px -14px rgba(22, 34, 30, 0.45);
+  }
+  #raw-root .raw-canvas-wrap {
+    height: min(38vh, 330px);
+    min-height: 170px;
+  }
+  #raw-root .raw-stage-bar {
+    padding: 7px 10px;
+  }
+  #raw-root .raw-stage-foot {
+    min-height: 30px;
+    padding: 5px 10px;
+  }
+  #raw-root .raw-status-text {
+    font-size: 10.5px;
+  }
+  #raw-root #raw-meta-group { order: 90; }
+  #raw-root #raw-history-group { order: 91; }
+  #raw-root .raw-side > .raw-group { scroll-margin-top: min(42vh, 350px); }
+  #raw-root .raw-head {
+    padding-bottom: 10px;
+  }
+  #raw-root .raw-head p {
+    display: none;
+  }
+  #raw-root .raw-head-actions {
+    margin-top: 6px;
+  }
+}
+@media (max-width: 560px) {
+  #raw-root .raw-canvas-wrap { height: min(36vh, 285px); min-height: 160px; }
+  #raw-root .raw-stage-bar .raw-btn { min-height: 26px; padding: 3px 7px; font-size: 10.5px; }
+  #raw-root .raw-view-tools { gap: 3px; }
+  #raw-root .raw-stage-foot { flex-wrap: nowrap; overflow: hidden; }
+  #raw-root .raw-stage-foot .raw-foot-right { display: none; }
+  #raw-root .raw-status-text { max-height: 2.6em; overflow: hidden; }
+}

@@ -1415,3 +1415,91 @@ body.route-editor #top-format-count { display: none; }
 }
 
 .retouch-hint a { color: var(--accent-hover); }
+
+/* ---------- 多源音乐下载：紧凑搜索与下载模式 ---------- */
+.mf-page-head { align-items: flex-end; }
+.mf-head-badges {
+  display: flex; flex-wrap: wrap; gap: 6px; flex: none;
+}
+.mf-head-badges span {
+  padding: 3px 8px; border: 1px solid var(--mint-line); border-radius: 999px;
+  background: var(--mint); color: var(--accent-hover); font-size: 11px; white-space: nowrap;
+}
+.mf-search-panel { padding: 14px 16px 12px; }
+.mf-search-row {
+  display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px;
+}
+.mf-source-field {
+  display: flex; flex-direction: column; gap: 4px; flex: 0 0 130px;
+  color: var(--ink-3); font-size: 11px;
+}
+.mf-source-field .input { width: 100%; height: 34px; font-size: 12.5px; }
+.mf-search-row .grow { flex: 1 1 260px; min-width: 160px; height: 34px; }
+.mf-search-row .btn { min-height: 34px; flex: none; }
+.mf-mode-hint {
+  margin-top: 8px; color: var(--ink-3); font-size: 11.5px; line-height: 1.5;
+}
+.mf-mode-hint b { color: var(--ink-2); font-weight: 500; }
+.mf-search-panel .logline { margin-top: 7px; }
+.mf-search-panel .wm-progress { margin-top: 7px; }
+.mf-results-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  margin: 18px 2px 7px; color: var(--ink-2); font-size: 12.5px;
+}
+.mf-results-head span:last-child {
+  color: var(--ink-3); font-family: var(--mono); font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#mf-results { display: flex; flex-direction: column; gap: 6px; }
+.mf-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); box-shadow: 0 1px 2px rgba(22,34,30,.03);
+}
+.mf-row .mf-main { flex: 1 1 auto; }
+.mf-row .mf-name { font-size: 12.5px; }
+.mf-row .mf-sub { font-size: 11px; }
+.mf-actions {
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap;
+  gap: 4px; flex: 0 0 auto;
+}
+.mf-row .mf-action {
+  min-height: 28px; padding: 3px 8px; border-radius: 6px;
+  font-size: 11.5px; line-height: 1.2; white-space: nowrap;
+}
+.mf-row .mf-dl-lyric { color: var(--accent-hover); border-color: var(--accent-line); }
+.mf-row .mf-lyric-only { color: var(--ink-2); }
+.mf-note {
+  margin-top: 4px; color: var(--ink-3); font-size: 10.5px; line-height: 1.4;
+}
+.mf-note.is-ok { color: var(--ok); }
+.mf-note.is-warn { color: var(--amber); }
+.mf-note.is-loading { color: var(--accent-hover); }
+.mf-help { margin-top: 16px; }
+.mf-help > summary {
+  cursor: pointer; color: var(--ink-2); font-size: 12px; font-weight: 500;
+  list-style: none;
+}
+.mf-help > summary::-webkit-details-marker { display: none; }
+.mf-help > summary::before { content: '＋'; display: inline-block; width: 14px; color: var(--accent); }
+.mf-help[open] > summary::before { content: '－'; }
+.mf-help .bullets { margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .mf-search-row { align-items: stretch; }
+  .mf-source-field { flex: 1 1 120px; }
+  .mf-search-row .grow { flex: 1 1 100%; order: 2; }
+  .mf-search-row .btn { order: 3; flex: 1 1 100%; }
+}
+@media (max-width: 600px) {
+  .mf-page-head { align-items: flex-start; }
+  .mf-head-badges { margin-top: -2px; }
+  .mf-search-panel { padding: 12px; }
+  .mf-row { flex-wrap: wrap; padding: 9px 8px; }
+  .mf-row .mf-main { flex: 1 1 calc(100% - 52px); }
+  .mf-cover-wrap { width: 42px; height: 42px; }
+  .mf-row .mf-actions { flex: 1 1 100%; justify-content: stretch; }
+  .mf-row .mf-actions .mf-action { flex: 1 1 30%; min-height: 32px; padding-inline: 4px; }
+  .mf-row .mf-actions .mf-dl { flex: 1 1 100%; }
+  .mf-sub { white-space: normal; line-height: 1.45; }
+}

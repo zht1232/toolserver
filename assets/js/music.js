@@ -164,7 +164,7 @@
   var results = [];
   var lyricQueue = [];
   var lyricActive = 0;
-  var lyricLimit = 3;
+  var lyricLimit = 5;
 
   notifyFn = function (msg) {
     if (logBox) logBox.textContent = msg || '';

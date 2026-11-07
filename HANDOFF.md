@@ -27,7 +27,7 @@ python3 server.py 8000
 | 分组 | 页面 | JS 文件 |
 |---|---|---|
 | 音乐 | 音乐解密与歌词匹配 | music.js（框架）+ lyrics.js + ncm.js/qmc.js/kgm.js/kwm.js/xm.js（各格式解密器） |
-| 音乐 | 多源音乐下载 | musicfast.js + server.py `/api/music/search|url`（go-music-dl 仅解析元数据/直链；浏览器直连 CDN） |
+| 音乐 | 多源音乐下载 | musicfast.js + server.py `/api/music/search|url`（go-music-dl 仅解析元数据/直链；浏览器直连 CDN；支持音频/带歌词/只要歌词） |
 | 音乐 | LRC 时间轴 | lyrics.js |
 | 音乐 | 歌词打轴器 | syncer.js |
 | 格式 | 图片转换压缩 | tools.js |
@@ -85,14 +85,15 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - 浏览器 `fetch(mode:'cors')` 直连 CDN 流式下载到本机；服务器不转发、不缓存、不落盘音频，也没有服务器下载兜底。
 - 可浏览器直连的源：网易云 / QQ音乐 / 酷狗 / 汽水音乐 / 千千 / 5sing（CDN 实测返回 `Access-Control-Allow-Origin: *`）。酷我 / 咪咕无 CORS、B 站需 Referer、Jamendo 返回 HTML，故不列出。
 - `/api/music/search` 支持 `source=all`：并行检索六源、交错合并、每源计数；搜索缓存 120s、直链缓存 90s（只缓存非空搜索结果和有效直链），单源聚合超时 12s。
-- 直连失败 / 会员曲 / 版权下架 / CORS 拦截时前端明确区分原因，并提供「换源搜索」在全部音源中找替代版本；解析服务不可用时 `/api/ping.musicResolver.reachable=false`。
+- 每首歌提供「下载」「+歌词」「只要歌词」：MP3/FLAC 用 ID3/Vorbis 内嵌歌词，其它格式同时下载 LRC；歌词匹配优先 LRCLIB，4 秒超时后回退网易云，搜索/匹配结果在页面内缓存，批量解密最多并发 5 首匹配。直连失败 / 会员曲 / 版权下架 / CORS 拦截时前端明确区分原因，并提供「换源找替代」在全部音源中找替代版本；解析服务不可用时 `/api/ping.musicResolver.reachable=false`。
+- 额外测试了 go-music-dl 的酷我、咪咕、JOOX、B 站、Jamendo：酷我/咪咕直链无 `Access-Control-Allow-Origin`，JOOX inspect 持续 resolution_failed，B 站需要 Referer，Jamendo 返回 HTML；在“浏览器直连、不中转”的约束下不能作为可用下载源，故仍只列六个可直连源。
 - 旧 `/music/*` UI 代理已删除，上游 UI 与 `/music/download` 不对外暴露；`music-dl.service` 只供本站 API 在本机调用。服务为未修改的 AGPL-3.0 二进制，详见 `THIRD_PARTY_NOTICES.md`。
 - **部署**：`music-dl.service` 需 `active` 且 `enabled`（只监听 127.0.0.1:8080）；`server.py` 的 `/api/music/*` 只调用它的 `/music/search` 与 `/music/inspect`，不调用 `/download`，不落盘音频。
 
 ## 专业修图与 Camera Raw（浏览器本地）
 
 - **专业修图**（`#retouch`）：`assets/js/retouch.js` 只负责按需加载 `editor/` 里的 BitMappery 构建（MIT），避免首屏拉取 4.4 MB 编辑器；iframe 由站点浅色页面框住，可全屏打开。BitMappery 提供图层、图层蒙版、画笔、选区、文字、非破坏滤镜、历史、PSD 导入和图片导出；已移除云端存储入口、禁用 Google Fonts 外部请求并做中文化。禁用工具按钮 hover 修复已内联在 `editor/index.html`，编辑器本身不向服务器上传文件。
-- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡与白平衡吸管/自动白平衡、带动态直方图的 RGB/红/绿/蓝点曲线与四区参数曲线、8 色相 HSL 与阴影/中间调/高光颜色分级、镜头畸变/暗角/色差手动校正与按相机/镜头保存的镜头配置、亮度/色彩降噪、裁剪/旋转/拉直、水平/垂直透视校正（着色器 homography，自动放大避免黑边），以及最多 8 个可独立叠加的线性/径向/画笔/AI 主体/AI 天空/亮度或颜色范围蒙版与局部调整；线性、径向和画笔蒙版按原始画面坐标保存，裁剪、旋转、翻转或拉直后会跟随内容重映射，导出也保持一致。AI 主体与 AI 天空在浏览器内按需加载站内 PP-MobileSeg Base（ADE20K）语义分割模型与 ONNX Runtime Web 1.22.0 WASM（约 35 MB，首次加载后由浏览器缓存），在未旋转/未裁剪的原始预览上做一次本地 512×512 推理，输出 150 类类别图；再取 ADE20K 的 sky(2)、person(12)、animal(126) 生成二值蒙版，并按当前裁剪/旋转/拉直/翻转重采样，因此几何变化不会重复推理。模型不可用时，AI 主体回退到构图显著度识别，AI 天空回退到背景色聚类 + 顶部连通域识别；模型正常但未检测到目标时保留空蒙版并提示用画笔建立范围。AI 蒙版识别未完成时导出会提示等待，避免导出与预览蒙版不一致。两种蒙版都可再用画笔补充/擦除，不上传图片。完整历史记录支持点击回到任意步骤，撤销/重做快捷键为 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y；按住 \ 快速对比原图，C 进入/退出裁剪，F 适应窗口。新增预设保存/套用（localStorage）、当前图片命名快照（会话内）、复制/粘贴显影设置，以及批量套用当前全局显影设置并打包 ZIP 下载（批量不包含当前蒙版、裁剪和几何）。导出 JPEG/PNG。桌面端预览区使用 sticky 布局，长控制栏滚动时预览仍保持可见。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
+- **Camera Raw**（`#raw`）：`assets/js/raw.js` 动态导入 `assets/vendor/flashraw/browser.js` 与单线程 SIMD WASM（FlashRaw 0.1.0，MIT OR Apache-2.0），在浏览器解码 CR2/CR3/NEF/ARW/DNG/RAF/ORF 等 RAW；WebGL2 负责曝光/高光/阴影/白平衡与白平衡吸管/自动白平衡、带动态直方图的 RGB/红/绿/蓝点曲线与四区参数曲线、8 色相 HSL 与阴影/中间调/高光颜色分级、镜头畸变/暗角/色差手动校正与按相机/镜头保存的镜头配置、亮度/色彩降噪、裁剪/旋转/拉直、水平/垂直透视校正（着色器 homography，自动放大避免黑边），以及最多 8 个可独立叠加的线性/径向/画笔/AI 主体/AI 天空/亮度或颜色范围蒙版与局部调整；线性、径向和画笔蒙版按原始画面坐标保存，裁剪、旋转、翻转或拉直后会跟随内容重映射，导出也保持一致。AI 主体与 AI 天空在浏览器内按需加载站内 PP-MobileSeg Base（ADE20K）语义分割模型与 ONNX Runtime Web 1.22.0 WASM（约 35 MB，首次加载后由浏览器缓存），在未旋转/未裁剪的原始预览上做一次本地 512×512 推理，输出 150 类类别图；再取 ADE20K 的 sky(2)、person(12)、animal(126) 生成二值蒙版，并按当前裁剪/旋转/拉直/翻转重采样，因此几何变化不会重复推理。模型不可用时，AI 主体回退到构图显著度识别，AI 天空回退到背景色聚类 + 顶部连通域识别；模型正常但未检测到目标时保留空蒙版并提示用画笔建立范围。AI 蒙版识别未完成时导出会提示等待，避免导出与预览蒙版不一致。两种蒙版都可再用画笔补充/擦除，不上传图片。完整历史记录支持点击回到任意步骤，撤销/重做快捷键为 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y；按住 \ 快速对比原图，C 进入/退出裁剪，F 适应窗口。新增预设保存/套用（localStorage）、当前图片命名快照（会话内）、复制/粘贴显影设置，以及批量套用当前全局显影设置并打包 ZIP 下载（批量不包含当前蒙版、裁剪和几何）。导出 JPEG/PNG。桌面端预览区使用 sticky 布局，长控制栏滚动时预览仍保持可见；竖屏移动端预览同样吸附在顶部，元数据/历史记录移到调整面板末尾，调整曲线时无需回到页面顶部。需要 WebGL2；无 COOP/COEP 时使用单线程 WASM，不影响其他站点资源。
 - **许可证**：BitMappery 的 LICENSE 与修改说明在 `editor/`；FlashRaw 的 MIT/APACHE 许可证在 `assets/vendor/flashraw/`；整体来源见 `THIRD_PARTY_NOTICES.md`。
 - **集成**：两个页面都通过 `main.js` 的 `route-editor` 类隐藏右栏并使用更宽的工作区；`retouch.js`/`raw.js` 不改动服务器 API，也没有上传接口。
 

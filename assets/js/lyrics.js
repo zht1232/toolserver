@@ -28,6 +28,15 @@
     status.style.color = isErr ? '#c20c0c' : '';
   }
 
+  function fetchWithTimeout(url, options, timeoutMs) {
+    var opts = Object.assign({}, options || {});
+    if (typeof AbortController === 'undefined') return fetch(url, opts);
+    var controller = new AbortController();
+    opts.signal = controller.signal;
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 5000);
+    return fetch(url, opts).finally(function () { clearTimeout(timer); });
+  }
+
   // 检测本站是否由 server.py 提供服务（支持 /api/nc/* 中转）
   async function detectProxy() {
     if (proxyAvailable !== null) return Promise.resolve(proxyAvailable);
@@ -54,7 +63,7 @@
   /* ---- 歌词源 A：本站中转（网易云） ---- */
   async function searchNetease(song, artist) {
     var keyword = artist ? song + ' ' + artist : song;
-    var r = await fetch('api/nc/search?s=' + encodeURIComponent(keyword));
+    var r = await fetchWithTimeout('api/nc/search?s=' + encodeURIComponent(keyword), {}, 8000);
     if (!r.ok) {
       if (r.status === 429) neteasePausedUntil = Date.now() + 60000;
       throw new Error(r.status === 429 ? '网易云暂时限流' : '中转搜索失败');
@@ -79,7 +88,7 @@
   }
 
   async function fetchNeteaseLyric(id) {
-    var r = await fetch('api/nc/lyric?id=' + id);
+    var r = await fetchWithTimeout('api/nc/lyric?id=' + id, {}, 8000);
     if (!r.ok) throw new Error('歌词获取失败');
     var data = await r.json();
     var lrc = data.lrc && data.lrc.lyric ? data.lrc.lyric : '';
@@ -88,14 +97,17 @@
   }
 
   /* ---- 歌词源 B：LRCLIB（浏览器直连） ---- */
+  var lrclibSearchCache = {};
   async function searchLrclib(song, artist) {
+    var cacheKey = normalizeMatchText(song) + '|' + normalizeMatchText(artist);
+    if (lrclibSearchCache[cacheKey]) return lrclibSearchCache[cacheKey];
     var url = 'https://lrclib.net/api/search?track_name=' + encodeURIComponent(song);
     if (artist) url += '&artist_name=' + encodeURIComponent(artist);
-    var r = await fetch(url);
+    var r = await fetchWithTimeout(url, { cache: 'force-cache' }, 4000);
     if (!r.ok) throw new Error('LRCLIB 搜索失败（HTTP ' + r.status + '）');
     var data = await r.json();
     if (!Array.isArray(data)) throw new Error('LRCLIB 返回内容异常');
-    return data.slice(0, 20).map(function (s) {
+    var mapped = data.slice(0, 12).map(function (s) {
       return {
         source: 'lrclib',
         id: s.id,
@@ -106,6 +118,9 @@
         _raw: s
       };
     });
+    lrclibSearchCache[cacheKey] = mapped;
+    if (Object.keys(lrclibSearchCache).length > 80) lrclibSearchCache = {};
+    return mapped;
   }
 
   function fmtDuration(ms) {

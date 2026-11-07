@@ -10,10 +10,10 @@
 (function () {
   'use strict';
 
-  var DL_LABEL = '浏览器直连下载';
+  var DL_LABEL = '下载';
   var ALL_LABEL = '全部音源';
   var MSG_DOWN = '解析服务暂时不可用，请稍后重试（这不是会员或版权限制）。';
-  var MSG_CORS = '该音源的 CDN 不允许浏览器直连（缺少跨域响应头），本站不做服务器下载中转。请换源或点「换源搜索」。';
+  var MSG_CORS = '该音源的 CDN 不允许浏览器直连（缺少跨域响应头），本站不做服务器下载中转。请换源或点「换源找替代」。';
   var MSG_LIMIT = '平台会员 / 版权曲可能无法下载；这是音源侧限制，不是本站服务器故障。';
   var REASON_LABELS = {
     not_found: '该音源没有可下载资源（可能已下架、受版权或会员限制）',
@@ -64,9 +64,11 @@
   var HTML_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
   var results = [];
-  var emptyMsg = '还没有搜索结果。选择音源（默认「全部音源」）、输入关键词后回车或点「搜索」。';
+  var emptyMsg = '输入歌名开始搜索；默认并行检索全部音源。';
   var working = false;
   var activeRow = null;
+  var lyricCache = Object.create(null);
+  var lyricPending = Object.create(null);
 
   function $(id) { return document.getElementById(id); }
 
@@ -115,11 +117,11 @@
     if (working) return;
     var label = sourceLabel(selectedSource());
     results = [];
-    emptyMsg = '已切换到「' + label + '」，输入关键词后回车或点「搜索」。';
+    emptyMsg = '已切换到「' + label + '」，输入关键词开始搜索。';
     render();
     hideProgress();
     setStatus('当前音源：' + label +
-      (selectedSource() === 'all' ? '（并行检索各源并合并，失败可换源）。' : '。'));
+      (selectedSource() === 'all' ? ' · 并行检索并合并结果' : ''));
   }
 
   function parentRow(node) {
@@ -133,7 +135,7 @@
 
   function retryRow(row) {
     if (!row || working) return;
-    var dl = row.querySelector('.mf-dl');
+    var dl = row.querySelector('.mf-action');
     var idx = dl ? parseInt(dl.getAttribute('data-idx'), 10) : NaN;
     var song = isFinite(idx) ? results[idx] : null;
     if (!song) return;
@@ -255,7 +257,7 @@
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn mf-retry';
-      btn.textContent = '换源搜索';
+      btn.textContent = '换源找替代';
       btn.style.marginLeft = '8px';
       btn.style.padding = '2px 9px';
       btn.style.fontSize = '12px';
@@ -268,13 +270,13 @@
     working = true;
     activeRow = row || null;
     var sBtn = $('mf-search');
-    if (sBtn) sBtn.disabled = true;
+    if (sBtn) { sBtn.disabled = true; sBtn.textContent = '搜索中…'; }
     var sel = $('mf-source');
     if (sel) sel.disabled = true;
-    var btns = document.querySelectorAll('.mf-dl');
+    var btns = document.querySelectorAll('.mf-action');
     for (var i = 0; i < btns.length; i++) {
       btns[i].disabled = true;
-      btns[i].textContent = (activeBtn && btns[i] === activeBtn && text) ? text : DL_LABEL;
+      if (btns[i] === activeBtn && text) btns[i].textContent = text;
     }
     if (activeRow) activeRow.classList.add('is-busy');
   }
@@ -282,19 +284,30 @@
   function unlock() {
     working = false;
     var sBtn = $('mf-search');
-    if (sBtn) {
-      sBtn.disabled = false;
-      sBtn.textContent = '搜索';
-    }
+    if (sBtn) { sBtn.disabled = false; sBtn.textContent = '搜索'; }
     var sel = $('mf-source');
     if (sel) sel.disabled = false;
-    var btns = document.querySelectorAll('.mf-dl');
+    var btns = document.querySelectorAll('.mf-action');
     for (var i = 0; i < btns.length; i++) {
       btns[i].disabled = false;
-      btns[i].textContent = DL_LABEL;
+      btns[i].textContent = btns[i].getAttribute('data-label') || DL_LABEL;
     }
     if (activeRow) activeRow.classList.remove('is-busy');
     activeRow = null;
+  }
+
+  function rowNote(row, text, kind) {
+    if (!row) return;
+    var el = row.querySelector('.mf-note');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'mf-note' + (kind ? ' is-' + kind : '');
+    el.hidden = !text;
+  }
+
+  function setResultMeta(text) {
+    var el = $('mf-result-meta');
+    if (el) el.textContent = text || '';
   }
 
   function artistOf(song) {
@@ -435,18 +448,78 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
   }
 
-  function finish(song, blob, url, type, bytes, t0) {
+  function finish(song, blob, url, type, bytes, t0, note) {
     var ext = pickExt(url, type, blob.type);
     var name = safeFileName(song, ext);
     saveBlob(blob, name);
     var secs = (Date.now() - t0) / 1000;
     var size = Number(bytes) || blob.size || 0;
     setStatus('下载完成：' + name + ' · ' + fmtSize(size) + ' · 用时 ' + secs.toFixed(1) +
-      ' 秒 · 平均 ' + fmtSpeed(secs > 0 ? size / secs : 0) + '（浏览器直连，未经服务器）');
-    return true;
+      ' 秒' + (note ? ' · ' + note : '') + '（浏览器直连，未经服务器）');
+    return { name: name, ext: ext };
   }
 
-  function readBody(song, resp, type, total, t0, url) {
+  function lyricKey(song) {
+    return (trim(song && song.name) + '|' + artistOf(song)).toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function lyricsFor(song) {
+    var key = lyricKey(song);
+    if (lyricCache[key]) return Promise.resolve(lyricCache[key]);
+    if (lyricPending[key]) return lyricPending[key];
+    if (!window.LyricsTool || typeof window.LyricsTool.match !== 'function') {
+      return Promise.reject(new Error('歌词模块暂未加载'));
+    }
+    var artist = artistOf(song);
+    if (artist === '未知歌手') artist = '';
+    lyricPending[key] = window.LyricsTool.match(song.name, artist).then(function (matched) {
+      if (!matched || !matched.lyric || !trim(matched.lyric)) throw new Error('未找到可用歌词');
+      lyricCache[key] = matched;
+      return matched;
+    }).finally(function () {
+      delete lyricPending[key];
+    });
+    return lyricPending[key];
+  }
+
+  function saveLyricFile(song, lyric) {
+    var synced = /\[\d{1,3}:\d{1,2}(?:\.\d{1,3})?\]/.test(lyric);
+    var base = safeName((song.name || '未命名') + ' - ' + artistOf(song));
+    var fileName = base + '.' + (synced ? 'lrc' : 'txt');
+    saveBlob(new Blob(['\ufeff' + lyric], { type: 'text/plain;charset=utf-8' }), fileName);
+    return fileName;
+  }
+
+  function songTagItem(song, ext) {
+    return {
+      result: {
+        name: song.name || '未命名',
+        artists: artistOf(song) === '未知歌手' ? '' : artistOf(song),
+        album: albumOf(song),
+        format: ext
+      }
+    };
+  }
+
+  function embedAudioLyric(song, blob, ext, lyric) {
+    if (!lyric) return Promise.resolve({ blob: blob, embedded: false, reason: 'no-lyric' });
+    if ((ext === 'mp3' || ext === 'flac') && window.MusicDecrypt &&
+        typeof window.MusicDecrypt.embedLyrics === 'function') {
+      return blob.arrayBuffer().then(function (buffer) {
+        try {
+          var out = window.MusicDecrypt.embedLyrics(ext, new Uint8Array(buffer), songTagItem(song, ext), lyric, null, null);
+          return { blob: out, embedded: true, reason: '' };
+        } catch (e) {
+          return { blob: blob, embedded: false, reason: 'embed-failed' };
+        }
+      }, function () {
+        return { blob: blob, embedded: false, reason: 'embed-failed' };
+      });
+    }
+    return Promise.resolve({ blob: blob, embedded: false, reason: 'unsupported' });
+  }
+
+  function readBodyData(resp, type, total, t0, url) {
     var reader = resp.body.getReader();
     var chunks = [];
     var received = 0;
@@ -466,7 +539,7 @@
         var blob = new Blob(chunks, { type: type || 'application/octet-stream' });
         showProgress(false);
         setProgress(1);
-        return finish(song, blob, url, type, received, t0);
+        return { blob: blob, url: url, type: type, received: received, t0: t0 };
       }
       var value = step.value;
       if (value && value.length) {
@@ -488,7 +561,7 @@
     return next();
   }
 
-  function streamToBlob(song, info) {
+  function streamToBlobData(song, info) {
     var url = upgradeCdnUrl(info.url);
     var t0 = Date.now();
     showProgress(true);
@@ -504,14 +577,21 @@
         return resp.blob().then(function (blob) {
           showProgress(false);
           setProgress(1);
-          return finish(song, blob, url, type || blob.type, blob.size, t0);
+          return { blob: blob, url: url, type: type || blob.type, received: blob.size, t0: t0 };
         }, function (e) {
           throw fail('cors', e && e.message ? e.message : '读取失败');
         });
       }
-      return readBody(song, resp, type, total, t0, url);
+      return readBodyData(resp, type, total, t0, url);
     }, function (e) {
       throw fail('cors', e && e.message ? e.message : '网络错误');
+    });
+  }
+
+  function streamToBlob(song, info) {
+    return streamToBlobData(song, info).then(function (data) {
+      finish(song, data.blob, data.url, data.type, data.received, data.t0);
+      return true;
     });
   }
 
@@ -560,31 +640,114 @@
         '，浏览器开始直连 CDN…');
       return streamToBlob(song, info);
     }).catch(function (e) {
-      var kind = e && e.kind;
-      var detail = e && (e.detail || e.message);
-      var status = e && e.status;
-      if (kind === 'down') {
-        hideProgress();
-        setStatus(MSG_DOWN, 'err');
-        rowError(row, MSG_DOWN);
-      } else if (kind === 'cors') {
-        hideProgress();
-        var corsMsg = MSG_CORS + (detail ? '（' + detail + '）' : '');
-        setStatus(corsMsg, 'err');
-        rowError(row, corsMsg, true);
-      } else if (kind === 'resolve') {
-        hideProgress();
-        var resolveMsg = '解析失败：' + failureHint(status, detail);
-        setStatus(resolveMsg + ' 可点「换源搜索」在全部音源中查找。', 'err');
-        rowError(row, resolveMsg, true);
-      } else {
-        hideProgress();
-        setStatus('下载失败：' + (detail || '未知错误') + '。请稍后重试。', 'err');
-        rowError(row, '下载失败：' + (detail || '未知错误'), true);
-      }
+      handleAudioError(row, e);
     }).then(function () {
       unlock();
     });
+  }
+
+  function handleAudioError(row, e) {
+    var kind = e && e.kind;
+    var detail = e && (e.detail || e.message);
+    var status = e && e.status;
+    hideProgress();
+    if (kind === 'down') {
+      setStatus(MSG_DOWN, 'err');
+      rowError(row, MSG_DOWN);
+    } else if (kind === 'cors') {
+      var corsMsg = MSG_CORS + (detail ? '（' + detail + '）' : '');
+      setStatus(corsMsg, 'err');
+      rowError(row, corsMsg, true);
+    } else if (kind === 'resolve') {
+      var resolveMsg = '解析失败：' + failureHint(status, detail);
+      setStatus(resolveMsg, 'err');
+      rowError(row, resolveMsg, true);
+    } else {
+      setStatus('下载失败：' + (detail || '未知错误') + '。', 'err');
+      rowError(row, '下载失败：' + (detail || '未知错误'), true);
+    }
+  }
+
+  function downloadLyricsOnly(song, btn, row) {
+    if (working) return;
+    if (!song || !song.name) {
+      setStatus('歌曲信息不完整，请重新搜索。', 'err');
+      return;
+    }
+    lock(btn, row, '匹配歌词…');
+    rowError(row, '');
+    rowNote(row, '正在匹配歌词…', 'loading');
+    showProgress(true);
+    setStatus('正在匹配「' + song.name + '」的歌词…');
+
+    lyricsFor(song).then(function (matched) {
+      hideProgress();
+      var fileName = saveLyricFile(song, matched.lyric);
+      var source = matched.source === 'netease' ? '网易云' : (matched.source === 'lrclib' ? 'LRCLIB' : '本地匹配');
+      rowNote(row, '已下载歌词 · ' + source, 'ok');
+      setStatus('歌词已下载：' + fileName + '（' + source + '）。', 'ok');
+    }).catch(function (e) {
+      hideProgress();
+      var msg = e && /未找到可用歌词/.test(String(e.message || e)) ? '未找到可用歌词' : '歌词匹配失败';
+      rowNote(row, msg, 'warn');
+      setStatus(msg + '；可以尝试只输入歌曲名，或稍后重试。', 'err');
+    }).then(function () {
+      unlock();
+    });
+  }
+
+  function downloadWithLyrics(song, btn, row) {
+    if (working) return;
+    if (!song || song.id == null || song.id === '') {
+      setStatus('歌曲信息不完整，请重新搜索。', 'err');
+      rowError(row, '歌曲信息不完整，请重新搜索。');
+      return;
+    }
+    lock(btn, row, '准备中…');
+    rowError(row, '');
+    rowNote(row, '歌词与音频并行准备…', 'loading');
+    showProgress(true);
+    setStatus('正在解析直链并匹配歌词…');
+
+    var lyricPromise = lyricsFor(song).catch(function () { return null; });
+    var audioPromise = resolveSong(song).then(function (info) {
+      if (btn) btn.textContent = '下载中…';
+      setStatus('直链已就绪，浏览器开始直连 CDN…');
+      return streamToBlobData(song, info).then(function (data) {
+        return { info: info, data: data };
+      });
+    });
+
+    Promise.all([lyricPromise, audioPromise]).then(function (values) {
+      var matched = values[0];
+      var pair = values[1];
+      var data = pair.data;
+      var ext = pickExt(data.url, data.type, data.blob.type);
+      var lyric = matched && matched.lyric ? matched.lyric : '';
+      return embedAudioLyric(song, data.blob, ext, lyric).then(function (embedded) {
+        var note = '';
+        if (embedded.embedded) {
+          note = '已内嵌歌词';
+        } else if (lyric) {
+          saveLyricFile(song, lyric);
+          note = '该格式不支持内嵌，已同时下载 LRC';
+        } else {
+          note = '未匹配到歌词，仅下载音频';
+        }
+        finish(song, embedded.blob, data.url, data.type, data.received, data.t0, note);
+        rowNote(row, note, embedded.embedded ? 'ok' : 'warn');
+      });
+    }).catch(function (e) {
+      handleAudioError(row, e);
+    }).then(function () {
+      unlock();
+    });
+  }
+
+  function downloadSongMode(song, mode, btn, row) {
+    if (mode === 'lyric') downloadLyricsOnly(song, btn, row);
+    else if (mode === 'both') downloadWithLyrics(song, btn, row);
+    else downloadSong(song, btn, row);
   }
 
   function render() {
@@ -592,8 +755,10 @@
     if (!box) return;
     if (!results.length) {
       box.innerHTML = '<p class="para muted">' + emptyMsg + '</p>';
+      setResultMeta('0 首');
       return;
     }
+    setResultMeta(results.length + ' 首');
 
     var html = [];
     for (var i = 0; i < results.length; i++) {
@@ -615,8 +780,13 @@
           '<div class="mf-name" title="' + title + '">' + title + '</div>' +
           '<div class="mf-sub mono"><span class="fmt-chip mf-source">' + esc(sourceLabel(src)) + '</span>' + sub + '</div>' +
           '<div class="mf-error hidden"></div>' +
+          '<div class="mf-note" hidden></div>' +
         '</div>' +
-        '<button class="btn btn-primary mf-dl" type="button" data-idx="' + i + '">' + DL_LABEL + '</button>' +
+        '<div class="mf-actions">' +
+          '<button class="btn btn-primary mf-action mf-dl" type="button" data-idx="' + i + '" data-mode="audio" data-label="' + DL_LABEL + '">' + DL_LABEL + '</button>' +
+          '<button class="btn mf-action mf-dl-lyric" type="button" data-idx="' + i + '" data-mode="both" data-label="+歌词" title="下载音频并内嵌歌词；不支持内嵌时同时给 LRC">+歌词</button>' +
+          '<button class="btn mf-action mf-lyric-only" type="button" data-idx="' + i + '" data-mode="lyric" data-label="只要歌词" title="只下载 LRC / TXT，不下载音频">只要歌词</button>' +
+        '</div>' +
       '</div>');
     }
     box.innerHTML = html.join('');
@@ -626,12 +796,12 @@
       covers[k].addEventListener('error', function () { this.style.display = 'none'; });
     }
 
-    var btns = box.querySelectorAll('button[data-idx]');
+    var btns = box.querySelectorAll('.mf-action');
     for (var j = 0; j < btns.length; j++) {
       btns[j].addEventListener('click', function () {
         var idx = parseInt(this.getAttribute('data-idx'), 10);
         if (!isFinite(idx) || !results[idx]) return;
-        downloadSong(results[idx], this, this.parentNode);
+        downloadSongMode(results[idx], this.getAttribute('data-mode') || 'audio', this, this.closest('.mf-row'));
       });
     }
   }
@@ -653,10 +823,11 @@
     results = [];
     emptyMsg = '正在检索…';
     render();
+    setResultMeta('搜索中…');
     lock(null, null, '');
     var sBtn = $('mf-search');
     if (sBtn) sBtn.textContent = '搜索中…';
-    setStatus('正在通过服务器检索「' + q + '」（' + label + '）…');
+    setStatus('正在搜索「' + q + '」· ' + label + '…');
 
     fetchJson('/api/music/search?s=' + encodeURIComponent(q) +
       '&source=' + encodeURIComponent(source)).then(function (res) {
@@ -708,10 +879,10 @@
       render();
       var more = songs.length > results.length ?
         '（共 ' + songs.length + ' 条，显示前 ' + results.length + ' 条）' : '';
-      var breakdown = isAll ? sourceBreakdown(d.counts) : '';
-      setStatus('「' + label + '」找到 ' + results.length + ' 首' + more +
-        (breakdown ? '：' + breakdown : '') +
-        '，点「' + DL_LABEL + '」由浏览器直连 CDN。');
+      setResultMeta(results.length + ' 首');
+      var metaEl = $('mf-result-meta');
+      if (metaEl) metaEl.title = isAll ? sourceBreakdown(d.counts) : '';
+      setStatus('找到 ' + results.length + ' 首' + more + '；点下载 / +歌词 / 只要歌词。');
     }).catch(function () {
       results = [];
       emptyMsg = '检索服务暂不可用，请稍后重试。';
@@ -725,7 +896,7 @@
   function bindResults() {
     var box = $('mf-results');
     if (!box) return;
-    // 事件委托只绑定一次：错误区域的「换源搜索」按钮不重复监听
+    // 事件委托只绑定一次：错误区域的「换源找替代」按钮不重复监听
     box.addEventListener('click', function (e) {
       var node = e.target;
       var cls = node && node.className ? String(node.className) : '';
@@ -748,7 +919,7 @@
         }
       });
     }
-    setStatus('默认「' + ALL_LABEL + '」：输入关键词后回车或点「搜索」；服务器只做搜索与直链解析，音频由浏览器直连 CDN。');
+    setStatus('本地直连 · 不经过服务器');
     render();
   }
 
