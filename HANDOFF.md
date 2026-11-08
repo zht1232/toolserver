@@ -1,7 +1,7 @@
 # 交接说明（给接手的开发者/AI）
 
 ## 现状
-前端工具箱 25 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页：默认并行检索网易云 / QQ音乐 / 酷狗 / 汽水音乐 / 千千 / 5sing，服务器用本机 go-music-dl 只做搜索与直链解析，音频字节由浏览器直连各平台 CDN，服务器不转发、不保存歌曲；会员/版权曲可换源搜索。另新增「专业修图」（BitMappery）与「Camera Raw」（FlashRaw）两个本地图像工作区。
+前端工具箱 26 个页面，页面 JS 使用原生 JavaScript（IIFE 模块）。音乐解密与歌词匹配合并在同一页，并可分别开关；歌词可自动匹配或由用户上传，MP3 / FLAC 下载时可自动内嵌；图片压缩和 AI 水印检测、修补都在浏览器本地运行。新增「HIF / HEIF 转 JPEG」页：批量上传相机 HDR HIF，做 BT.2020/PQ/HLG → sRGB 色彩管理与高光压缩，输出 sRGB JPEG。**该页默认在浏览器本地用 WebAssembly（libheif/libde265）解码，图片不上传**；只有用户勾选服务器兜底且本地解码失败时，才会把单张文件临时上传到 `server.py` 内存转换。新增「多源音乐下载」页：默认并行检索网易云 / QQ音乐 / 酷狗 / 汽水音乐 / 千千 / 5sing，服务器用本机 go-music-dl 只做搜索与直链解析，音频字节由浏览器直连各平台 CDN，服务器不转发、不保存歌曲；会员/版权曲可换源搜索。另新增「专业修图」（BitMappery）与「Camera Raw」（FlashRaw）两个本地图像工作区。
 `server.py` 是可选的本地托管 + API（酷狗密钥分片、网易云歌词搜索代理、浏览器模型文件、反馈、HIF 兜底转换、多源音乐搜索/直链解析）。纯静态部署（无 Python 后端）时，浏览器本地 HIF 转换仍可用，服务器兜底、AI 模型下发与多源音乐解析不可用。AI 权重与 ONNX Runtime Web 文件放在静态目录之外，通过 allowlist API 提供；服务器只下发模型和运行库，不接收待处理图片或遮罩，也不运行水印推理（HIF 兜底转换是唯一可能接收用户图片的接口，只在内存处理）。旧的 `/api/watermark/inpaint` 接口返回 410。
 
 启动预览：
@@ -11,13 +11,14 @@ python3 server.py 8000
 ```
 
 ## 目录结构
-- `index.html` — 单页应用外壳，侧边栏导航 + 25 个路由页面（`retouch`/`raw` 为新建的修图工作区），hash 路由切页
+- `index.html` — 单页应用外壳，侧边栏导航 + 26 个路由页面（`retouch`/`raw` 为新建的修图工作区），hash 路由切页
 - `assets/js/main.js` — 路由表、环境探测（`TB` 全局工具：复制/下载/拖拽/格式化/压缩包）
 - `assets/js/*.js` — 每个工具一个文件，职责见下表
 - `assets/js/hif-worker.js` — HIF 浏览器本地转换 Worker：nclx/pixi 解析、libheif 16-bit 解码、PQ/HLG/SDR → sRGB 色调映射
 - `assets/vendor/libheif/` — libheif-js 1.19.8 WASM bundle（未修改）与 LGPL-3.0 许可证/来源说明；仅在 HIF 页首次转换时按需加载
-- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/search|lyric` + `/api/music/search|url` + `/api/feedback` + `/api/hif/convert`（兜底）+ 浏览器 AI 模型/运行库下发
+- `server.py` — 静态托管 + `/api/kgm/*` + `/api/nc/search|lyric` + `/api/music/search|url` + `/api/feedback` + `/api/hif/convert`（兜底）+ `/api/agent/*` + 浏览器 AI 模型/运行库下发
 - `hif_convert.py` — HIF/HEIF 10-bit HDR 解码、PQ/HLG → sRGB 映射、JPEG 输出（服务器兜底用）
+- `agent_api.py` — Agent 接口层（见下节）
 - `requirements.txt` — 仅 HIF 转换需要的可选依赖（Pillow / pillow-heif / NumPy）
 - `assets/js/watermark-local.js` — ONNX Runtime Web 检测和浏览器本地修补，模型缓存到浏览器 Cache Storage
 - 浏览器 AI 模型和 ONNX Runtime Web 文件 — 单独安装在站点目录之外，路径配置位于 `server.py`
@@ -135,8 +136,19 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - 音频、常规图片转换和文本在浏览器本地处理；AI 水印修补也在浏览器本地运行。HIF 默认在浏览器本地转换；只有用户开启服务器兜底且本地解码失败时才会上传，服务器仅内存处理、不落盘。
 - 代码风格统一为 ES5（`var`、`function`、无箭头函数/class/let/const/模板字符串），
   是为了兼容老旧设备/浏览器，新增代码请保持一致。`hif-worker.js` 允许使用 Promise（仅在支持 Worker + WebAssembly 的浏览器里运行）。
-- 已做过的验证：`node --check` 全部 JS 文件语法通过；全部 25 个路由无 `Uncaught` JS 运行时错误；
+- 已做过的验证：`node --check` 全部 JS 文件语法通过；全部 26 个路由无 `Uncaught` JS 运行时错误；
   HIF 转换用 Canon EOS R7 的 BT.2020/PQ HIF 做过 API、浏览器批量 2 张与 ZIP 打包测试。
   2026-10-24 浏览器本地路线：用 Node 的 libheif-js WASM 对 32 MP HIF 实测解码 ~4.7 s、色调映射 ~1.1 s，色彩与服务端输出 MAE ≈ 0.96/255；仍需在真实 Chrome/Edge/Safari 和移动端复测 canvas 编码与内存。
   未做过的验证：真实移动设备/老旧浏览器的实机测试、真实 HLG 样张、竖拍 EXIF 方向、各音乐解密格式的实机端到端测试。
 - 2026-10-18 视觉精修的验证方式：`html.parser` 全量标签配对检查（0 错误）+ agent-browser 无头浏览器实测。
+
+## Agent 接口（2026-11-08 新增）
+- 入口 `GET /api/agent`（免鉴权能力清单）、`GET /api/agent/ping`、音乐 5 个端点（`music/search|album|artist|resolve|download`）、图像 2 个端点（`image/ops|edit`）、页面 `#agent`（导航「自动化」分组，工具数 25→26）。
+- 令牌：`../localtools-agent-token`（线上 `/home/zht/localtools-agent-token`，0600，首次启动用 `secrets.token_urlsafe` 生成），或环境变量 `LOCALTOOLS_AGENT_TOKEN`。`Authorization: Bearer` / `X-Agent-Token` / `?token=`。**不能按 127.0.0.1 放行**：公网经 Cloudflare 隧道进来也是回环地址，必须一律校验。
+- 音乐检索复用 `server.py` 的 `music_search_source` / `music_resolver_get` / `sanitize_music_inspect`；`music_search_source` 新增可选 `page_size` 参数（默认仍是 `MUSIC_MAX_RESULTS`，只影响 Agent 调用）。上游 `go-music-dl` 只有关键词搜索、没有专辑详情接口，所以按专辑 / 歌手是「逐源检索 → 归一化文本匹配 → 按 (专辑,歌手) 或歌手分组」实现的。
+- 上游不稳定，已实测记下两条：① `page_size=20` 时网易云常只回 1 条、其它源可能空页，`page_size=10` 明显更稳；② 酷狗当前大量曲目 `extra.privilege=5`（会员曲），`inspect` 一律 `not_found`。因此 Agent 侧加了请求间隔限速、空结果重试一次、每首曲目 `alternates[]` 跨音源回退、整包补检索 netease/qq。这些是上游属性，不是本站 bug；`counts` 与包内 `_errors.txt` 会如实反映。
+- 整专辑 ZIP：私有临时目录并行下载（3 worker）、70 秒时间预算、失败曲目写 `_errors.txt`、结束后删除目录；不落盘到站点、不缓存。单曲下载是一次性流式转发，带 `Content-Disposition` 与 `X-Agent-*` 统计头。
+- 修图用服务端已有的 Pillow / NumPy（venv 里 12.3 / 2.5），算子见 `GET /api/agent/image/ops`；`ops` 串里逗号也用作 `crop` 的坐标分隔符，解析时把「无等号且不是独立开关」的片段续写到上一个算子。支持 zip 批量、`target_kb` 自动降质、`info=1` 只回尺寸。图片不落盘。
+- 验证：本地起 8013 + SSH 端口转发，实测清单/401/错误令牌/ping、按歌名/歌手/专辑检索、单曲下载（4.8 MB MP3，跨源回退到网易云）、修图（resize/crop/rotate/webp/target_kb/批量 zip/坏图 400/无令牌 401）、整包离线单测（2 成功 + 1 失败写 `_errors.txt`）、26 个路由全激活零 JS 错误。
+- 已知缺口：会员 / 版权曲拿不到直链（上游限制，站点页面同样如此）；上游偶发空页会让单次检索命中数偏低；Cloudflare 免费版对源站 100 秒无响应会报 524，故整包设 70 秒预算。
+

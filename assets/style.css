@@ -234,6 +234,8 @@ a { color: var(--accent-hi); }
   background: var(--input-bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   padding: 10px 12px; white-space: pre; overflow-x: auto; margin-bottom: 8px; color: var(--ink-2);
 }
+/* 长命令（curl 之类）在窄面板里换行，避免横向滚动藏住参数 */
+.code.wrap { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 
 /* ---------- 表单控件 ---------- */
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 13px; }

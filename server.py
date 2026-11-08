@@ -24,6 +24,16 @@
   POST /api/feedback                用户主动提交建议反馈
   POST /api/hif/convert?name=&q=&ev=  HIF/HEIF -> sRGB JPEG（HDR 色彩管理，仅内存处理；ev 为曝光补偿）
 
+Agent 接口（见 agent_api.py，除清单外均需 Bearer token）：
+  GET  /api/agent                       能力清单（免鉴权，供 Agent 自举）
+  GET  /api/agent/ping                  健康检查与能力探测
+  GET  /api/agent/music/search          type=song|artist|album 多源检索（支持按歌手 / 专辑）
+  GET  /api/agent/music/album|artist    取整专辑 / 歌手曲目，format=zip 打包下载
+  GET  /api/agent/music/resolve         只解析直链（JSON）
+  GET  /api/agent/music/download        下载单曲（流式转发字节，不落盘）
+  GET  /api/agent/image/ops             修图算子说明
+  POST /api/agent/image/edit            服务端修图 / 格式转换（body 为图片或 zip）
+
 用法：
     python3 server.py                  # 默认 0.0.0.0:8000
     python3 server.py 8080             # 指定端口
@@ -54,6 +64,14 @@ try:
 except Exception as _hif_exc:  # Optional feature: the rest of the site still runs.
     hif_convert = None
     _HIF_IMPORT_ERROR = "%s: %s" % (type(_hif_exc).__name__, _hif_exc)
+
+try:
+    import agent_api
+    agent_api.bind(sys.modules[__name__])
+    _AGENT_IMPORT_ERROR = ""
+except Exception as _agent_exc:  # 可选功能：Agent 接口不可用时站点其余部分照常工作
+    agent_api = None
+    _AGENT_IMPORT_ERROR = "%s: %s" % (type(_agent_exc).__name__, _agent_exc)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 KEY_XZ = os.path.join(BASE_DIR, "assets", "kugou_key.xz")
@@ -308,9 +326,14 @@ class MusicSourceError(Exception):
         self.message = message
 
 
-def music_search_source(source, keyword, timeout=MUSIC_TIMEOUT):
-    """检索单个音源（带缓存）；失败抛 MusicSourceError，不写缓存。"""
-    cache_key = (source, keyword)
+def music_search_source(source, keyword, timeout=MUSIC_TIMEOUT, page_size=None):
+    """检索单个音源（带缓存）；失败抛 MusicSourceError，不写缓存。
+
+    page_size 默认沿用 MUSIC_MAX_RESULTS；Agent 侧会传更小的页长，因为上游各源适配器
+    在页长偏大时更容易返回空页（实测网易云 page_size=20 只回 1 条，10 条时正常）。
+    """
+    page_size = page_size or MUSIC_MAX_RESULTS
+    cache_key = (source, keyword, page_size)
     cached = music_cache_get("search", cache_key)
     if cached is not None:
         return list(cached)
@@ -319,7 +342,7 @@ def music_search_source(source, keyword, timeout=MUSIC_TIMEOUT):
         "q": keyword,
         "type": "song",
         "page": "1",
-        "page_size": str(MUSIC_MAX_RESULTS),
+        "page_size": str(page_size),
         "sources": source,
     }
     try:
@@ -819,6 +842,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
+        if parsed.path.startswith("/api/agent"):
+            if agent_api is None:
+                self.send_json({"error": "Agent 接口未启用", "detail": _AGENT_IMPORT_ERROR[:300]}, 503)
+                return
+            agent_api.handle(self, parsed.path, qs, "POST")
+            return
         if parsed.path == "/api/hif/convert":
             self.handle_hif_convert(qs)
             return
@@ -874,6 +903,13 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path, qs = parsed.path, urllib.parse.parse_qs(parsed.query)
 
+        if path.startswith("/api/agent"):
+            if agent_api is None:
+                self.send_json({"error": "Agent 接口未启用", "detail": _AGENT_IMPORT_ERROR[:300]}, 503)
+                return
+            agent_api.handle(self, path, qs, "GET")
+            return
+
         if path.startswith("/api/ai/models/"):
             name = path.rsplit("/", 1)[-1]
             entry = AI_MODEL_FILES.get(name)
@@ -915,6 +951,12 @@ class Handler(SimpleHTTPRequestHandler):
                     "sources": list(MUSIC_SOURCES),
                 },
                 "browserWatermarkAi": browser_ai,
+                "agent": {
+                    "ready": agent_api is not None,
+                    "version": getattr(agent_api, "AGENT_VERSION", "") if agent_api else "",
+                    "manifest": "/api/agent",
+                    "error": _AGENT_IMPORT_ERROR[:300],
+                },
                 "hifConvert": {
                     "ready": hif_convert is not None,
                     "maxUploadMB": _HIF_MAX_UPLOAD // 1048576,
@@ -1017,6 +1059,10 @@ def main():
     print("密钥表: %s" % ("已就绪" if os.path.exists(KEY_BIN) else "缺失（酷狗新版格式将不可用）"))
     print("HIF 转换: %s" % ("就绪" if hif_convert else
                             "未安装依赖（pip install -r requirements.txt）"))
+    if agent_api is None:
+        print("Agent 接口: 未启用（%s）" % _AGENT_IMPORT_ERROR[:120])
+    else:
+        print("Agent 接口: 就绪 —— 清单 /api/agent，令牌 %s" % agent_api.token_file())
     print("按 Ctrl+C 停止")
     try:
         server.serve_forever()

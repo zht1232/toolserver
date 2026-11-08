@@ -19,6 +19,11 @@ python3 server.py 8000
 
 音乐解密、常规图片转换压缩和文本处理在浏览器中完成。AI 水印检测与修补也在浏览器本地运行；模型只在需要时下载并缓存在当前浏览器，图片与遮罩不会上传。HIF/HEIF 的 10-bit HDR 解码默认在浏览器本地用 WebAssembly 完成，图片不上传；只有用户勾选服务器兜底且本地解码失败时，所选文件才会临时上传到运行 `server.py` 的服务器，仅在内存中转换、不落盘；普通静态托管下该兜底不可用。多源音乐下载页只向 `server.py` 请求搜索与直链元数据，音频字节由浏览器直接从各音源 CDN 取走并保存到本机；服务器不转发、不保存歌曲，也不绕过会员或 DRM 限制。专业修图与 Camera Raw 页的图片、图层、蒙版、智能识别和 RAW 数据只在浏览器内存/Canvas/WASM 中处理，不上传服务器；Camera Raw 的预设与镜头配置保存在浏览器 localStorage，快照只保留在当前页面会话，批量导出在浏览器内打包 ZIP；AI 主体与 AI 天空使用站点自托管的 PP-MobileSeg Base 模型和 ONNX Runtime Web 在浏览器内推理，识别失败时分别回退到构图识别与颜色/连通域识别，两种蒙版都可再用画笔修整。歌词搜索会向歌词服务发送歌名和歌手名；建议反馈会把用户主动填写的文字与可选联系方式保存到站点目录之外的本地文件 `localtools-feedback.jsonl`。
 
+## Agent 接口
+站点额外提供一套供脚本 / LLM Agent 调用的服务端接口（页面功能不变）：多源音乐按歌手 / 专辑检索与下载（整专辑可打包 ZIP）、服务端修图与格式转换。能力清单 `GET /api/agent` 免鉴权、机器可读；其余接口用 `Authorization: Bearer <token>` 鉴权，令牌在服务器 `~/localtools-agent-token`（站点目录之外、0600，首次启动自动生成，也可用 `LOCALTOOLS_AGENT_TOKEN` 覆盖）。完整契约见 [AGENT_API.md](AGENT_API.md)，站点内也有「Agent 接口」页放 curl 速查。
+
+音频字节只在 Agent 明确请求下载时一次性流式转发，不落盘、不缓存、不绕过会员 / DRM；图片只在内存中处理。按专辑 / 歌手的检索是在六个音源的歌曲结果上做归一化分组（上游只有关键词检索），会员曲与上游偶发空页会如实反映在 `counts` 与包内 `_errors.txt`。
+
 ## 项目文件
 
 - `index.html`：单页应用和工具页面
@@ -33,7 +38,10 @@ python3 server.py 8000
 - `assets/vendor/flashraw/`：FlashRaw WASM RAW 解码器（MIT OR Apache-2.0）
 - `assets/vendor/ai-segmentation/`：PP-MobileSeg Base（ADE20K）ONNX 语义分割模型，用于 AI 主体（人物/动物）与 AI 天空（Apache-2.0，按需加载）
 - `assets/vendor/onnxruntime-web/`：ONNX Runtime Web 1.22.0 WASM 运行时（MIT，按需加载）
-- `server.py`：本地静态服务器和可选 API 代理（含 HIF 服务器兜底）
+- `server.py`：本地静态服务器和可选 API 代理（含 HIF 服务器兜底、多源音乐解析、Agent 接口路由）
+- `agent_api.py`：Agent 接口的鉴权 / 限流、能力清单、按歌手与专辑分组、整包下载与服务端修图
+- `AGENT_API.md`：Agent 接口完整契约与示例
+- `index.html` 的「Agent 接口」页：面向人的端点说明与 curl 速查
 - `hif_convert.py`：HIF/HEIF HDR → sRGB JPEG 色彩管理与转换（服务器兜底）
 - `requirements.txt`：HIF 转换的可选 Python 依赖（Pillow / pillow-heif / NumPy）
 - `assets/js/watermark-local.js`：ONNX Runtime Web 水印检测与浏览器本地修补

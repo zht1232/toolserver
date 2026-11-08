@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LOCALTOOLS — 本地优先工具箱</title>
 <meta name="description" content="本地优先工具箱：音乐解密、歌词工具、图片压缩、HIF/HEIF 转 JPEG、格式转换及开发者工具。图片与文件默认在浏览器本地处理，HIF 仅在开启服务器兜底且本地解码失败时上传。">
-<link rel="stylesheet" href="assets/style.css?v=20261031-14">
+<link rel="stylesheet" href="assets/style.css?v=20261108-1">
 <link rel="stylesheet" href="assets/raw.css?v=20261107-3">
 </head>
 <body>
@@ -60,7 +60,7 @@
 
     <nav class="nav">
       <button class="nav-item nav-home" id="nav-all-tools" type="button">
-        <svg class="nav-ico" aria-hidden="true"><use href="#i-grid"/></svg><span>全部工具</span><span class="nav-count">25</span>
+        <svg class="nav-ico" aria-hidden="true"><use href="#i-grid"/></svg><span>全部工具</span><span class="nav-count">26</span>
       </button>
       <div class="nav-cap">音乐</div>
       <a class="nav-item" data-route="music" href="#music"><svg class="nav-ico" aria-hidden="true"><use href="#i-music"/></svg><span>音乐解密 / 歌词</span></a>
@@ -91,6 +91,8 @@
       <a class="nav-item" data-route="hash" href="#hash"><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg><span>哈希校验</span></a>
       <a class="nav-item" data-route="timestamp" href="#timestamp"><svg class="nav-ico" aria-hidden="true"><use href="#i-history"/></svg><span>时间戳</span></a>
       <a class="nav-item" data-route="color" href="#color"><svg class="nav-ico" aria-hidden="true"><use href="#i-droplet"/></svg><span>颜色转换</span></a>
+      <div class="nav-cap">自动化</div>
+      <a class="nav-item" data-route="agent" href="#agent"><svg class="nav-ico" aria-hidden="true"><use href="#i-terminal"/></svg><span>Agent 接口</span></a>
       <div class="nav-cap">信息</div>
       <a class="nav-item" data-route="about" href="#about"><svg class="nav-ico" aria-hidden="true"><use href="#i-shield"/></svg><span>隐私与部署</span></a>
       <a class="nav-item" data-route="feedback" href="#feedback"><svg class="nav-ico" aria-hidden="true"><use href="#i-msg"/></svg><span>建议与反馈</span></a>
@@ -543,7 +545,7 @@
         <section class="hif-common" aria-labelledby="hif-common-title">
           <div class="hif-common-head">
             <h2 id="hif-common-title">常用工具</h2>
-            <button class="linkbtn" id="hif-all-tools" type="button">全部 25 个工具 →</button>
+            <button class="linkbtn" id="hif-all-tools" type="button">全部 26 个工具 →</button>
           </div>
           <div class="hif-common-strip">
             <a class="hif-tool" href="#image"><span class="hif-tool-icon"><svg class="nav-ico" aria-hidden="true"><use href="#i-image"/></svg></span><span>图片转换压缩</span></a>
@@ -1077,6 +1079,76 @@ python3 server.py 8000</pre>
         </div>
       </section>
 
+      <!-- ===== 26 Agent 接口 ===== -->
+      <section class="page hidden" id="page-agent">
+        <div class="page-head">
+          <h1>Agent 接口</h1>
+          <p class="lede">让脚本或 LLM Agent 直接用 HTTP 驱动本站：按歌手 / 专辑做多源音乐下载、服务端修图与格式转换。所有能力都由服务端提供，不依赖浏览器。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel panel-quiet">
+            <div class="panel-cap">三步接入</div>
+            <ol class="bullets">
+              <li><b>读清单</b>：<code>GET /api/agent</code> 免鉴权，返回全部端点、参数与示例，Agent 可据此自举。</li>
+              <li><b>取令牌</b>：服务器上执行 <code>cat ~/localtools-agent-token</code>（站点目录之外、0600 权限，首次启动自动生成）。也可用环境变量 <code>LOCALTOOLS_AGENT_TOKEN</code> 指定。</li>
+              <li><b>带令牌请求</b>：<code>Authorization: Bearer &lt;token&gt;</code>；兼容 <code>X-Agent-Token</code> 与 <code>?token=</code>。</li>
+            </ol>
+            <p class="para muted">令牌不按「本机地址」放行——公网请求经隧道进来同样是 127.0.0.1，一律校验令牌。清单接口只含文档，不含密钥。</p>
+          </div>
+          <div class="panel panel-quiet">
+            <div class="panel-cap">curl 速查</div>
+            <pre class="code mono wrap">TOKEN=$(cat ~/localtools-agent-token)
+BASE=https://tool.crystalkingdom.top
+
+# 按专辑检索（可带歌手过滤）
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/agent/music/search?q=范特西&amp;type=album&amp;artist=周杰伦"
+
+# 整专辑打包下载
+curl -H "Authorization: Bearer $TOKEN" -OJ \
+  "$BASE/api/agent/music/album?album=范特西&amp;artist=周杰伦&amp;format=zip"
+
+# 单曲下载（q 直接取首条命中）
+curl -H "Authorization: Bearer $TOKEN" -OJ \
+  "$BASE/api/agent/music/download?q=七里香&amp;artist=周杰伦"
+
+# 修图：自动影调 + 提亮阴影 + 缩到长边 2000
+curl -H "Authorization: Bearer $TOKEN" --data-binary @in.jpg \
+  "$BASE/api/agent/image/edit?ops=auto,shadows=12,resize=2000x&amp;format=jpeg" -o out.jpg</pre>
+          </div>
+        </div>
+
+        <div class="panel panel-quiet">
+          <div class="panel-cap">多源音乐：按歌手 / 专辑检索与下载</div>
+          <table class="ftable">
+            <thead><tr><th>端点</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">GET /api/agent/music/search</td><td>参数 <code>q</code> 必填；<code>type=song|artist|album</code> 决定平铺还是按歌手 / 专辑分组；<code>source=all</code> 默认并行检索全部音源；<code>artist</code> / <code>limit</code> 可再收窄。</td></tr>
+              <tr><td class="mono">GET /api/agent/music/album</td><td>给 <code>album</code>（可加 <code>artist</code>）取整张专辑曲目：<code>format=list</code> 返回 JSON，<code>format=zip</code> 直接把全部曲目打包下载。</td></tr>
+              <tr><td class="mono">GET /api/agent/music/artist</td><td>给 <code>artist</code> 取其热门作品与专辑分布，同样支持 <code>format=zip</code>。</td></tr>
+              <tr><td class="mono">GET /api/agent/music/resolve</td><td>只解析 CDN 直链，返回 <code>url</code> / <code>bitrate</code> / <code>size</code>，不转发字节。</td></tr>
+              <tr><td class="mono">GET /api/agent/music/download</td><td>单曲下载：给 <code>id+source</code> 直取，或给 <code>q</code> 取首条命中；<code>mode=url</code> 只回直链。</td></tr>
+            </tbody>
+          </table>
+          <p class="para muted">按专辑 / 歌手检索是在各音源的歌曲结果上做归一化匹配（忽略大小写、空格、全半角与标点）后分组的——上游解析器本身只有关键词检索，没有专辑详情接口。整包上限 40 首 / 600 MB，失败曲目会写进包内 <code>_errors.txt</code>，不会让整包失败。</p>
+        </div>
+
+        <div class="panel panel-quiet">
+          <div class="panel-cap">服务端修图</div>
+          <table class="ftable">
+            <thead><tr><th>端点</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">POST /api/agent/image/edit</td><td>请求体是图片原始字节（jpg / png / webp / heic / hif / avif），返回处理后的图片；<code>info=1</code> 只回尺寸与体积 JSON。</td></tr>
+              <tr><td class="mono">POST /api/agent/image/edit?zip=1</td><td>请求体是 zip 时批量处理（最多 24 张），返回处理后的 zip。</td></tr>
+              <tr><td class="mono">GET /api/agent/image/ops</td><td>全部算子与取值范围，含 auto / exposure / contrast / shadows / highlights / temperature / vignette / resize / crop / format。</td></tr>
+              <tr><td class="mono">POST /api/hif/convert</td><td>10-bit HDR HIF/HEIF 专用转换（站点原有管线，10-bit 色彩映射更适合大光比照片）。</td></tr>
+            </tbody>
+          </table>
+          <p class="para muted">算子写法：<code>ops=auto,exposure=0.3,contrast=8,resize=1600x,format=jpeg,quality=88</code>；也支持逐项 query 参数。单张上限 40 MB / 4000 万像素，图片不落盘。需要浏览器本地 AI 去水印、Camera Raw 手动调色时仍走对应页面。</p>
+        </div>
+      </section>
+
       <!-- ===== 21 建议与反馈 ===== -->
       <section class="page hidden" id="page-feedback">
         <div class="page-head">
@@ -1103,7 +1175,7 @@ python3 server.py 8000</pre>
 
     </div>
     <footer class="site-foot">
-      <span>LOCALTOOLS · 25 个工具</span>
+      <span>LOCALTOOLS · 26 个工具</span>
       <span>浏览器本地处理 · 图片不上传</span>
     </footer>
   </main>
@@ -1160,7 +1232,7 @@ python3 server.py 8000</pre>
 
 </div>
 
-<script src="assets/js/main.js?v=20261031-01"></script>
+<script src="assets/js/main.js?v=20261108-1"></script>
 <script src="assets/js/musicfast.js?v=20261031-14"></script>
 <script src="assets/js/zip.js?v=20261024-05"></script>
 <script src="assets/js/hif.js?v=20261025-07"></script>

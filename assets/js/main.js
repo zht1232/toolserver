@@ -4,7 +4,7 @@
 
   var ROUTES = ['music', 'musicfast', 'syncer', 'lrc', 'image', 'hif', 'retouch', 'raw', 'json', 'encode',
     'csvjson', 'markdown', 'regex', 'jwt', 'cron', 'radix', 'generator', 'diff', 'reference',
-    'text', 'hash', 'timestamp', 'color', 'about', 'feedback'];
+    'text', 'hash', 'timestamp', 'color', 'agent', 'about', 'feedback'];
   var TITLES = {
     music: '音乐解密与歌词', musicfast: '多源音乐下载', syncer: '歌词打轴器',
     lrc: 'LRC 时间轴', image: '图片转换压缩', hif: 'HIF / HEIF 转 JPEG', retouch: '专业修图',
@@ -13,7 +13,7 @@
     regex: '正则表达式测试', jwt: 'JWT 解析器', cron: 'Cron 表达式', radix: '进制转换 / 位运算',
     generator: 'UUID / 密码生成', diff: '文本 Diff 对比', reference: '速查表',
     text: '文本处理', hash: '哈希校验',
-    timestamp: '时间戳转换', color: '颜色转换', about: '隐私与部署', feedback: '建议与反馈'
+    timestamp: '时间戳转换', color: '颜色转换', agent: 'Agent 接口', about: '隐私与部署', feedback: '建议与反馈'
   };
   TITLES.watermark = '整图 AI 去水印';
   var GROUPS = {
@@ -23,7 +23,7 @@
     regex: '开发', jwt: '开发', cron: '开发', radix: '开发', generator: '开发',
     diff: '开发', reference: '开发',
     text: '文本', hash: '文本', timestamp: '文本', color: '文本',
-    about: '信息', feedback: '信息'
+    agent: '自动化', about: '信息', feedback: '信息'
   };
 
   var RECENT_KEY = 'localtools-recent-v1';
