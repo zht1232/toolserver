@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.5.0';
+  var VERSION = '1.6.0';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -198,10 +198,17 @@
   var ALL_ADJUSTMENTS = ADJUSTMENTS.concat(LENS, DETAIL);
 
   var LOCALS = [
-    { key: 'exposure', label: '局部曝光', min: -3, max: 3, step: 0.05, def: 0, ev: true },
-    { key: 'contrast', label: '局部对比', min: -100, max: 100, step: 1, def: 0 },
-    { key: 'temperature', label: '局部色温', min: -100, max: 100, step: 1, def: 0 },
-    { key: 'saturation', label: '局部饱和', min: -100, max: 100, step: 1, def: 0 }
+    { key: 'exposure', label: '曝光', min: -3, max: 3, step: 0.05, def: 0, ev: true },
+    { key: 'contrast', label: '对比度', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'highlights', label: '高光', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'shadows', label: '阴影', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'whites', label: '白色', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'blacks', label: '黑色', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'temperature', label: '色温', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'tint', label: '色调', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'vibrance', label: '自然饱和度', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'saturation', label: '饱和度', min: -100, max: 100, step: 1, def: 0 },
+    { key: 'dehaze', label: '去雾', min: -100, max: 100, step: 1, def: 0 }
   ];
 
   var PARAM_CURVE = [
@@ -423,6 +430,8 @@
     'uniform vec2 u_maskP2;',
     'uniform mat2 u_maskEllipse;',
     'uniform vec4 u_local;',
+    'uniform vec4 u_local2;',
+    'uniform vec4 u_local3;',
     'uniform float u_curveOn;',
     'uniform float u_scale;',
     'uniform float u_seed;',
@@ -677,10 +686,23 @@
     'vec3 localAdjust(vec3 g, float m) {',
     '  vec3 lg = g;',
     '  lg *= vec3(exp2(u_local.z * 0.5), 1.0, exp2(-u_local.z * 0.5));',
+    '  lg *= vec3(exp2(u_local3.x * 0.10), exp2(-u_local3.x * 0.32), exp2(u_local3.x * 0.10));',
     '  lg *= exp2(u_local.x);',
-    '  lg = (lg - 0.5) * (1.0 + u_local.y * 0.8) + 0.5;',
     '  float ll = lumaOf(lg);',
-    '  lg = mix(vec3(ll), lg, 1.0 + u_local.w * 0.9);',
+    '  lg += u_local2.w * 0.20 * pow(clamp(1.0 - smoothstep(0.0, 0.55, ll), 0.0, 1.0), 1.4);',
+    '  lg += u_local2.y * 0.26 * pow(clamp(1.0 - smoothstep(0.0, 0.72, ll), 0.0, 1.0), 1.6);',
+    '  lg -= u_local2.x * 0.28 * smoothstep(0.35, 1.0, ll);',
+    '  lg += u_local2.z * 0.20 * smoothstep(0.45, 1.0, ll);',
+    '  lg = (lg - 0.5) * (1.0 + u_local.y * 0.8) + 0.5;',
+    '  if (u_local3.y > 0.0) { lg = (lg - 0.045 * u_local3.y) * (1.0 + 0.32 * u_local3.y); }',
+    '  else if (u_local3.y < 0.0) { lg += (-u_local3.y) * 0.16 * (1.0 - clamp(lg, 0.0, 1.0)); }',
+    '  float l2 = lumaOf(lg);',
+    '  float mx = max(max(lg.r, lg.g), lg.b);',
+    '  float mn = min(min(lg.r, lg.g), lg.b);',
+    '  float satAmt = clamp(mx - mn, 0.0, 1.0);',
+    '  lg = mix(vec3(l2), lg, 1.0 + u_local3.z * 0.9 * (1.0 - satAmt));',
+    '  l2 = lumaOf(lg);',
+    '  lg = mix(vec3(l2), lg, 1.0 + u_local.w * 0.9);',
     '  return mix(g, lg, m);',
     '}',
     '',
@@ -768,7 +790,7 @@
     'u_temp', 'u_tint', 'u_vibrance', 'u_saturation', 'u_clarity', 'u_dehaze',
     'u_vignette', 'u_grain', 'u_sharpen', 'u_lensDistort', 'u_lensVignette', 'u_lensCa',
     'u_noiseLuma', 'u_noiseColor', 'u_maskType', 'u_maskInvert', 'u_maskShow',
-    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_maskEllipse', 'u_local', 'u_curveOn', 'u_scale', 'u_seed',
+    'u_maskFeather', 'u_maskP1', 'u_maskP2', 'u_maskEllipse', 'u_local', 'u_local2', 'u_local3', 'u_curveOn', 'u_scale', 'u_seed',
     'u_hslOn', 'u_gradeOn', 'u_perspOn', 'u_rangeMode', 'u_rangeLuma', 'u_rangeFeather',
     'u_rangeColor', 'u_rangeTolerance'
   ];
@@ -1027,6 +1049,8 @@
       gl.uniform2f(u.u_maskP2, 0.5, 0.5);
       gl.uniformMatrix2fv(u.u_maskEllipse, false, new Float32Array([1, 0, 0, 1]));
       gl.uniform4f(u.u_local, 0, 0, 0, 0);
+      gl.uniform4f(u.u_local2, 0, 0, 0, 0);
+      gl.uniform4f(u.u_local3, 0, 0, 0, 0);
       gl.uniform1f(u.u_rangeMode, 0);
       gl.uniform2f(u.u_rangeLuma, 0, 1);
       gl.uniform1f(u.u_rangeFeather, 0.05);
@@ -1044,6 +1068,8 @@
     gl.uniformMatrix2fv(u.u_maskEllipse, false,
       new Float32Array(mask.ellipse || [1, 0, 0, 1]));
     gl.uniform4f(u.u_local, local[0], local[1], local[2], local[3]);
+    gl.uniform4f(u.u_local2, local[4] || 0, local[5] || 0, local[6] || 0, local[7] || 0);
+    gl.uniform4f(u.u_local3, local[8] || 0, local[9] || 0, local[10] || 0, 0);
     gl.uniform1f(u.u_rangeMode, mask.rangeMode === 'color' ? 1 : 0);
     gl.uniform2f(u.u_rangeLuma, mask.rangeLo || 0, mask.rangeHi == null ? 1 : mask.rangeHi);
     gl.uniform1f(u.u_rangeFeather, mask.rangeFeather == null ? 0.05 : mask.rangeFeather);
@@ -1327,7 +1353,7 @@
           '</details>' +
 
           '<details class="raw-group" open>' +
-            '<summary>' + icon('sliders') + '<span>基本调整</span><span class="raw-sum-meta" id="raw-adj-sum">0 项</span>' +
+            '<summary>' + icon('sliders') + '<span>基本</span><span class="raw-sum-meta" id="raw-adj-sum">0 项</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
               '<div class="raw-sliders" id="raw-adj-sliders">' + basicSliders + '</div>' +
@@ -1341,7 +1367,7 @@
           '</details>' +
 
           '<details class="raw-group" open id="raw-color-group">' +
-            '<summary>' + icon('sliders') + '<span>HSL 与颜色分级</span><span class="raw-sum-meta" id="raw-color-sum">0 项</span>' +
+            '<summary>' + icon('sliders') + '<span>混色器</span><span class="raw-sum-meta" id="raw-color-sum">0 项</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
               '<div class="raw-subhead"><span>HSL · 按色相调整</span><span id="raw-hsl-scope">红</span></div>' +
@@ -1351,14 +1377,22 @@
                 '<button type="button" class="raw-btn tiny" data-act="hsl-reset-band">重置当前色相</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="hsl-reset-all">全部重置</button>' +
               '</div>' +
-              '<div class="raw-subhead"><span>颜色分级 · 按明暗区域着色</span><span id="raw-grade-scope">阴影</span></div>' +
+              '<p class="raw-group-hint" style="margin:4px 0 0;font-size:10.5px;color:var(--raw-ink-3)">混色器（HSL）分别调整 8 个色相的色相 / 饱和度 / 明度。滑杆双击可复位。</p>' +
+            '</div>' +
+          '</details>' +
+
+          '<details class="raw-group" open id="raw-grade-group">' +
+            '<summary>' + icon('sliders') + '<span>颜色分级</span><span class="raw-sum-meta" id="raw-grade-sum">0 项</span>' +
+              '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
+            '<div class="raw-group-body">' +
+              '<div class="raw-subhead"><span>按明暗区域着色</span><span id="raw-grade-scope">阴影</span></div>' +
               '<div class="raw-seg raw-grade-ranges" id="raw-grade-ranges">' + gradeChips + '</div>' +
               '<div class="raw-sliders raw-color-sliders" id="raw-grading-sliders">' + gradeSliders + '</div>' +
               '<div class="raw-color-actions">' +
                 '<button type="button" class="raw-btn tiny" data-act="grade-reset-range">重置当前色调</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="grade-reset-all">全部重置</button>' +
               '</div>' +
-              '<p class="raw-group-hint" style="margin:4px 0 0;font-size:10.5px;color:var(--raw-ink-3)">HSL 作用于画面颜色；颜色分级分别给阴影、中间调和高光加色。滑杆双击可复位。</p>' +
+              '<p class="raw-group-hint" style="margin:4px 0 0;font-size:10.5px;color:var(--raw-ink-3)">颜色分级分别给阴影、中间调和高光加色。滑杆双击可复位。</p>' +
             '</div>' +
           '</details>' +
 
@@ -1427,11 +1461,23 @@
           '</details>' +
 
           '<details class="raw-group">' +
-            '<summary>' + icon('sliders') + '<span>细节与降噪</span><span class="raw-sum-meta" id="raw-detail-sum">关闭</span>' +
+            '<summary>' + icon('sliders') + '<span>细节</span><span class="raw-sum-meta" id="raw-detail-sum">关闭</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
               '<p class="raw-group-hint">降噪作用于原始像素并保留边缘。高 ISO 可从亮度 20–40、色彩 25–50 开始；过强会损失细节。</p>' +
               '<div class="raw-sliders" id="raw-detail-sliders">' + detailSliders + '</div>' +
+              '<div class="raw-denoise" id="raw-denoise">' +
+                '<div class="raw-denoise-head">' +
+                  '<button type="button" class="raw-btn tiny" data-act="denoise-toggle" id="raw-denoise-toggle" aria-pressed="false">' + icon('wand') + 'AI 降噪</button>' +
+                  '<span class="raw-denoise-status" id="raw-denoise-status">关闭</span>' +
+                '</div>' +
+                '<div class="raw-slider-row" id="raw-denoise-strength-row" hidden>' +
+                  '<label for="raw-denoise-strength">强度</label>' +
+                  '<input type="range" id="raw-denoise-strength" min="0" max="100" step="1" value="70">' +
+                  '<output id="raw-denoise-strength-v">70</output>' +
+                '</div>' +
+                '<p class="raw-group-hint" id="raw-denoise-hint">本地 DnCNN 模型对亮度通道分块降噪（首次约 2.3 MB，不上传图片）；开启后按需计算并缓存，拖动强度即时混合，构图改变会重新计算。</p>' +
+              '</div>' +
             '</div>' +
           '</details>' +
 
@@ -1830,6 +1876,7 @@
       zoomPct: 100,
       pickMode: '',
       retouch: defaultRetouch(),
+      denoise: { enabled: false, strength: 70 },
       lastExport: null,
       loadSeq: 0
     };
@@ -1851,6 +1898,13 @@
   var aiOrtBase = '';
   var flashrawPromise = null;
   var aiSession = { promise: null, session: null, ort: null, status: 'idle', error: null };
+  // AI 降噪（DnCNN，MIT，浏览器本地分块推理）
+  var DENOISE_MODEL_FILE = 'dncnn.onnx';
+  var DENOISE_TILE = 256;
+  var DENOISE_OVERLAP = 24;
+  var denoiseVendorBase = '';
+  var denoiseSession = { promise: null, session: null, status: 'idle', error: null };
+  var denoiseCache = { key: '', canvas: null, computing: false, progress: 0, seq: 0 };
   var aiRaw = null; // 当前预览的 ADE20K 类别图及派生蒙版缓存
   var aiSceneState = {
     running: false,
@@ -1964,6 +2018,7 @@
       wbAuto: $('#raw-wb-auto', root),
       wbHint: $('#raw-wb-hint', root),
       colorSum: $('#raw-color-sum', root),
+      gradeSum: $('#raw-grade-sum', root),
       hslBands: $('#raw-hsl-bands', root),
       hslScope: $('#raw-hsl-scope', root),
       gradeRanges: $('#raw-grade-ranges', root),
@@ -2011,6 +2066,12 @@
       lensAuto: $('#raw-lens-auto', root),
       lensStatus: $('#raw-lens-status', root),
       detailSum: $('#raw-detail-sum', root),
+      denoiseToggle: $('#raw-denoise-toggle', root),
+      denoiseStatus: $('#raw-denoise-status', root),
+      denoiseStrength: $('#raw-denoise-strength', root),
+      denoiseStrengthV: $('#raw-denoise-strength-v', root),
+      denoiseStrengthRow: $('#raw-denoise-strength-row', root),
+      denoiseHint: $('#raw-denoise-hint', root),
       maskAI: $('#raw-mask-ai-refresh', root),
       aiModel: $('#raw-ai-model', root),
       aiModelText: $('#raw-ai-model-text', root),
@@ -2084,6 +2145,8 @@
       aiOrtBase = new URL('../onnxruntime-web/', vendorBase).href;
     }
     if (!/\/$/.test(aiOrtBase)) aiOrtBase += '/';
+    denoiseVendorBase = new URL('../ai-denoise/', vendorBase).href;
+    if (!/\/$/.test(denoiseVendorBase)) denoiseVendorBase += '/';
     curveCanvas = els.curveCanvas;
     curveCtx = curveCanvas.getContext('2d');
 
@@ -2102,6 +2165,7 @@
     initCurveEditor();
     updateMaskUI();
     updateRetouchUI();
+    updateDenoiseUI();
     updateAdjustOutputs();
     updateParamCurveUI();
     updateColorUI();
@@ -2257,6 +2321,8 @@
       state.curveDragging = -1;
       state.geometry = defaultGeometry();
       state.retouch = defaultRetouch();
+      state.denoise = { enabled: false, strength: 70 };
+      invalidateDenoiseCache();
       els.canvas.classList.remove('is-retouching');
       var freshMask = createMask('linear');
       state.masks = [freshMask];
@@ -2670,7 +2736,12 @@
   }
 
   function localVector(l) {
-    return [l.exposure, l.contrast / 100, l.temperature / 100, l.saturation / 100];
+    l = l || {};
+    return [
+      l.exposure || 0, (l.contrast || 0) / 100, (l.temperature || 0) / 100, (l.saturation || 0) / 100,
+      (l.highlights || 0) / 100, (l.shadows || 0) / 100, (l.whites || 0) / 100, (l.blacks || 0) / 100,
+      (l.tint || 0) / 100, (l.dehaze || 0) / 100, (l.vibrance || 0) / 100
+    ];
   }
 
   function maskRenderGeometry(mask, map) {
@@ -2838,7 +2909,8 @@
       curveChannel: state.curveChannel,
       geometry: cloneGeometry(state.geometry),
       masks: state.masks.map(cloneHistoryMask),
-      retouch: cloneRetouchData(state.retouch)
+      retouch: cloneRetouchData(state.retouch),
+      denoise: { enabled: state.denoise.enabled, strength: state.denoise.strength }
     });
   }
 
@@ -3055,6 +3127,9 @@
     state.retouch.current = null;
     state.retouch.dragging = false;
     state.retouch.picking = false;
+    var dnSnap = snap.denoise || {};
+    state.denoise.enabled = !!dnSnap.enabled;
+    state.denoise.strength = clamp(dnSnap.strength == null ? 70 : Number(dnSnap.strength), 0, 100);
     ALL_ADJUSTMENTS.forEach(function (d) {
       var input = root.querySelector('[data-adj="' + d.key + '"]');
       if (input) input.value = String(state.adjust[d.key]);
@@ -3068,6 +3143,7 @@
     updateMaskUI();
     updateGeometryUI();
     updateRetouchUI();
+    updateDenoiseUI();
     refreshAllMaskTextures();
     applyZoom();
     updateFootRight();
@@ -3726,11 +3802,15 @@
         var v = state.hsl[b.key];
         if (Math.abs(v.h) > 1e-9 || Math.abs(v.s) > 1e-9 || Math.abs(v.l) > 1e-9) count++;
       });
+      els.colorSum.textContent = count ? count + ' 项' : '0 项';
+    }
+    if (els.gradeSum) {
+      var gcount = 0;
       GRADE_RANGES.forEach(function (r) {
         var v = state.grading[r.key];
-        if (v.sat > 1e-9 || Math.abs(v.lum) > 1e-9) count++;
+        if (v.sat > 1e-9 || Math.abs(v.lum) > 1e-9) gcount++;
       });
-      els.colorSum.textContent = count ? count + ' 项' : '0 项';
+      els.gradeSum.textContent = gcount ? gcount + ' 项' : '0 项';
     }
   }
 
@@ -4286,6 +4366,8 @@
       renderer.setSource(composed.canvas);
       ensureCurveLut();
     }
+    invalidateDenoiseCache();
+    if (state.denoise.enabled) applyDenoisePreview();
   }
 
   function rebuildRenderSource(opts) {
@@ -6783,6 +6865,244 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * AI 降噪（DnCNN，亮度通道分块推理，浏览器本地）
+   * ------------------------------------------------------------------ */
+
+  function ensureDenoiseSession() {
+    if (denoiseSession.session) return Promise.resolve(denoiseSession.session);
+    if (denoiseSession.promise) return denoiseSession.promise;
+    denoiseSession.status = 'loading';
+    denoiseSession.error = null;
+    updateDenoiseUI();
+    denoiseSession.promise = (async function () {
+      var ort = await ensureAIORT();
+      var session = await ort.InferenceSession.create(denoiseVendorBase + DENOISE_MODEL_FILE, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+        logSeverityLevel: 4
+      });
+      denoiseSession.session = session;
+      denoiseSession.status = 'ready';
+      updateDenoiseUI();
+      return session;
+    })().catch(function (err) {
+      denoiseSession.status = 'failed';
+      denoiseSession.error = err;
+      denoiseSession.promise = null;
+      updateDenoiseUI();
+      throw err;
+    });
+    return denoiseSession.promise;
+  }
+
+  function denoiseFeather(t, first, last) {
+    var w = 1;
+    if (!first && t < DENOISE_OVERLAP) w = Math.min(w, t / DENOISE_OVERLAP);
+    if (!last && t >= DENOISE_TILE - DENOISE_OVERLAP) w = Math.min(w, (DENOISE_TILE - 1 - t) / DENOISE_OVERLAP);
+    w = clamp(w, 0, 1);
+    return w * w * (3 - 2 * w);
+  }
+
+  function tileOrigins(size) {
+    var T = DENOISE_TILE, stride = T - DENOISE_OVERLAP, out = [];
+    if (size <= T) return [0];
+    for (var p = 0; ; p += stride) {
+      out.push(Math.min(p, size - T));
+      if (p >= size - T) break;
+    }
+    return out;
+  }
+
+  // 返回亮度降噪后的 RGB 画布（强度 100%）；色相/ chroma 通过把亮度差加回各通道保留。
+  async function denoiseSourceCanvas(source, onProgress) {
+    var w = source.width, h = source.height;
+    var sctx = source.getContext('2d', { willReadFrequently: true });
+    var px = sctx.getImageData(0, 0, w, h).data;
+    var n = w * h;
+    var Y = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      Y[i] = (0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2]) / 255;
+    }
+    var session = await ensureDenoiseSession();
+    var ort = aiSession.ort;
+    var T = DENOISE_TILE;
+    var xs = tileOrigins(w), ys = tileOrigins(h);
+    var acc = new Float32Array(n), wgt = new Float32Array(n);
+    var tile = new Float32Array(T * T);
+    var total = xs.length * ys.length, done = 0;
+    for (var yi = 0; yi < ys.length; yi++) {
+      for (var xi = 0; xi < xs.length; xi++) {
+        var ox = xs[xi], oy = ys[yi];
+        for (var ty = 0; ty < T; ty++) {
+          var sy = clamp(oy + ty, 0, h - 1);
+          for (var tx = 0; tx < T; tx++) {
+            tile[ty * T + tx] = Y[sy * w + clamp(ox + tx, 0, w - 1)];
+          }
+        }
+        var input = new ort.Tensor('float32', tile, [1, 1, T, T]);
+        var res = await session.run({ image: input }, ['denoised_image']);
+        var dn = res.denoised_image.data;
+        var firstY = yi === 0, lastY = yi === ys.length - 1;
+        var firstX = xi === 0, lastX = xi === xs.length - 1;
+        for (var ty2 = 0; ty2 < T; ty2++) {
+          var gy = oy + ty2; if (gy >= h) continue;
+          var wy = denoiseFeather(ty2, firstY, lastY);
+          for (var tx2 = 0; tx2 < T; tx2++) {
+            var gx = ox + tx2; if (gx >= w) continue;
+            var ww = wy * denoiseFeather(tx2, firstX, lastX);
+            var gi = gy * w + gx;
+            acc[gi] += dn[ty2 * T + tx2] * ww;
+            wgt[gi] += ww;
+          }
+        }
+        done++;
+        if (onProgress) onProgress(done / total);
+        await nextFrame();
+      }
+    }
+    var out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    var octx = out.getContext('2d');
+    var oimg = octx.createImageData(w, h);
+    var od = oimg.data;
+    for (var j = 0; j < n; j++) {
+      var Yd = wgt[j] > 0 ? acc[j] / wgt[j] : Y[j];
+      var d8 = (Yd - Y[j]) * 255;
+      od[j * 4] = clamp(px[j * 4] + d8, 0, 255);
+      od[j * 4 + 1] = clamp(px[j * 4 + 1] + d8, 0, 255);
+      od[j * 4 + 2] = clamp(px[j * 4 + 2] + d8, 0, 255);
+      od[j * 4 + 3] = px[j * 4 + 3];
+    }
+    octx.putImageData(oimg, 0, 0);
+    return out;
+  }
+
+  function blendDenoiseCanvas(orig, denoised, strength) {
+    var s = clamp(Number(strength) || 0, 0, 100) / 100;
+    var w = orig.width, h = orig.height;
+    if (s <= 0) return orig;
+    var a = orig.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    var b = denoised.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    var out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    var ctx = out.getContext('2d');
+    var img = ctx.createImageData(w, h);
+    var d = img.data, inv = 1 - s;
+    for (var i = 0; i < a.length; i += 4) {
+      d[i] = a[i] * inv + b[i] * s;
+      d[i + 1] = a[i + 1] * inv + b[i + 1] * s;
+      d[i + 2] = a[i + 2] * inv + b[i + 2] * s;
+      d[i + 3] = a[i + 3];
+    }
+    ctx.putImageData(img, 0, 0);
+    return out;
+  }
+
+  function denoiseKey() {
+    return state.loadSeq + ':' + state.renderW + 'x' + state.renderH + ':' + geometrySignature();
+  }
+
+  function invalidateDenoiseCache() {
+    denoiseCache.seq++;
+    denoiseCache.key = '';
+    denoiseCache.computing = false;
+    denoiseCache.progress = 0;
+    if (denoiseCache.canvas) { denoiseCache.canvas.width = 0; denoiseCache.canvas.height = 0; denoiseCache.canvas = null; }
+  }
+
+  function applyDenoiseToRenderer() {
+    if (!renderer || !state.renderSource) return;
+    if (state.denoise.enabled && denoiseCache.canvas && denoiseCache.key === denoiseKey()) {
+      renderer.setSource(blendDenoiseCanvas(state.renderSource, denoiseCache.canvas, state.denoise.strength));
+    } else {
+      renderer.setSource(state.renderSource);
+    }
+    ensureCurveLut();
+    scheduleRender();
+  }
+
+  function applyDenoisePreview() {
+    if (!state.denoise.enabled || !state.loaded || !state.renderSource) {
+      applyDenoiseToRenderer();
+      return;
+    }
+    var key = denoiseKey();
+    if (denoiseCache.canvas && denoiseCache.key === key) { applyDenoiseToRenderer(); return; }
+    if (denoiseCache.computing) return;
+    denoiseCache.computing = true;
+    denoiseCache.progress = 0;
+    var seq = ++denoiseCache.seq;
+    var source = state.renderSource;
+    updateDenoiseUI();
+    setStatus('AI 降噪：正在加载模型并分块计算（不上传图片）…', '', true);
+    denoiseSourceCanvas(source, function (p) {
+      if (seq !== denoiseCache.seq) return;
+      denoiseCache.progress = p;
+      updateDenoiseUI();
+    }).then(function (canvas) {
+      if (seq !== denoiseCache.seq) { canvas.width = 0; canvas.height = 0; return; }
+      denoiseCache.canvas = canvas;
+      denoiseCache.key = denoiseKey();
+      denoiseCache.computing = false;
+      denoiseCache.progress = 1;
+      updateDenoiseUI();
+      applyDenoiseToRenderer();
+      setStatus('AI 降噪已应用（强度 ' + state.denoise.strength + '）。', 'ok');
+    }).catch(function (err) {
+      if (seq !== denoiseCache.seq) return;
+      denoiseCache.computing = false;
+      updateDenoiseUI();
+      setStatus('AI 降噪失败：' + describeError(err) + '，已回退到原图。', 'err');
+      applyDenoiseToRenderer();
+    });
+  }
+
+  function setDenoiseEnabled(on) {
+    if (!state.loaded) { setStatus('请先载入图片，再使用 AI 降噪。', 'warn'); return; }
+    markHistory(on ? '启用 AI 降噪' : '关闭 AI 降噪');
+    state.denoise.enabled = !!on;
+    if (!on) invalidateDenoiseCache();
+    updateDenoiseUI();
+    applyDenoisePreview();
+    historyTouch();
+  }
+
+  function setDenoiseStrength(v) {
+    state.denoise.strength = clamp(Math.round(Number(v) || 0), 0, 100);
+    updateDenoiseUI();
+    if (state.denoise.enabled && denoiseCache.canvas) {
+      applyDenoiseToRenderer();
+      historyTouch();
+    }
+  }
+
+  function updateDenoiseUI() {
+    if (!root || !els.denoiseToggle) return;
+    var d = state.denoise;
+    els.denoiseToggle.classList.toggle('is-on', d.enabled);
+    els.denoiseToggle.setAttribute('aria-pressed', d.enabled ? 'true' : 'false');
+    els.denoiseStrengthRow.hidden = !d.enabled;
+    if (Number(els.denoiseStrength.value) !== d.strength) els.denoiseStrength.value = String(d.strength);
+    els.denoiseStrengthV.textContent = String(d.strength);
+    var text = '关闭', tone = '';
+    if (d.enabled) {
+      if (denoiseCache.computing) {
+        text = denoiseSession.status === 'loading' && !denoiseSession.session
+          ? '加载模型…' : '计算 ' + Math.round(denoiseCache.progress * 100) + '%';
+        tone = 'is-loading';
+      } else if (denoiseSession.status === 'failed') {
+        text = '模型不可用'; tone = 'is-err';
+      } else if (denoiseCache.canvas) {
+        text = '已应用 · 强度 ' + d.strength; tone = 'is-ok';
+      } else {
+        text = '待计算';
+      }
+    }
+    els.denoiseStatus.textContent = text;
+    els.denoiseStatus.className = 'raw-denoise-status' + (tone ? ' ' + tone : '');
+  }
+
+  /* ------------------------------------------------------------------ *
    * 缩放 / 适应
    * ------------------------------------------------------------------ */
 
@@ -6906,9 +7226,20 @@
     canvas.height = height;
     var r = null;
     var outCanvas = null;
+    var denoiseCanvas = null;
+    var denoiseBlend = null;
     try {
       r = new RawRenderer(canvas);
-      r.setSource(sourceCanvas);
+      var exportSource = sourceCanvas;
+      if (state.denoise.enabled && !skipRetouch && state.denoise.strength > 0) {
+        try {
+          setStatus('AI 降噪：正在处理导出分辨率…', '', true);
+          denoiseCanvas = await denoiseSourceCanvas(sourceCanvas, null);
+          denoiseBlend = blendDenoiseCanvas(sourceCanvas, denoiseCanvas, state.denoise.strength);
+          exportSource = denoiseBlend;
+        } catch (e) { exportSource = sourceCanvas; }
+      }
+      r.setSource(exportSource);
       var built = buildCurveLut();
       r.setCurve(built.lut, !built.identity);
       // 按列表顺序为每个像素蒙版生成独立纹理；几何蒙版由着色器直接计算。
@@ -6942,6 +7273,8 @@
       canvas.width = 0;
       canvas.height = 0;
       if (outCanvas) { outCanvas.width = 0; outCanvas.height = 0; }
+      if (denoiseCanvas) { denoiseCanvas.width = 0; denoiseCanvas.height = 0; }
+      if (denoiseBlend) { denoiseBlend.width = 0; denoiseBlend.height = 0; }
     }
   }
 
@@ -7144,6 +7477,8 @@
     state.before = false;
     state.pickMode = '';
     state.retouch = defaultRetouch();
+    state.denoise = { enabled: false, strength: 70 };
+    invalidateDenoiseCache();
     state.curves = createCurves();
     state.paramCurve = defaultParamCurve();
     state.hsl = defaultHSL();
@@ -7937,6 +8272,8 @@
           undoRetouchStroke();
         } else if (act === 'retouch-clear') {
           clearRetouch();
+        } else if (act === 'denoise-toggle') {
+          setDenoiseEnabled(!state.denoise.enabled);
         }
         return;
       }
@@ -8245,6 +8582,11 @@
         els.retouchHardnessV.textContent = els.retouchHardness.value;
       });
     }
+    if (els.denoiseStrength) {
+      els.denoiseStrength.addEventListener('input', function () {
+        setDenoiseStrength(els.denoiseStrength.value);
+      });
+    }
 
     // 画布蒙版拖动
     els.canvas.addEventListener('pointerdown', onCanvasPointerDown);
@@ -8404,6 +8746,12 @@
         source: state.retouch.source ? { x: state.retouch.source.x, y: state.retouch.source.y } : null,
         strokeCount: state.retouch.strokes.length
       },
+      denoise: {
+        enabled: state.denoise.enabled,
+        strength: state.denoise.strength,
+        status: denoiseCache.computing ? 'computing' : (denoiseCache.canvas ? 'ready' : denoiseSession.status),
+        progress: denoiseCache.progress
+      },
       zoom: { mode: state.zoomMode, pct: state.zoomPct },
       history: {
         index: historyIndex,
@@ -8474,6 +8822,8 @@
     setRetouchActive: setRetouchActive,
     clearRetouch: clearRetouch,
     undoRetouchStroke: undoRetouchStroke,
+    setDenoiseEnabled: setDenoiseEnabled,
+    setDenoiseStrength: setDenoiseStrength,
     setParamCurve: function (key, value) { setParamCurve(key, value); },
     getParamCurve: function () { return Object.assign({}, state.paramCurve); },
     resetParamCurve: resetParamCurve,

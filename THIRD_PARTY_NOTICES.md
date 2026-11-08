@@ -17,6 +17,15 @@ The Camera Raw page's "AI 主体" and "AI 天空" masks use the following unmodi
 
 The Apache License 2.0 text and model provenance are included at `assets/vendor/ai-segmentation/LICENSE`, `NOTICE` and `SOURCE.md`; the MIT text and runtime provenance are at `assets/vendor/onnxruntime-web/LICENSE` and `SOURCE.md`. Nothing is fetched from a third-party CDN. Inference runs in the visitor's browser (single-threaded WASM when cross-origin isolation is unavailable); images and generated masks are not uploaded. The site does not fine-tune or otherwise modify the upstream model or runtime.
 
+## DnCNN (AI denoise)
+
+The Camera Raw page's "AI 降噪" uses a DnCNN denoising model vendored under `assets/vendor/ai-denoise/` and loaded on demand:
+
+- Trained weights from [KAIR](https://github.com/cszn/KAIR) (Kai Zhang) — MIT License, Copyright (c) 2019 Kai Zhang. Based on Zhang et al., "Beyond a Gaussian Denoiser: Residual Learning of Deep CNN for Image Denoising", IEEE TIP 2017. The weights target sigma=25 Gaussian noise on grayscale images.
+- ONNX export from [Qualcomm AI Hub Models](https://huggingface.co/qualcomm/DnCNN) — MIT License. The `dncnn-onnx-float` asset (v0.66.0) was downloaded and its external weight file merged into a single self-contained `dncnn.onnx` (~2.3 MB); the network structure and weight values are unchanged. Input `image` float32 1×1×256×256 (grayscale, [0,1]); output `denoised_image` 1×1×256×256.
+
+The MIT text and provenance are included at `assets/vendor/ai-denoise/LICENSE` and `SOURCE.md`. Inference runs in the visitor's browser via the same ONNX Runtime Web WASM runtime; the image is processed in overlapping 256×256 tiles on the luminance channel and is not uploaded. Nothing is fetched from a third-party CDN at runtime.
+
 ## go-music-dl (internal metadata/URL resolver)
 
 The "多源音乐下载" page uses the unmodified [go-music-dl](https://github.com/guohuiyuan/go-music-dl) v1.1.3 binary on the self-hosted server (systemd `music-dl.service`, listening only on 127.0.0.1:8080). The site calls only its `/music/search` HTML and `/music/inspect` JSON endpoints to resolve metadata and CDN URLs; it does not embed or proxy the upstream UI and does not use the upstream download endpoint. Audio bytes are fetched by the visitor's browser directly from the source CDN and are never relayed or stored by the server. go-music-dl and its [music-lib](https://github.com/guohuiyuan/music-lib) are licensed under AGPL-3.0; the binary is unmodified. Downloading copyrighted music may violate platform terms and local law; personal, non-commercial use only.

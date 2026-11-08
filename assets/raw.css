@@ -555,16 +555,16 @@
   accent-color: var(--raw-accent);
 }
 #raw-root input[type='range']::-webkit-slider-runnable-track {
-  height: 3px;
+  height: var(--trk-h, 3px);
   border-radius: 3px;
-  background: linear-gradient(90deg, var(--raw-line-2), var(--raw-line));
+  background: var(--trk-bg, linear-gradient(90deg, var(--raw-line-2), var(--raw-line)));
 }
 #raw-root input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 13px;
   height: 13px;
-  margin-top: -5px;
+  margin-top: var(--trk-mt, -5px);
   border-radius: 50%;
   background: var(--raw-panel);
   border: 2px solid var(--raw-accent);
@@ -577,9 +577,9 @@
   box-shadow: 0 0 0 3px rgba(12, 122, 105, 0.18);
 }
 #raw-root input[type='range']::-moz-range-track {
-  height: 3px;
+  height: var(--trk-h, 3px);
   border-radius: 3px;
-  background: var(--raw-line-2);
+  background: var(--trk-bg, var(--raw-line-2));
 }
 #raw-root input[type='range']::-moz-range-thumb {
   width: 11px;
@@ -1823,3 +1823,102 @@
 #raw-root #raw-retouch-mode { margin-bottom: 2px; }
 #raw-root #raw-retouch-mode button { display: inline-flex; align-items: center; gap: 4px; }
 #raw-root #raw-retouch-mode button svg { width: 13px; height: 13px; }
+
+/* ---------- AI 降噪 ---------- */
+#raw-root .raw-denoise {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--raw-line);
+}
+#raw-root .raw-denoise-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+#raw-root .raw-denoise-head .raw-btn.is-on {
+  background: var(--raw-accent-bg);
+  border-color: var(--raw-accent-line);
+  color: var(--raw-accent-hi);
+}
+#raw-root .raw-denoise-status {
+  font-size: 11.5px;
+  color: var(--raw-ink-3);
+  font-family: var(--raw-mono);
+}
+#raw-root .raw-denoise-status.is-loading { color: var(--raw-accent); }
+#raw-root .raw-denoise-status.is-ok { color: var(--raw-ok); }
+#raw-root .raw-denoise-status.is-err { color: var(--raw-err); }
+#raw-root #raw-denoise-strength-row { margin-top: 10px; }
+
+/* ---------- 滑块色带预览（按 PS / Lightroom 习惯，避免盲调） ---------- */
+/* 有色带的轨道加粗到 6px，并相应调整滑块垂直居中 */
+#raw-root input[data-adj="temperature"],
+#raw-root input[data-adj="tint"],
+#raw-root input[data-adj="exposure"],
+#raw-root input[data-adj="highlights"],
+#raw-root input[data-adj="shadows"],
+#raw-root input[data-adj="whites"],
+#raw-root input[data-adj="blacks"],
+#raw-root input[data-adj="vibrance"],
+#raw-root input[data-adj="saturation"],
+#raw-root input[data-local="temperature"],
+#raw-root input[data-local="exposure"],
+#raw-root input[data-local="saturation"],
+#raw-root input[data-local="highlights"],
+#raw-root input[data-local="shadows"],
+#raw-root input[data-local="whites"],
+#raw-root input[data-local="blacks"],
+#raw-root input[data-local="tint"],
+#raw-root input[data-local="vibrance"],
+#raw-root input[data-hsl="h"],
+#raw-root input[data-hsl="s"],
+#raw-root input[data-hsl="l"],
+#raw-root input[data-grade="hue"],
+#raw-root input[data-grade="sat"],
+#raw-root input[data-grade="lum"] {
+  --trk-h: 6px;
+  --trk-mt: -3.5px;
+}
+/* 色温：蓝 → 中性 → 暖黄 */
+#raw-root input[data-adj="temperature"],
+#raw-root input[data-local="temperature"] {
+  --trk-bg: linear-gradient(90deg, #2F6FBF 0%, #E9E5DA 50%, #E2A33C 100%);
+}
+/* 色调：绿 → 中性 → 洋红 */
+#raw-root input[data-adj="tint"],
+#raw-root input[data-local="tint"] {
+  --trk-bg: linear-gradient(90deg, #3FA34D 0%, #E9E5DA 50%, #C04C9C 100%);
+}
+/* 曝光 / 明度：黑 → 白 */
+#raw-root input[data-adj="exposure"],
+#raw-root input[data-local="exposure"],
+#raw-root input[data-hsl="l"],
+#raw-root input[data-grade="lum"] {
+  --trk-bg: linear-gradient(90deg, #161616 0%, #8A8A8A 50%, #F5F5F5 100%);
+}
+#raw-root input[data-adj="highlights"],
+#raw-root input[data-adj="whites"],
+#raw-root input[data-local="highlights"],
+#raw-root input[data-local="whites"] {
+  --trk-bg: linear-gradient(90deg, #7C7C7C 0%, #FFFFFF 100%);
+}
+#raw-root input[data-adj="shadows"],
+#raw-root input[data-adj="blacks"],
+#raw-root input[data-local="shadows"],
+#raw-root input[data-local="blacks"] {
+  --trk-bg: linear-gradient(90deg, #000000 0%, #7C7C7C 100%);
+}
+/* 饱和 / 鲜艳度：灰 → 彩 */
+#raw-root input[data-adj="vibrance"],
+#raw-root input[data-adj="saturation"],
+#raw-root input[data-local="saturation"],
+#raw-root input[data-local="vibrance"],
+#raw-root input[data-hsl="s"],
+#raw-root input[data-grade="sat"] {
+  --trk-bg: linear-gradient(90deg, #9A9A9A 0%, #D94F4F 100%);
+}
+/* 色相：彩虹 */
+#raw-root input[data-hsl="h"],
+#raw-root input[data-grade="hue"] {
+  --trk-bg: linear-gradient(90deg, #E0403A 0%, #E0C33A 17%, #4FA34D 33%, #3FA0A0 50%, #4A6FB3 67%, #9C5BAD 83%, #E0403A 100%);
+}
