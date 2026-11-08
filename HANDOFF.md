@@ -143,7 +143,7 @@ HIF 页默认在浏览器里用 libheif-js（WASM，内含 libheif 1.23.5 + libd
 - 2026-10-18 视觉精修的验证方式：`html.parser` 全量标签配对检查（0 错误）+ agent-browser 无头浏览器实测。
 
 ## Agent 接口（2026-11-08 新增）
-- 入口 `GET /api/agent`（免鉴权能力清单）、`GET /api/agent/ping`、音乐 5 个端点（`music/search|album|artist|resolve|download`）、图像 2 个端点（`image/ops|edit`）、页面 `#agent`（导航「自动化」分组，工具数 25→26）。
+- 入口 `GET /api/agent`（免鉴权能力清单）；网页 `#agent` 是完整人读文档（文档索引、curl 速查、音乐与修图完整参数表、响应示例、算子全表、错误码与限制、常见问题），并链接到免鉴权的 `/api/agent`、`/api/agent/image/ops` 与 `AGENT_API.md`、`GET /api/agent/ping`、音乐 5 个端点（`music/search|album|artist|resolve|download`）、图像 2 个端点（`image/ops|edit`）、页面 `#agent`（导航「自动化」分组，工具数 25→26）。
 - 令牌：`../localtools-agent-token`（线上 `/home/zht/localtools-agent-token`，0600，首次启动用 `secrets.token_urlsafe` 生成），或环境变量 `LOCALTOOLS_AGENT_TOKEN`。`Authorization: Bearer` / `X-Agent-Token` / `?token=`。**不能按 127.0.0.1 放行**：公网经 Cloudflare 隧道进来也是回环地址，必须一律校验。
 - 音乐检索复用 `server.py` 的 `music_search_source` / `music_resolver_get` / `sanitize_music_inspect`；`music_search_source` 新增可选 `page_size` 参数（默认仍是 `MUSIC_MAX_RESULTS`，只影响 Agent 调用）。上游 `go-music-dl` 只有关键词搜索、没有专辑详情接口，所以按专辑 / 歌手是「逐源检索 → 归一化文本匹配 → 按 (专辑,歌手) 或歌手分组」实现的。
 - 上游不稳定，已实测记下两条：① `page_size=20` 时网易云常只回 1 条、其它源可能空页，`page_size=10` 明显更稳；② 酷狗当前大量曲目 `extra.privilege=5`（会员曲），`inspect` 一律 `not_found`。因此 Agent 侧加了请求间隔限速、空结果重试一次、每首曲目 `alternates[]` 跨音源回退、整包补检索 netease/qq。这些是上游属性，不是本站 bug；`counts` 与包内 `_errors.txt` 会如实反映。

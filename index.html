@@ -1086,6 +1086,17 @@ python3 server.py 8000</pre>
           <p class="lede">让脚本或 LLM Agent 直接用 HTTP 驱动本站：按歌手 / 专辑做多源音乐下载、服务端修图与格式转换。所有能力都由服务端提供，不依赖浏览器。</p>
         </div>
 
+        <div class="panel panel-quiet">
+          <div class="panel-cap">文档索引</div>
+          <p class="para">本页是人读的完整说明。下面两个 JSON 地址可以直接交给 Agent 自举，Markdown 契约可整份下载当上下文：</p>
+          <ul class="bullets">
+            <li><a href="/api/agent" target="_blank" rel="noopener">/api/agent</a> — 能力清单 JSON（<b>免鉴权</b>）：全部端点、参数、示例、限流与上限</li>
+            <li><a href="/api/agent/image/ops" target="_blank" rel="noopener">/api/agent/image/ops</a> — 修图算子与取值范围（<b>免鉴权</b>）</li>
+            <li><a href="/AGENT_API.md" target="_blank" rel="noopener">AGENT_API.md</a> — 完整契约 Markdown，含 Python 最小示例</li>
+            <li><code>GET /api/agent/ping</code> — 健康检查（需令牌），返回解析器 / 图像处理是否就绪；站点总能力见 <code>/api/ping</code> 的 <code>agent</code> 字段</li>
+          </ul>
+        </div>
+
         <div class="grid-2">
           <div class="panel panel-quiet">
             <div class="panel-cap">三步接入</div>
@@ -1146,6 +1157,118 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @in.jpg \
             </tbody>
           </table>
           <p class="para muted">算子写法：<code>ops=auto,exposure=0.3,contrast=8,resize=1600x,format=jpeg,quality=88</code>；也支持逐项 query 参数。单张上限 40 MB / 4000 万像素，图片不落盘。需要浏览器本地 AI 去水印、Camera Raw 手动调色时仍走对应页面。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel panel-quiet">
+            <div class="panel-cap">完整参数表 · 音乐</div>
+            <table class="ftable">
+              <thead><tr><th>参数</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">q</td><td>检索关键词：歌名 / 歌手 / 专辑，最长 80 字符；<code>search</code> 必填，<code>download</code> 可用它代替 id。</td></tr>
+                <tr><td class="mono">type</td><td><code>song</code>（默认，平铺结果）/ <code>artist</code>（按歌手分组）/ <code>album</code>（按专辑分组）。</td></tr>
+                <tr><td class="mono">source</td><td><code>all</code>（默认）或 netease / kugou / qq / qianqian / soda / fivesing 之一。</td></tr>
+                <tr><td class="mono">artist</td><td>按歌手过滤，可与 <code>album</code> 组合用于消除同名专辑歧义，也用于组装换源关键词。</td></tr>
+                <tr><td class="mono">album</td><td><code>music/album</code> 的专辑名；也可作为 <code>search</code> / <code>download</code> 的过滤条件。</td></tr>
+                <tr><td class="mono">limit</td><td>每组曲目上限（默认 20；整包 zip 默认 12，最大 40）。</td></tr>
+                <tr><td class="mono">format</td><td><code>list</code>（默认 JSON 曲目）/ <code>zip</code>（直接下载打包文件）。</td></tr>
+                <tr><td class="mono">id / duration / extra</td><td>来自 <code>tracks[]</code> 的原值，<code>resolve</code> 与精确下载时要原样带回。</td></tr>
+                <tr><td class="mono">mode=url</td><td><code>download</code> 只回直链 JSON，不转发音频字节。</td></tr>
+                <tr><td class="mono">name</td><td>自定义下载文件名（不含扩展名），默认「歌手 - 歌名」。</td></tr>
+                <tr><td class="mono">token</td><td>令牌也可放查询串，但会进访问日志，建议用请求头。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="panel panel-quiet">
+            <div class="panel-cap">返回什么</div>
+            <p class="para"><b>JSON 接口</b>统一 UTF-8，成功带 <code>ok: true</code>；失败是 <code>{"error": "..."}</code> 加 4xx/5xx。<b>下载类</b>成功时直接给文件字节，文件名在 <code>Content-Disposition</code>（含 UTF-8 <code>filename*</code>）。</p>
+            <pre class="code mono wrap">// GET music/search?type=album（节选）
+{
+  "ok": true, "type": "album",
+  "counts": {"netease":11, "kugou":20, "soda":20, "..."},
+  "failures": 0,
+  "albums": [{
+    "album": "范特西", "artist": "周杰伦",
+    "cover": "https://...", "sources": ["kugou"],
+    "trackCount": 10, "duration": 2530,
+    "tracks": [{
+      "id": "...", "source": "kugou",
+      "name": "爱在西元前", "artist": "周杰伦",
+      "duration": 234, "extra": "{\"album_id\":...}",
+      "alternates": [ {"source":"netease", "..."} ]
+    }]
+  }]
+}</pre>
+            <pre class="code mono wrap">// 下载 / 整包的响应头
+HTTP/1.0 200 OK
+Content-Type: audio/mpeg
+Content-Disposition: attachment; filename="..."; filename*=UTF-8''...
+X-Agent-Source: netease      // 实际生效的音源
+X-Agent-Bitrate: 321
+X-Agent-Tracks: 1            // 仅整包
+X-Agent-Failed: 1            // 仅整包
+X-Agent-Sources: netease     // 仅整包</pre>
+            <p class="para muted"><code>counts</code> 是每源命中数，<code>failures</code> 是失败源个数；<code>alternates[]</code> 是同名歌曲在其它音源的候选，解析失败会自动换源。</p>
+          </div>
+        </div>
+
+        <div class="panel panel-quiet">
+          <div class="panel-cap">完整参数表 · 修图算子</div>
+          <table class="ftable">
+            <thead><tr><th>算子</th><th>取值范围与说明</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">auto</td><td>开关（写 <code>auto</code> 或 <code>auto=1</code>）：灰世界自动白平衡 + 自动影调。</td></tr>
+              <tr><td class="mono">exposure</td><td>-4..4，单位 EV，正值提亮。</td></tr>
+              <tr><td class="mono">contrast</td><td>-100..100，对比度。</td></tr>
+              <tr><td class="mono">saturation</td><td>-100..100，饱和度，-100 为全灰。</td></tr>
+              <tr><td class="mono">sharpness</td><td>-100..100，正值锐化、负值柔化。</td></tr>
+              <tr><td class="mono">shadows</td><td>-100..100，阴影提亮。</td></tr>
+              <tr><td class="mono">highlights</td><td>-100..100，正值压高光（恢复亮部）。</td></tr>
+              <tr><td class="mono">temperature</td><td>-100..100，正数偏暖、负数偏冷。</td></tr>
+              <tr><td class="mono">tint</td><td>-100..100，正数偏品红、负数偏绿。</td></tr>
+              <tr><td class="mono">vignette</td><td>-120..120，正数去暗角、负数加暗角。</td></tr>
+              <tr><td class="mono">grayscale</td><td>开关，输出黑白。</td></tr>
+              <tr><td class="mono">rotate</td><td>-360..360 度，顺时针为正，画布自动扩展。</td></tr>
+              <tr><td class="mono">flip</td><td><code>h</code> 水平镜像 / <code>v</code> 垂直翻转。</td></tr>
+              <tr><td class="mono">crop</td><td><code>x,y,w,h</code>，支持百分比：<code>crop=0,0,50%,50%</code>。</td></tr>
+              <tr><td class="mono">resize</td><td><code>1600x</code> 定宽 / <code>x900</code> 定高 / <code>1600x900</code> 等比内嵌 / <code>50%</code> 缩放 / <code>1600</code> 长边上限。</td></tr>
+              <tr><td class="mono">max_side</td><td>长边上限，只缩小不放大，可与 resize 叠加。</td></tr>
+              <tr><td class="mono">format</td><td><code>jpeg</code>（默认）/ <code>png</code> / <code>webp</code>。</td></tr>
+              <tr><td class="mono">quality</td><td>1..95（jpeg / webp），默认 88。</td></tr>
+              <tr><td class="mono">target_kb</td><td>目标体积 KB，自动二分降质量直到满足。</td></tr>
+              <tr><td class="mono">strip</td><td><code>1</code> 清空 EXIF / ICC 等元数据。</td></tr>
+              <tr><td class="mono">info</td><td><code>1</code> 时只返回尺寸 / 体积 / 算子 JSON，不回图片。</td></tr>
+              <tr><td class="mono">zip</td><td><code>1</code> 或请求体本身是 zip：批量处理，最多 24 张，返回新 zip。</td></tr>
+            </tbody>
+          </table>
+          <p class="para muted">输入支持 jpg / png / webp / heic / hif / avif；算子串用逗号分隔，<code>crop</code> 内部的逗号会自动识别为坐标。图片只在内存处理，不落盘。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel panel-quiet">
+            <div class="panel-cap">错误码与限制</div>
+            <table class="ftable">
+              <thead><tr><th>状态</th><th>含义</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">401</td><td>缺少 / 错误的令牌，响应里附取令牌说明。</td></tr>
+                <tr><td class="mono">400 / 404</td><td>参数不合法、没有匹配结果。</td></tr>
+                <tr><td class="mono">411 / 413</td><td>缺少请求体、上传超过 40 MB 或 4000 万像素。</td></tr>
+                <tr><td class="mono">429</td><td>触发限流：read 60/min、download 30/min、edit 30/min（按 IP）。</td></tr>
+                <tr><td class="mono">502</td><td>上游解析服务异常，或全部音源都没有可用直链。</td></tr>
+              </tbody>
+            </table>
+            <p class="para muted">单曲转发 ≤ 120 MB；整包 ≤ 40 首 / 600 MB / 70 秒（云端对源站 100 秒无响应会报 524）。超预算的曲目会写进包内 <code>_errors.txt</code>，已成功的照常返回。</p>
+          </div>
+          <div class="panel panel-quiet">
+            <div class="panel-cap">常见问题</div>
+            <ul class="bullets">
+              <li><b>为什么按歌手 / 专辑搜出来的曲目不齐？</b> 上游解析器只有关键词检索、没有专辑详情接口，本站是在六个音源的歌曲结果上做归一化分组；<code>counts</code> 偏低说明上游这次返回了空页，重试即可。</li>
+              <li><b>为什么有些歌下载不了？</b> 会员 / 版权曲拿不到直链（酷狗当前大量曲目 <code>privilege=5</code>），这是上游限制，页面下载也一样。接口会先自动换源换版本，仍失败时如实返回原因。</li>
+              <li><b>令牌会泄露吗？</b> 令牌文件在站点目录之外、权限 0600，清单接口只返回文档不返回令牌；请不要把令牌写进网页或提交到仓库。</li>
+              <li><b>和页面功能冲突吗？</b> 不冲突。页面下载、修图仍走浏览器本地链路；Agent 接口是额外的服务端能力，需令牌，互不共享状态。</li>
+              <li><b>图片会留在服务器上吗？</b> 不会，修图与整包都只在内存 / 私有临时目录处理，请求结束即删除，音频字节也只是转发一次。</li>
+            </ul>
+          </div>
         </div>
       </section>
 
