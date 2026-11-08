@@ -16,7 +16,7 @@
    * 常量与工具
    * ------------------------------------------------------------------ */
 
-  var VERSION = '1.6.0';
+  var VERSION = '1.6.1';
   var PREVIEW_MAX_EDGE = 1600;
   var PREVIEW_MAX_PIXELS = 22e6; // 超过此像素数时预览改用半尺寸去马赛克
   var EXPORT_MAX_PIXELS = 80e6;
@@ -1448,11 +1448,14 @@
             '<summary>' + icon('lens') + '<span>镜头校正</span><span class="raw-sum-meta" id="raw-lens-sum">手动</span>' +
               '<span class="raw-chev">' + icon('chevron') + '</span></summary>' +
             '<div class="raw-group-body">' +
-              '<p class="raw-group-hint">手动校正可用下方的畸变 / 暗角 / 色差滑杆；把一套校正保存为镜头配置后，载入同一相机和镜头的照片会自动套用。畸变正负对应枕形 / 桶形。</p>' +
+              '<p class="raw-group-hint">「自动校正」按画面估算暗角；若已有该相机 / 镜头的保存配置，会直接整套套用。畸变与色差没有镜头库无法从画面可靠反推（会把笔直的画面也掰弯），请用滑杆手动微调后保存为镜头配置，载入同机同镜的照片会自动套用。畸变正负对应枕形 / 桶形。</p>' +
               '<div class="raw-lens-profile-row">' +
                 '<select class="raw-select" id="raw-lens-profile" aria-label="镜头配置"><option value="">未保存镜头配置</option></select>' +
                 '<button type="button" class="raw-btn tiny" data-act="lens-save">保存当前</button>' +
                 '<button type="button" class="raw-btn tiny" data-act="lens-delete">删除</button>' +
+              '</div>' +
+              '<div class="raw-lens-profile-row">' +
+                '<button type="button" class="raw-btn tiny" data-act="lens-auto-correct">' + icon('wand') + '自动校正</button>' +
               '</div>' +
               '<label class="raw-check raw-lens-auto"><input type="checkbox" id="raw-lens-auto" checked>按相机 / 镜头自动套用</label>' +
               '<p class="raw-lens-status" id="raw-lens-status">未识别镜头配置；手动校正后可保存复用。</p>' +
@@ -7626,6 +7629,74 @@
     return true;
   }
 
+  // 按画面亮度分布估算暗角（无镜头数据库时唯一可靠的自动项）。
+  // 取中心圆盘与外环的平均亮度之比，换算成「暗角校正」滑杆值；滑杆与着色器增益已标定过
+  // （u_lensVignette 为正时按 1 + v*1.1*smoothstep(r) 提亮边缘），因此这里直接用比值反解。
+  function estimateVignetteFromImage(source) {
+    var AW = 320;
+    var scale = Math.min(1, AW / Math.max(source.width, source.height));
+    var aw = Math.max(64, Math.round(source.width * scale));
+    var ah = Math.max(64, Math.round(source.height * scale));
+    var ac = document.createElement('canvas');
+    ac.width = aw; ac.height = ah;
+    var actx = ac.getContext('2d', { willReadFrequently: true });
+    actx.drawImage(source, 0, 0, aw, ah);
+    var px = actx.getImageData(0, 0, aw, ah).data;
+
+    // 分环统计：中心 0~0.3、中环 0.3~0.6、外环 0.85~1.0（按到画面中心的最大半径归一）
+    var cx = aw / 2, cy = ah / 2, maxR = Math.sqrt(cx * cx + cy * cy);
+    var ringS = [0, 0, 0], ringN = [0, 0, 0];
+    for (var y = 0; y < ah; y++) {
+      for (var x = 0; x < aw; x++) {
+        var o = ((y * aw) + x) << 2;
+        var L = (0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2]) / 255;
+        var rr = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / maxR;
+        if (rr < 0.3) { ringS[0] += L; ringN[0]++; }
+        else if (rr > 0.3 && rr < 0.6) { ringS[1] += L; ringN[1]++; }
+        else if (rr > 0.85) { ringS[2] += L; ringN[2]++; }
+      }
+    }
+    var centerL = ringN[0] ? ringS[0] / ringN[0] : 0;
+    var midL = ringN[1] ? ringS[1] / ringN[1] : 0;
+    var edgeL = ringN[2] ? ringS[2] / ringN[2] : 0;
+
+    // 需要中心明显亮于外环，且中环落在两者之间（单调衰减才算暗角，避免把「亮天空在下」误判）
+    var vignette = 0;
+    var monotonic = midL <= centerL * 0.998 && edgeL <= midL * 0.998;
+    if (centerL > 0.06 && edgeL > 0.02 && centerL > edgeL * 1.04 && monotonic) {
+      var ratio = centerL / edgeL;
+      vignette = clamp(Math.round((ratio - 1) / 1.1 * 100), 0, 100);
+    }
+    return { vignette: vignette, centerL: centerL, midL: midL, edgeL: edgeL };
+  }
+
+  // 自动校正：有匹配的镜头配置就整套套用；否则按画面估算暗角。
+  // 畸变/色差不做图像反推——没有镜头数据库时单靠画面无法把「镜头畸变」和「真实场景里的
+  // 直线/斜拍」分开，实测会把笔直的画面也掰弯，所以宁可只校正可靠的暗角，其余留给配置或手动。
+  function autoLensCorrection() {
+    if (!state.loaded || !state.renderSource) {
+      setStatus('请先载入图片，再使用镜头自动校正。', 'warn');
+      return;
+    }
+    markHistory('镜头自动校正');
+    var profileApplied = autoApplyLensProfile();
+    var est = estimateVignetteFromImage(state.renderSource);
+    if (est.vignette > 0) state.adjust.lensVignette = est.vignette;
+    updateAdjustOutputs();
+    scheduleRender();
+    historyTouch();
+    var msg;
+    if (profileApplied) {
+      msg = '已套用该相机 / 镜头的保存配置';
+      if (est.vignette > 0) msg += '，并按画面补了暗角 +' + est.vignette;
+    } else {
+      msg = '已按画面估算暗角 +' + est.vignette;
+    }
+    if (!profileApplied && est.vignette === 0) msg = '画面没有明显暗角，暗角保持 0';
+    msg += '。畸变 / 色差不做图像反推（无从区分镜头畸变与真实直线），请用滑杆微调或保存为镜头配置，载入同机同镜照片时会自动套用。';
+    setStatus(msg, 'ok');
+  }
+
   function saveLensProfileFromUI() {
     if (!state.loaded) return;
     var lm = lensMeta();
@@ -8216,6 +8287,8 @@
           saveLensProfileFromUI();
         } else if (act === 'lens-delete') {
           deleteSelectedLensProfile();
+        } else if (act === 'lens-auto-correct') {
+          autoLensCorrection();
         } else if (act === 'batch-pick') {
           if (els.batchInput) els.batchInput.click();
         } else if (act === 'batch-run') {
@@ -8824,6 +8897,10 @@
     undoRetouchStroke: undoRetouchStroke,
     setDenoiseEnabled: setDenoiseEnabled,
     setDenoiseStrength: setDenoiseStrength,
+    autoLensCorrection: autoLensCorrection,
+    estimateVignette: function () {
+      return state.renderSource ? estimateVignetteFromImage(state.renderSource) : null;
+    },
     setParamCurve: function (key, value) { setParamCurve(key, value); },
     getParamCurve: function () { return Object.assign({}, state.paramCurve); },
     resetParamCurve: resetParamCurve,
